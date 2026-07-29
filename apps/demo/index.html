@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Cesium Geospatial · Phase 0 Spike</title>
+    <script>
+      // Cesium 静态资源根（viteStaticCopy 服务到 /cesium/）
+      window.CESIUM_BASE_URL = '/cesium/'
+    </script>
+    <style>
+      html,
+      body,
+      #cesium {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesium"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
