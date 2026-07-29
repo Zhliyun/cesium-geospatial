@@ -1,0 +1,15 @@
+{
+  "name": "cesium-geospatial",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm --filter demo dev",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
