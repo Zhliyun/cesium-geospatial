@@ -1,3 +1,5 @@
+/// <reference path="./cesium/cesium-augment.d.ts" />
+
 export { resolveIncludes } from './resolveIncludes'
 export { unrollLoops } from './unrollLoops'
 export { glslIndex } from './glslIndex'

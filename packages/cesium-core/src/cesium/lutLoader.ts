@@ -1,10 +1,10 @@
 import { Float16Array } from '@petamoriken/float16'
 import { createLUT2D, createLUT3D } from './cesiumTextures'
-import type { Context, Texture } from 'cesium'
+import type { Context, Texture, Texture3D } from 'cesium'
 
 export interface AtmosphereLUTs {
   transmittance: Texture
-  scattering: WebGLTexture
+  scattering: Texture3D
   irradiance: Texture
 }
 
