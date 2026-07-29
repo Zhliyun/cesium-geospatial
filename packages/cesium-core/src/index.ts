@@ -8,3 +8,5 @@ export {
   SUN_ANGULAR_RADIUS
 } from './math/atmosphereParameters'
 export { getAltitudeCorrectionOffset } from './math/altitudeCorrection'
+export { buildAtmospherePrefix } from './cesium/cesiumCore'
+export { DEPTH_RECONSTRUCTION_GLSL } from './cesium/depthReconstruction'
