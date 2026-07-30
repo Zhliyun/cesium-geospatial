@@ -12,5 +12,6 @@ export {
 export { getAltitudeCorrectionOffset } from './math/altitudeCorrection'
 export { buildAtmospherePrefix } from './cesium/cesiumCore'
 export { DEPTH_RECONSTRUCTION_GLSL } from './cesium/depthReconstruction'
+export { RECONSTRUCT_NORMAL_GLSL } from './cesium/normalReconstruction'
 export { loadAtmosphereLUTs, parseHalfFloatBin } from './cesium/lutLoader'
 export type { AtmosphereLUTs } from './cesium/lutLoader'
