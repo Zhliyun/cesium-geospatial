@@ -20,9 +20,22 @@ export function createSkyStage(
 ): PostProcessStage {
   const altitudeCorrection = new Cartesian3()
   const sunDirection = new Cartesian3(0, 0, 1)
-  // 逐字取自 AtmosphereParameters.DEFAULT 的 sunRadianceToLuminance / skyRadianceToLuminance
-  const SUN_SPECTRAL = new Cartesian3(98242.786222, 69954.398112, 66475.012354)
-  const SKY_SPECTRAL = new Cartesian3(114974.916437, 71305.954816, 65310.548555)
+  // 相对亮度（relative luminance）：源仓库 sky.frag 输出 GetSkyLuminance 不做曝光，
+  // 故 uniform 必须传 relative 版本 = sunRadianceToLuminance / sunLuminance。
+  // 照搬 AtmosphereParameters.ts 构造器：luminance = dot((0.2126,0.7152,0.0722), sunRadianceToLuminance)。
+  // sunRadianceToLuminance = (98242.786222, 69954.398112, 66475.012354) → sunLuminance ≈ 75722.23
+  // 传绝对亮度会导致 radiance ~1e5，任何色调映射都饱和成白（即截图中的白球）。
+  const SUN_LUMINANCE = 75722.23
+  const SUN_SPECTRAL = new Cartesian3(
+    98242.786222 / SUN_LUMINANCE,
+    69954.398112 / SUN_LUMINANCE,
+    66475.012354 / SUN_LUMINANCE
+  )
+  const SKY_SPECTRAL = new Cartesian3(
+    114974.916437 / SUN_LUMINANCE,
+    71305.954816 / SUN_LUMINANCE,
+    65310.548555 / SUN_LUMINANCE
+  )
   const sunInertialScratch = new Cartesian3()
   const icrfScratch = new Matrix3()
 
