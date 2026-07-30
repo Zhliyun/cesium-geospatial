@@ -2,13 +2,13 @@
 //
 // 正算（Cesium czm_writeLogDepth，见 cesium Build 中 writeLogDepth.glsl）：
 //   gl_FragDepth = log2(d) / log2(far - near + 1)
-//   d = 视角距离 - near + 1（近平面处 d=1，沿视线方向按眼空间单位递增）
+//   d = 视轴深度（-z_eye）- near + 1（近平面处 d=1；沿视轴递增，非径向距离）
 // 注意：不可照搬 three.js 的 reverseLogDepth（公式不同）；
 // Cesium 中也不存在 czm_logDepthConfig，没有 0.01 之类的缩放系数。
 
 // GLSL：Cesium 版对数深度反演 + viewPosition 反投影。
 export const LOG_DEPTH_GLSL = `
-// 反演 czm_writeLogDepth：对数 windowZ → 视角距离（米，正值）。
+// 反演 czm_writeLogDepth：对数 windowZ → 视轴深度 -z_eye 的正值（米；沿视轴，非径向距离）。
 float czm_reverseLogDepthDist(const float logDepth, const float near, const float far) {
   float d = pow(2.0, logDepth * log2(far - near + 1.0));
   return d + near - 1.0;
@@ -45,13 +45,13 @@ export function reverseLogDepthWindow(
   far: number
 ): number {
   const d = Math.pow(2, logDepth * Math.log2(far - near + 1))
-  const zDist = d + near - 1 // 视角距离（米）
+  const zDist = d + near - 1 // 视轴深度 -z_eye（米，正值）
   const a = far / (far - near)
   const b = (far * near) / (near - far)
   return a + b / zDist
 }
 
-// CPU 纯函数：对数 windowZ → 视角距离（米，正值）。
+// CPU 纯函数：对数 windowZ → 视轴深度 -z_eye 的正值（米；沿视轴，非径向距离）。
 export function reverseLogDepthDist(
   logDepth: number,
   near: number,

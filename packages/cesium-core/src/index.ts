@@ -22,3 +22,9 @@ export {
   GEO_ERROR_CORRECTION_NEAR,
   GEO_ERROR_CORRECTION_FAR
 } from './cesium/geometricErrorCorrection'
+export {
+  buildAerialPerspectiveFragmentShader,
+  buildStandaloneShaderForValidation,
+  AERIAL_PERSPECTIVE_UNIFORM_NAMES
+} from './cesium/aerialPerspective.frag'
+export type { AerialPerspectiveFragOptions } from './cesium/aerialPerspective.frag'
