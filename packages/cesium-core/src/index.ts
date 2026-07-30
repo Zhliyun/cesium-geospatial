@@ -16,3 +16,9 @@ export { RECONSTRUCT_NORMAL_GLSL } from './cesium/normalReconstruction'
 export { COLOR_SPACE_GLSL } from './cesium/colorSpace'
 export { loadAtmosphereLUTs, parseHalfFloatBin } from './cesium/lutLoader'
 export type { AtmosphereLUTs } from './cesium/lutLoader'
+export {
+  computeGeometricErrorCorrectionAmount,
+  remapClamp,
+  GEO_ERROR_CORRECTION_NEAR,
+  GEO_ERROR_CORRECTION_FAR
+} from './cesium/geometricErrorCorrection'
