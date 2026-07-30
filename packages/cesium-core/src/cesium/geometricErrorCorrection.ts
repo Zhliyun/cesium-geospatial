@@ -9,10 +9,9 @@
  *   .applyMatrix4(projectionMatrix)
  * amount = saturate(remap(projectedScale.y, 41.5, 13.8, 0, 1))
  * ```
- *
- * 投影那步留给调用方（Cesium 侧用 `scene.camera.frustum.projectionMatrix`
- * 或着色器内 `czm_projectionMatrix` 计算），本模块只接收已算好的
- * `projectedScale.y`，保持函数纯净可测。
+ * 投影步骤在模块内完成：projectionMatrix 以列主序 number[16] 传入
+ * （Cesium `Matrix4` 内部即列主序 number[]，可直接传
+ * `scene.camera.frustum.projectionMatrix`）。
  *
  * 方向说明（重要）：
  * - 透视投影下 projectedScale.y ≈ (ellipsoidMaximumRadius / tan(fov/2)) / cameraHeight，
@@ -43,21 +42,33 @@ export const GEO_ERROR_CORRECTION_FAR = 13.8
 /**
  * 计算 geometricErrorCorrectionAmount（每帧 CPU 侧）。
  *
- * @param cameraHeightM 相机椭球高度（米）。投影步骤已在调用方完成，此参数
- *   不参与公式，仅用于调用约定对齐与日志/调试。
- * @param projectedScaleY 已算好的 projectedScale.y：
- *   `projectionMatrix * vec3(0, ellipsoidMaximumRadius, -max(0, cameraHeightM))` 的 y 分量。
+ * @param cameraHeightM 相机椭球高度（米），负值按 max(0, h) 处理（与源公式一致）
+ * @param projectionMatrix 投影矩阵，列主序 number[16]（Cesium Matrix4 内部布局，
+ *   直接传 `scene.camera.frustum.projectionMatrix` 即可）
+ * @param ellipsoidMaximumRadius 椭球最大半径（米），如 WGS84 的 6378137
  * @param near 反向映射上界（默认 41.5，Cesium FOV 60° 需重标定）
  * @param far 反向映射下界（默认 13.8，Cesium FOV 60° 需重标定）
  * @returns [0, 1]：0 = 保留地形法线（近），1 = 椭球法线压噪声（远）
  */
 export function computeGeometricErrorCorrectionAmount(
   cameraHeightM: number,
-  projectedScaleY: number,
+  projectionMatrix: ArrayLike<number>,
+  ellipsoidMaximumRadius: number,
   near: number = GEO_ERROR_CORRECTION_NEAR,
   far: number = GEO_ERROR_CORRECTION_FAR
 ): number {
-  // cameraHeightM 不参与计算（投影已在外部完成），保留以对齐源公式调用约定
-  void cameraHeightM
+  // 源公式：projectedScale = projectionMatrix * vec4(0, R, -max(0,h), 1)，取 NDC y
+  // （applyMatrix4 含透视除法）。列主序下只需 y 行（索引 1,5,9,13）
+  // 与 w 行（索引 3,7,11,15）做点积再相除；x=0、w=1 可化简。
+  const z = -Math.max(0, cameraHeightM)
+  const clipY =
+    projectionMatrix[5] * ellipsoidMaximumRadius +
+    projectionMatrix[9] * z +
+    projectionMatrix[13]
+  const clipW =
+    projectionMatrix[7] * ellipsoidMaximumRadius +
+    projectionMatrix[11] * z +
+    projectionMatrix[15]
+  const projectedScaleY = clipY / clipW
   return remapClamp(projectedScaleY, near, far)
 }
