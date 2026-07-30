@@ -1,8 +1,8 @@
 # Phase 0 验证结果（go/no-go）
 
-> **状态**：全部代码完成，静态验证通过，dev server 可运行。**G1/G2/G3 的运行时（浏览器 WebGL）验证待项目方执行**——背景会话无法驱动浏览器，故运行时结论栏留空，由打开 demo 后填写。
+> **状态**：✅ **三项全过 → GO，进入 Phase 1**。代码完成、静态验证通过、浏览器运行时验证（G1/G2/G3）由项目方于 2026-07-30 确认通过。
 >
-> **日期**：2026-07-29
+> **日期**：2026-07-29（代码）；2026-07-30（运行时验证确认）
 > **分支**：`phase0/native-injection-spike`
 > **Cesium 版本**：1.143.0（`@cesium/engine` 26.1.0）
 
@@ -47,24 +47,38 @@
   1. `const AtmosphereParameters ATMOSPHERE = AtmosphereParameters(...)` 的 struct 数组构造语法 `DensityProfileLayer[2](...)`（源仓库用 uniform，未用过 GLSL 构造；这是新增）。
   2. `#define GetSkyRadiance GetSkyLuminance`（runtime.glsl:458）的宏替换是否按预期把 main 的 5 参数调用引到 GetSkyLuminance。
   3. Texture3D 作为 PostProcessStage uniform 的实际绑定（类型系统支持，但 PostProcessStage uniforms 选项路径未实测）。
-- **结论**：☐ 通过 / ☐ 失败（失败模式：______）
+- **结论**：✅ **通过**（2026-07-30 项目方确认：console 无 shader 编译/链接错误）
 
 ### G2 — 深度重建
 - **怎么做**：打开 `http://localhost:5173/?mode=depth`。
 - **判据**：globe（灰色 ellipsoid）显示世界坐标彩虹分量（连续变化）；多视锥边界处无明显条带；相机移动分量平滑。
-- **结论**：☐ 通过 / ☐ 失败
+- **结论**：✅ **通过**（2026-07-30 项目方确认：globe 世界坐标彩虹分量连续，多视锥边界无条带）
 
 ### G3 — ECEF / 密切球再中心化
 - **怎么做**：`?mode=sky`，移动相机。
 - **判据**：天空非黑、有大气散射色彩；相机平移/旋转时**无全屏抖动/错位**（密切球再中心化正确的标志）。
-- **结论**：☐ 通过 / ☐ 失败
+- **结论**：✅ **通过**（2026-07-30 项目方确认：地平线视角天顶深蓝→地平线亮的瑞利散射渐变正确；太空视角地球向阳边缘大气辉光弧正确；整体拖动平滑无抖动/错位）
 
-## 4. go/no-go 裁决（待填）
+### G3 修复过程（运行时调试记录）
 
-- **三项全过** → 进入 Phase 1（大气散射 MVP）。
-- **G1 失败** → 按第 3 节风险点排查（多为 GLSL 语法/绑定，可修）；若 GLSL 根本性不兼容 → 重新评估（含双渲染器）。
-- **G2 失败** → 深度反投影改用 Cesium `czm_windowToEyeCoordinates` 等内建路径。
-- **G3 失败** → 密切球法线改精确椭球法线（现用 geodetic normal 近似）。
+初次运行 G3 呈**全白球**——根因：`SUN/SKY_SPECTRAL_RADIANCE_TO_LUMINANCE` 误传**绝对亮度**（~1e5），而源仓库 `sky.frag` 传**相对亮度**（绝对亮度 ÷ 太阳亮度 75722，归一到 ~1 量级）且不做曝光。改传相对亮度后又**过暗**——用 `?debug=1/2/3` 三种可视化插桩定位：debug=3 白=桥接正确、debug=2 绿=太阳方向正确、debug=1 有结构=radiance 非零只是曝光过低。据 debug=1 对数刻度定标（天空主体 0.1~2、向阳峰值≈9），曝光调至 3.0 + Reinhard 压缩峰值，G3 通过。**修复提交**：`2295458`（相对亮度）、`328b89e`（debug 插桩+画布铺满）、`8f561f6`（曝光定标）。
+
+另修复**画布不铺满**：缺 Cesium `widgets.css` → `index.html` 引入并强制 `.cesium-viewer/canvas` 100%。
+
+## 4. go/no-go 裁决
+
+**✅ GO（2026-07-30）**：G1/G2/G3 三项全过。go/no-go 前提（深度/多视锥语义、ECEF/密切球再中心化、GLSL 注入可行性）全部钉死。**进入 Phase 1（大气散射 MVP）。**
+
+- **三项全过** → 进入 Phase 1（大气散射 MVP）。【已达成】
+- ~~G1 失败~~ / ~~G2 失败~~ / ~~G3 失败~~ 的补救路径不再适用（均已通过）。
+
+### Phase 1 待办（衔接交接文档全范围目标）
+
+1. 天空 stage 复用 Phase 0 已验证管线（相对亮度 + 曝光/Reinhard 已就位）。
+2. 大气透视（aerial perspective）：地表/模型按距离叠加雾化的散射（`GetSkyRadianceToPoint` 路径，需 G2 深度重建的世界坐标）。
+3. 太阳/月亮 billboard、星空（可选，源仓库 stars.frag 已有）。
+4. 色调映射接入 Cesium 后处理链（替换占位 Reinhard，对齐源仓库 exposure）。
+5. 与 Cesium globe 地形的正确混合（GROUND_ALBEDO 分支、深度遮挡）。
 
 ## 5. 如何运行
 
