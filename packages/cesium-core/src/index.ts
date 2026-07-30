@@ -28,3 +28,15 @@ export {
   AERIAL_PERSPECTIVE_UNIFORM_NAMES
 } from './cesium/aerialPerspective.frag'
 export type { AerialPerspectiveFragOptions } from './cesium/aerialPerspective.frag'
+export {
+  createAtmosphereStage,
+  validateAtmosphereOptions,
+  resolveGeometricErrorCorrectionAmount,
+  buildAtmosphereUniforms
+} from './cesium/AtmosphereStage'
+export type {
+  AtmosphereStageOptions,
+  ResolvedAtmosphereStageOptions,
+  AtmosphereStageHandle,
+  AtmosphereFrameState
+} from './cesium/AtmosphereStage'
