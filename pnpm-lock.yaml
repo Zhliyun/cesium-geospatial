@@ -39,6 +39,9 @@ importers:
       cesium:
         specifier: ^1.143.0
         version: 1.143.0
+      glslang-validator-prebuilt-predownloaded:
+        specifier: 0.0.2
+        version: 0.0.2
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
@@ -526,6 +529,9 @@ packages:
   glob-parent@5.1.2:
     resolution: {integrity: sha512-AOIgSQCepiJYwP3ARnGx+5VnTu2HBYdzbGP45eLw1vr3zB3vZLeyed1sC9hnbcOc9/SrMyM5RPQrkGz4aS9Zow==}
     engines: {node: '>= 6'}
+
+  glslang-validator-prebuilt-predownloaded@0.0.2:
+    resolution: {integrity: sha512-YmMhXD9psUC6dVlfTZ1GB4AaeJIG8DZ3G2oYtWcZ3D15KbVKuhFT2tlq7FqD1cEWrP+kfVaV9dKOrIgKk6mMaw==}
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
@@ -1181,6 +1187,8 @@ snapshots:
   glob-parent@5.1.2:
     dependencies:
       is-glob: 4.0.3
+
+  glslang-validator-prebuilt-predownloaded@0.0.2: {}
 
   graceful-fs@4.2.11: {}
 
