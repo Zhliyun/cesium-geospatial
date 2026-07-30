@@ -17,6 +17,7 @@ uniform sampler2D irradiance_texture;
 
 uniform vec3 sunDirection;
 uniform vec3 altitudeCorrection;
+uniform float u_debugMode; // 0=正常tone map 1=log(1+radiance) 2=太阳方向 3=相机位置量级
 
 in vec2 v_textureCoordinates;
 
@@ -34,6 +35,25 @@ void main() {
   // —— GetSkyRadiance 被 runtime 末尾 #define 成 GetSkyLuminance（用全局 texture uniform）——
   vec3 transmittance;
   vec3 radiance = GetSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, transmittance);
+
+  if (u_debugMode > 2.5) {
+    // 模式3：相机位置量级。cameraPosition 单位是 length unit（km），应≈6371。
+    // 显示 length/6420（top_radius），地表≈0.99（近白），过大/为0即桥接断。
+    float r = length(cameraPosition) / 6420.0;
+    out_FragColor = vec4(vec3(r), 1.0);
+    return;
+  }
+  if (u_debugMode > 1.5) {
+    // 模式2：太阳方向可视化（世界系）。红=+x 绿=+y 蓝=+z。
+    out_FragColor = vec4(sunDirection * 0.5 + 0.5, 1.0);
+    return;
+  }
+  if (u_debugMode > 0.5) {
+    // 模式1：对数刻度看微弱 radiance。log10(1+radiance)/2，0→黑，~100→白。
+    vec3 v = log(vec3(1.0) + max(radiance, vec3(0.0))) / log(100.0);
+    out_FragColor = vec4(clamp(v, 0.0, 1.0), 1.0);
+    return;
+  }
 
   // 简单 tone map（G1/G3 先不管精确 HDR，仅验证非黑与方向）
   radiance = vec3(1.0) - exp(-radiance * 1.0);

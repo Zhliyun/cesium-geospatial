@@ -16,7 +16,8 @@ import { buildSkyFragmentShader } from './skyStage.frag'
 
 export function createSkyStage(
   scene: Scene,
-  luts: AtmosphereLUTs
+  luts: AtmosphereLUTs,
+  debugMode = 0
 ): PostProcessStage {
   const altitudeCorrection = new Cartesian3()
   const sunDirection = new Cartesian3(0, 0, 1)
@@ -44,6 +45,7 @@ export function createSkyStage(
     uniforms: {
       sunDirection: () => sunDirection,
       altitudeCorrection: () => altitudeCorrection,
+      u_debugMode: () => debugMode,
       SUN_SPECTRAL_RADIANCE_TO_LUMINANCE: SUN_SPECTRAL,
       SKY_SPECTRAL_RADIANCE_TO_LUMINANCE: SKY_SPECTRAL,
       transmittance_texture: () => luts.transmittance,

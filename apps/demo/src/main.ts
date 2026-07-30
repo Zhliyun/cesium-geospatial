@@ -31,7 +31,11 @@ async function main(): Promise<void> {
       context as Parameters<typeof loadAtmosphereLUTs>[0],
       '/luts'
     )
-    scene.postProcessStages.add(createSkyStage(scene, luts))
+    // debug: 0=正常 1=log(1+radiance) 2=太阳方向 3=相机位置量级
+    const debug = Number(
+      new URLSearchParams(location.search).get('debug') ?? '0'
+    )
+    scene.postProcessStages.add(createSkyStage(scene, luts, debug))
   } else {
     scene.postProcessStages.add(createDepthDebugStage())
   }

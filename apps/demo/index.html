@@ -7,11 +7,22 @@
       // Cesium 静态资源根（viteStaticCopy 服务到 /cesium/）
       window.CESIUM_BASE_URL = '/cesium/'
     </script>
+    <!-- Cesium widget 样式：缺它 Viewer canvas 不会铺满容器 -->
+    <link rel="stylesheet" href="/cesium/Widgets/widgets.css" />
     <style>
       html,
       body,
       #cesium {
         margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      /* 兜底：确保 Cesium 注入的容器与 canvas 铺满 */
+      .cesium-viewer,
+      .cesium-widget,
+      .cesium-widget canvas {
         width: 100%;
         height: 100%;
       }
