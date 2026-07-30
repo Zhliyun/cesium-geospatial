@@ -55,8 +55,11 @@ void main() {
     return;
   }
 
-  // 简单 tone map（G1/G3 先不管精确 HDR，仅验证非黑与方向）
-  radiance = vec3(1.0) - exp(-radiance * 1.0);
+  // tone map：debug=1 对数刻度定标，relative-luminance 下天空主体 radiance≈0.1~2、
+  // 向阳亮弧峰值≈9。占位曝光 1.0 会整体压黑，提到 3.0 让主体落入敏感区，
+  // Reinhard(x/(1+x)) 压缩峰值防亮弧过曝。
+  radiance = radiance * 3.0;
+  radiance = radiance / (vec3(1.0) + radiance);
   out_FragColor = vec4(radiance, 1.0);
 }
 `
