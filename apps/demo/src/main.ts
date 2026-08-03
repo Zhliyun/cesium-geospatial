@@ -6,6 +6,7 @@ import {
   SceneMode,
   Ion,
   Cartesian3,
+  Color,
   JulianDate,
   Math as CesiumMath,
   createWorldImageryAsync,
@@ -100,70 +101,113 @@ async function main(): Promise<void> {
 
   const mode = getString('mode') ?? 'sky'
 
-  if (mode === 'atmosphere') {
-    // 【A 路径场景开关，评审 critical——缺一双重大气】
-    // - logarithmicDepthBuffer=true：T1/T5 深度重建依赖对数深度（Phase 0 的 false 是
-    //   临时回避多视锥，Phase 1 全球地形必须用对数深度，否则高空 z-fighting/深度重建失真）。
-    // - globe.showGroundAtmosphere=false：默认 true 会与后处理大气叠加成双重大气。
-    // - fog.enabled=false：避免 Cesium 内置雾额外罩一层。
-    // - A 路径 globe.enableLighting=false（光照由 atmosphere shader 负责）；
-    //   B 路径=true 作 ground truth 对照（同时关 sunLight/skyLight）。
-    const ab = (getString('ab') ?? 'a').toLowerCase()
-    const isBPath = ab === 'b'
+  // URL time / camera：所有 mode 共享（time 决定太阳方向，camera 决定初始视角）。
+  // 此前只在 atmosphere 分支解析，导致 sky/depth 对照时相机不到目标位置。
+  const time = getString('time')
+  if (time != null && time.length > 0) {
+    viewer.clock.currentTime = JulianDate.fromIso8601(time)
+  }
 
+  // URL camera：lon,lat,height,heading,pitch（角度制，人类可读）；heading/pitch 可省略
+  const cameraStr = getString('camera')
+  if (cameraStr != null && cameraStr.length > 0) {
+    const parts = cameraStr.split(',').map(s => Number(s.trim()))
+    const lon = parts[0]
+    const lat = parts[1]
+    const height = parts[2]
+    const heading = Number.isFinite(parts[3]) ? parts[3] : 0
+    const pitch = Number.isFinite(parts[4]) ? parts[4] : -90
+    if ([lon, lat, height].every(Number.isFinite)) {
+      viewer.camera.setView({
+        destination: Cartesian3.fromDegrees(lon, lat, height),
+        orientation: {
+          heading: CesiumMath.toRadians(heading),
+          pitch: CesiumMath.toRadians(pitch),
+          roll: 0
+        }
+      })
+    }
+  }
+
+  // 视角实时写入 URL hash（复现/分享视角用）：相机停稳后地址栏 #camera= 自动更新为当前
+  // lon,lat,height,heading,pitch。排查 artifact 时转到问题视角停一下，复制地址栏即可精确复现。
+  viewer.camera.moveEnd.addEventListener(() => {
+    const pos = viewer.camera.positionCartographic
+    const lon = CesiumMath.toDegrees(pos.longitude).toFixed(4)
+    const lat = CesiumMath.toDegrees(pos.latitude).toFixed(4)
+    const h = pos.height.toFixed(0)
+    const heading = CesiumMath.toDegrees(viewer.camera.heading).toFixed(1)
+    const pitch = CesiumMath.toDegrees(viewer.camera.pitch).toFixed(1)
+    history.replaceState(
+      null,
+      '',
+      `${location.pathname}${location.search}#camera=${lon},${lat},${h},${heading},${pitch}`
+    )
+  })
+
+  // 瓦片缓存诊断（用户假设：黑带/透明与 ion 影像地形瓦片回收相关）。
+  // Cesium 按需加载 + LRU 回收瓦片；被回收/未加载的区域 depthTexture 是低 LOD 或椭球面
+  // 深度，大气 shader 用错误深度反演 positionECEF → transmittance/inscatter 崩 → 黑带/透明。
+  // 调大 tileCacheSize（默认 ~100）减少回收，preloadAncestors 让低 LOD 祖先兜底。
+  // URL ?tileCache=N 可调，默认调大到 2000 观察黑带是否消失。
+  const tileCache = getNumber('tileCache')
+  if (tileCache != null && tileCache > 0) {
+    scene.globe.tileCacheSize = tileCache
+  } else {
+    scene.globe.tileCacheSize = 5000
+  }
+  scene.globe.preloadAncestors = true
+  scene.globe.preloadSiblings = true
+
+  if (mode === 'atmosphere') {
+    // B 路径场景开关（完全参考 cesium-clouds-atmosphere）：
+    // - logarithmicDepthBuffer=true：地形 z-fighting/深度必需。
+    // - globe.enableLighting=true：B 路径用 Cesium 原生光照（大气只叠加透射/内散射，不重算 lighting）。
+    // - showGroundAtmosphere=false / fog.enabled=false：避免与后处理大气双重叠加。
+    // - depthTestAgainstTerrain：createAtmosphereStage 内部强制（PostProcess depthTexture 拿真实地形深度）。
     scene.logarithmicDepthBuffer = true
-    scene.globe.enableLighting = isBPath
+    scene.globe.enableLighting = true
     scene.globe.showGroundAtmosphere = false
     scene.fog.enabled = false
+    // 低 LOD 占位色：globe 对「地形几何已加载（depth<1，走 B 路径）但影像未贴图」的瓦片渲染 baseColor。
+    // 中性深灰，影像加载完被覆盖。depthTestAgainstTerrain=true 下完全未加载瓦片不渲染（depth=1，
+    // shader 用视线方向判未渲染地面并透传清屏色 fallback）。
+    scene.globe.baseColor = Color.fromCssColorString('#3a3a3a')
+    // 清屏黑：depthTestAgainstTerrain=true 时天空与未渲染瓦片 globe 都不渲染，colorTexture=清屏色
+    // （scene.backgroundColor，Cesium 默认白）。设黑：天空像素黑→getSkyRadiance 覆盖（黑底不影响最终
+    // 天空色）；未渲染地面（depth=1+视线朝地球）透传原色=黑（未加载占位）。天空/地面判定用视线方向
+    // （不依赖亮度），黑清屏不参与判定。
+    scene.backgroundColor = Color.BLACK
 
-    // URL time：固定 JulianDate（决定太阳方向——preRender 据此算 sunDirection）
-    const time = getString('time')
-    if (time != null && time.length > 0) {
-      viewer.clock.currentTime = JulianDate.fromIso8601(time)
-    }
-
-    // URL camera：lon,lat,height,heading,pitch（角度制，人类可读）；heading/pitch 可省略
-    const cameraStr = getString('camera')
-    if (cameraStr != null && cameraStr.length > 0) {
-      const parts = cameraStr.split(',').map(s => Number(s.trim()))
-      const lon = parts[0]
-      const lat = parts[1]
-      const height = parts[2]
-      const heading = Number.isFinite(parts[3]) ? parts[3] : 0
-      const pitch = Number.isFinite(parts[4]) ? parts[4] : -90
-      if ([lon, lat, height].every(Number.isFinite)) {
-        viewer.camera.setView({
-          destination: Cartesian3.fromDegrees(lon, lat, height),
-          orientation: {
-            heading: CesiumMath.toRadians(heading),
-            pitch: CesiumMath.toRadians(pitch),
-            roll: 0
-          }
-        })
-      }
-    }
-
-    // LUT 加载（context 从 scene 取，与 Phase 0 同）+ AtmosphereStage
-    // 注意：createAtmosphereStage 自行 add 到 postProcessStages，返回 handle，勿重复 add。
+    // LUT 加载 + AtmosphereStage（B 路径合成 + 动态曝光，createAtmosphereStage 自行 add）。
     const context = (scene as unknown as { context: unknown }).context
     const luts = await loadAtmosphereLUTs(
       context as Parameters<typeof loadAtmosphereLUTs>[0],
       '/luts'
     )
     const options: AtmosphereStageOptions = {
-      albedoScale: getNumber('albedoScale') ?? 1,
-      exposure: getNumber('exposure') ?? 3.0,
       debugMode: getNumber('debug') ?? 0,
-      // B 路径：关 sunLight/skyLight（与 enableLighting=true 配合作 Cesium 原生光照对照）
-      ...(isBPath ? { sunLight: false, skyLight: false } : {})
+      // 动态曝光可 URL 微调（默认 day=1.5 / night=0.1 / twilight±6°，按相机当地太阳高度角自动）
+      ...(getNumber('exposureDay') != null ? { exposureDay: getNumber('exposureDay')! } : {}),
+      ...(getNumber('exposureNight') != null ? { exposureNight: getNumber('exposureNight')! } : {})
     }
-    createAtmosphereStage(scene, luts, options)
+    // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
+    const skipAtmosphere =
+      getString('atmo') === '0' || getString('atmo') === 'false'
+    if (skipAtmosphere) {
+      scene.logarithmicDepthBuffer = false
+    } else {
+      createAtmosphereStage(scene, luts, options)
+    }
 
-    // ion 影像+地形（失败 fallback，不阻断）
+    // ion 影像+地形（失败 fallback，不阻断——无 token/网络/资产无权时 console.warn 裸 globe）。
     await setupIonImageryTerrain(viewer, ionToken)
   } else if (mode === 'sky') {
     // 回归对照：Phase 0 SkyStage（对数深度保持 false）
     scene.logarithmicDepthBuffer = false
+    // ion 影像+地形（对比 atmosphere mode 的 globe artifact：sky mode log depth=false、
+    // 无 depthTestAgainstTerrain；若 artifact 消失即 atmosphere 引入，若仍在则是 ion 资产本身）
+    await setupIonImageryTerrain(viewer, ionToken)
     const context = (scene as unknown as { context: unknown }).context
     const luts = await loadAtmosphereLUTs(
       context as Parameters<typeof loadAtmosphereLUTs>[0],

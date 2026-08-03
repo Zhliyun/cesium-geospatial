@@ -3,3 +3,8 @@ dist/
 .DS_Store
 *.log
 .vite/
+
+# 本地环境变量（含 ion token 等密钥，勿入库）
+.env
+.env.local
+.env.*.local

@@ -35,22 +35,9 @@ import {
 // options 形状与 brief 一致（未列字段走 buildAerialPerspectiveFragmentShader
 // 的默认 true，覆盖宏裁剪与 uniform 接线的真实组合空间）。
 const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
-  [
-    'A 路径（SUN_LIGHT+SKY_LIGHT+TRANSMITTANCE+INSCATTER 全开）',
-    { sunLight: true, skyLight: true, transmittance: true, inscatter: true }
-  ],
-  [
-    'B 路径（无 SUN_LIGHT/SKY_LIGHT，保留 TRANSMITTANCE+INSCATTER）',
-    { sunLight: false, skyLight: false, transmittance: true, inscatter: true }
-  ],
-  [
-    '调试：仅透射（INSCATTER 关）',
-    { sunLight: false, skyLight: false, transmittance: true, inscatter: false }
-  ],
-  [
-    '调试：仅内散射（TRANSMITTANCE 关）',
-    { sunLight: false, skyLight: false, transmittance: false, inscatter: true }
-  ]
+  ['默认（SKY+SUN 全开）', {}],
+  ['无日盘（SUN 关，SKY 开）', { sun: false }],
+  ['无天空分支（SKY+SUN 关，远平面直通）', { sun: false, sky: false }]
 ]
 
 // 平台 → 包内二进制后缀（与 glslang-validator-prebuilt-predownloaded/bin/ 一致）。
