@@ -132,7 +132,7 @@ export function validateAtmosphereOptions(
     exposureNight: options.exposureNight ?? 0.1,
     exposureTwilightAngleDegrees: options.exposureTwilightAngleDegrees ?? 6,
     exposure: options.exposure ?? 1.5,
-    groundDim: options.groundDim ?? 0.8,
+    groundDim: options.groundDim ?? 0.5,
     debugMode: options.debugMode ?? 0
   }
 }
