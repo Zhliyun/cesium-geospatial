@@ -51,13 +51,15 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).toMatch(/^#define GROUND$/m)
   })
 
-  it('天空判定：depth<1 走 B 路径；depth=1 用视线方向（lookingAtGround）区分未渲染地面/天空', () => {
+  it('sky/ground 主分类用视线方向 lookingAtGround（平滑，避免掠射硬翻转条纹）；depth 仅用于山峰 hasScene 保持山体不透明', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('czm_readDepth(')
     expect(s).toContain('brunetonIntersectsGround')
     expect(s).toContain('RayIntersectsGround(')
     expect(s).toContain('lookingAtGround')
     expect(s).toContain('muLook')
+    // depth 反演出 hasScene/sceneDist，仅山峰分支（!lookingAtGround）消费；地平线分类不读 depth
+    expect(s).toContain('hasScene')
+    expect(s).toContain('czm_readDepth(')
     // 亮度判定已弃（暗山体/森林/低 LOD 误判天空曾导致截断）：sceneLum 不再参与天空/地面判定
     expect(s).not.toContain('sceneLum')
   })
@@ -94,7 +96,8 @@ describe('宏组合生成（B 路径 sun/sky）', () => {
 
   it('altitudeCorrection 全量中心化（camera/scenePos 同系，对齐 cesium-clouds-atmosphere）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('altitudeCorrection * METER_TO_LENGTH_UNIT')
+    // cameraPosition 用全量 altitudeCorrection；scenePos 由 cameraPosition 派生（ray·tHitG），同系。
+    expect(s).toContain('czm_viewerPositionWC + altitudeCorrection')
     // 旧的 (1-amount) 衰减已弃：曾使 camera（全量）与 point（衰减）坐标系错位 → 山体透出地平线
     expect(s).not.toContain('(1.0 - geometricErrorCorrectionAmount)')
   })

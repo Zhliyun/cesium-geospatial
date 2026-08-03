@@ -107,7 +107,7 @@ describe('validateAtmosphereOptions', () => {
       exposureNight: 0.1,
       exposureTwilightAngleDegrees: 6,
       exposure: 1.5,
-      groundDim: 0.8,
+      groundDim: 0.5,
       debugMode: 0
     })
   })

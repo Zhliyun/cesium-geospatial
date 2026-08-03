@@ -42,7 +42,7 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   exposureNight?: number // 太阳低于晨昏带时的曝光（默认 0.1）
   exposureTwilightAngleDegrees?: number // 晨昏过渡半角（默认 6°）：地平下 -angle 到地平上 +angle 间线性插值
   exposure?: number // 手动曝光（仅 exposureFollowTimeline=false 时生效）
-  groundDim?: number // 地面反射衰减（finalColor=originalColor·trans·groundDim+inscatter，分离 exposure 压地面过曝，默认 0.7）
+  groundDim?: number // 地面反射衰减（finalColor=originalColor·trans·groundDim+inscatter，分离 exposure 压地面过曝，默认 0.5）
   debugMode?: number // u_debugMode
 }
 

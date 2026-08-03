@@ -156,7 +156,9 @@ const SUN_DISK_GLSL = `
   }
 `
 
-// 天空分支 getSkyRadiance（SUN-only 裁剪版，MOON/PERSPECTIVE_CAMERA 排除）。
+// 天空 inscatter getSkyRadiance（SUN-only 裁剪版，MOON/PERSPECTIVE_CAMERA 排除）。
+// transmittance 经 out 参数输出，供统一合成（originalColor·trans·groundDim + inscatter）复用——
+// 天空像素 originalColor=clearColor 黑，trans 不影响其最终色；山峰（视线判天空）靠 trans 衰减地形色。
 function buildSkyRadianceFn(sun: boolean): string {
   return `
 vec3 getSkyRadiance(
@@ -164,9 +166,9 @@ vec3 getSkyRadiance(
   const vec3 rayDirection,
   const float shadowLength,
   const vec3 sunDirection,
-  const float fragmentAngle
+  const float fragmentAngle,
+  out vec3 transmittance
 ) {
-  vec3 transmittance;
   vec3 radiance = GetSkyRadiance(
     cameraPosition,
     rayDirection,
@@ -184,10 +186,12 @@ ${sun ? SUN_DISK_GLSL : ''}
 function buildMainFn(o: ResolvedOptions): string {
   const skyBranch = o.sky
     ? `
-    finalColor = getSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, fragmentAngle);
+    inscatter = getSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, fragmentAngle, transmittance);
 `
     : `
     finalColor = originalColor.rgb;
+    out_FragColor = tonemapDisplay(finalColor * exposure, originalColor.a);
+    return;
 `
 
   return `
@@ -214,104 +218,97 @@ void main() {
   float topR = ATMOSPHERE.top_radius;
   float camR = length(cameraPosition);
 
-  // —— depth 反演世界坐标（ECEF 米）—— depthTestAgainstTerrain=true 时 depth 是真实地形 depth，
-  // 反演出的 sceneDist 即相机到地形表面的真实距离（B 路径合成所需，山体不透明的前提）。
-  vec3 rawWorldPosMeters = vec3(0.0);
-  float sceneDist = 3.402823466e38;
+  // —— depth 反演：为近处地形（含地平线上方山峰）提供真实 sceneDist，算前景雾、保持山体不透明。**不参与
+  // sky/ground 主分类**——分类用 lookingAtGround（平滑），避免 depthTexture 不抗锯齿在掠射地平线处逐像素
+  // 硬翻转的条纹。hasScene/sceneDist 只在 foreInscatter（近处 mask>0）被消费；远处/掠射 sceneDist 大
+  // → mask=0 不读它 → 无条纹。
   bool hasScene = false;
-  // depth 阈值放宽到 < 1.0：log depth 把远处压缩到 depth 极接近 1（远处山峰常 0.9999x），原 1e-6 阈值
-  //（depth<0.999999）会把远处山峰当 depth=1 → hasScene=false → 视线方向判定 → 远处山顶被判天空截断。
-  // 再用反演点海拔（sceneR 在大气层内）二次校验，排除 depth=1 天空反演到 far plane（r 巨大）的点。
+  float sceneDist = 0.0;
   if (depth < 1.0) {
     vec4 eyePos = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depth, 1.0));
     if (abs(eyePos.w) > 1e-6) {
       eyePos /= eyePos.w;
-      // 掠射/天际附近 eyePos.z 在 0 附近抖动 → hasScene 帧间跳变 → 闪烁；略收严
       if (eyePos.z < -1e-4) {
         vec4 worldPos4 = czm_inverseView * eyePos;
         vec3 sceneWorldPosKm = worldPos4.xyz * METER_TO_LENGTH_UNIT
           + altitudeCorrection * METER_TO_LENGTH_UNIT;
         float sceneR = length(sceneWorldPosKm);
-        // 反演点在大气层内（地表附近，容 5km 反演误差）= 真实地面；far plane 反演点 r 巨大被排除。
+        // 反演点在大气层内（容 5km 反演误差）= 真实地形；far plane 反演点 r 巨大被排除。
         if (sceneR < topR + 5.0 && sceneR > bottomR - 5.0) {
           hasScene = true;
-          rawWorldPosMeters = worldPos4.xyz;
           sceneDist = length(sceneWorldPosKm - cameraPosition);
         }
       }
     }
   }
 
-  // —— 几何判定 ——
+  // —— 几何判定（视线方向，平滑）——
   bool hitBottom = rayForwardHitsSphere(cameraPosition, rayDirection, bottomR);
-  bool hitTop = rayForwardHitsSphere(cameraPosition, rayDirection, topR);
-  bool inShell = cameraInAtmosphereShell(cameraPosition, bottomR, topR);
   vec3 radialOut = normalize(cameraPosition);
   float muLook = dot(rayDirection, radialOut);
   bool brunetonIntersectsGround = RayIntersectsGround(ATMOSPHERE, camR, muLook);
-  bool cameraOutsideAtmosphere = camR > topR + 1e-5;
-  // 视线是否指向地球（与地表前向相交）—— depth=1 时区分「未渲染地面」与「真天空」的主判据。
+  // 视线是否指向地球（与地表前向相交）—— sky/ground inscatter 函数选择的主判据（平滑，不读 depth）。
   bool lookingAtGround = brunetonIntersectsGround || hitBottom;
-
-  // —— 天空/地面判定 ——
-  // depthTestAgainstTerrain=true：depth<1=已渲染地面/物体；depth=1=天空或未渲染瓦片（两者 colorTexture
-  // 同为 clearColor 黑，无法用亮度区分——暗山体/森林/低 LOD 会被亮度阈值误判天空，曾导致截断）。
-  // depth=1 时改用视线方向：视线朝地球 → 未渲染地面；视线朝太空 → 天空。已渲染地面（depth<1）直接
-  // hasScene=true 走 B 路径，不经过此判定。
-  bool isSky;
-  if (hasScene) {
-    isSky = false;
-  } else if (inShell) {
-    isSky = !lookingAtGround;
-  } else if (cameraOutsideAtmosphere) {
-    // 太空看地球：视线进入大气壳且指向地球 = 地面；否则天空
-    isSky = !(lookingAtGround && hitTop);
-  } else {
-    isSky = muLook > 0.05;
-  }
 
   // SUN 日盘抗锯齿每像素角宽度（dFdx/dFdy 必须在分叉前算，quad 内控制流一致）
   float fragmentAngle = length(dFdx(rayDirection) + dFdy(rayDirection)) / length(rayDirection);
 
+  // 椭球面交点判别（ground inscatter 距离 tHitG 用，所有地面像素统一）。
+  float bG = dot(cameraPosition, rayDirection);
+  float cG = dot(cameraPosition, cameraPosition) - bottomR * bottomR;
+  float discG = bG * bG - cG;
+
+  // —— DUAL inscatter：平滑基线 + depth 前景雾，mask 过渡带终点在地平线 → 分界线与地平线重合 ——
+  // baseInscatter（平滑、不读 depth → 无掠射条纹）：地面→椭球面 tHitG，天空→getSkyRadiance。
+  // foreInscatter（depth 真实距离 sceneDist → 山体不透明、前景雾正确）：hasScene 且 mask>0 时叠加。
+  // mask = smoothstep(horizonKm, CLOSE_KM, sceneDist)：近=1（depth）、地平线 sceneDist≈horizonKm → mask=0（基线）。
+  // horizonKm = 相机到椭球面切线距离（随高度自适应 √(camR²-bottomR²)）→ 过渡带终点在地平线，分界线与地平线
+  // 重合。wide band → 渐变无硬弧。曾试 mask 用 tHitG 消除地平线轮廓残余闪动，但 tHitG>sceneDist → ground 过早
+  // 全基线 → 分界线内移、闪动更明显，已回退用 sceneDist（残余小幅闪动为可接受代价）。
+  const float CLOSE_KM = 20.0;
+  float horizonKm = sqrt(max(0.0, camR * camR - bottomR * bottomR));
+  // 椭球面交点 tHitG（ground 基线距离 + mask 距离用）。
+  float tHitG = -1.0;
+  if (discG > 0.0) {
+    float sG = sqrt(discG);
+    tHitG = -bG - sG;
+    if (tHitG <= 1e-6) tHitG = -bG + sG;
+  }
   vec3 transmittance = vec3(1.0);
+  vec3 inscatter = vec3(0.0);
   vec3 finalColor;
-  if (isSky) {
-${skyBranch}  } else if (hasScene) {
-    // B 路径合成（真实 sceneDist）：finalColor = originalColor·transmittance + inscatter。
-    // depthTestAgainstTerrain=true 保证 sceneDist 是真实地形距离 → 山体不透明、空气透视正确。
-    vec3 scenePosKm = cameraPosition + rayDirection * sceneDist;
-    vec3 inscatter = GetSkyRadianceToPoint(
+  if (lookingAtGround && discG > 0.0) {
+    // 地面基线：椭球面 tHitG（平滑）。
+    vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
+    inscatter = GetSkyRadianceToPoint(
       cameraPosition,
       scenePosKm,
       0.0,
       sunDirection,
       transmittance
     );
-    finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
   } else {
-    // depth=1 地面（瓦片异步加载期间未渲染/凸出椭球的远区）：用 ray-sphere（椭球面）distance + inscatter
-    // 走 B 路径，与 hasScene 连续——避免边界 inscatter discontinuity（hasScene 有 inscatter、depth=1 透传
-    // 无 inscatter）→ hasScene/depth=1 边界出现圆形弧线「水波纹」（俯视时远处未渲染区绕 nadir 成环）。
-    // 椭球面 distance 在远处未渲染区 ≈ 真实地形 distance（远处地形起伏相对地球半径可忽略），inscatter 连续。
-    {
-      float bG = dot(cameraPosition, rayDirection);
-      float cG = dot(cameraPosition, cameraPosition) - bottomR * bottomR;
-      float discG = bG * bG - cG;
-      if (discG > 0.0) {
-        float sG = sqrt(discG);
-        float tHitG = -bG - sG;
-        if (tHitG <= 1e-6) tHitG = -bG + sG;
-        vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
-        vec3 inscatter = GetSkyRadianceToPoint(
-          cameraPosition, scenePosKm, 0.0, sunDirection, transmittance);
-        finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
-      } else {
-        // 视线不交椭球面（不应发生，到这分支说明 lookingAtGround）：透传原色保险
-        out_FragColor = tonemapDisplay(originalColor.rgb * exposure, originalColor.a);
-        return;
-      }
+    // 天空基线（sky:false 在 skyBranch 内透传 return）。
+${skyBranch}  }
+  // 近处地形按 mask 叠加 depth 前景雾 → 山体不透明。mask 用 sceneDist，地平线处 mask=0 走基线（分界线与地平线
+  // 重合）。mask>0 才算 foreInscatter（远处省 LUT）。
+  if (hasScene) {
+    float mask = smoothstep(horizonKm, CLOSE_KM, sceneDist);
+    if (mask > 0.0) {
+      vec3 scenePosKm = cameraPosition + rayDirection * sceneDist;
+      vec3 foreTrans;
+      vec3 foreInscatter = GetSkyRadianceToPoint(
+        cameraPosition,
+        scenePosKm,
+        0.0,
+        sunDirection,
+        foreTrans
+      );
+      transmittance = mix(transmittance, foreTrans, mask);
+      inscatter = mix(inscatter, foreInscatter, mask);
     }
   }
+  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——
   if (u_debugMode > 5.5) {
