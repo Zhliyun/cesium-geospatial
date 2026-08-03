@@ -17,7 +17,7 @@ const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
 describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds-atmosphere）', () => {
   it('B 路径合成：originalColor·transmittance + inscatter', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('originalColor.rgb * transmittance + inscatter')
+    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter')
   })
 
   it('ACES tonemap（替换 Reinhard）', () => {

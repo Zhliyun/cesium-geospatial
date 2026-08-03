@@ -103,10 +103,11 @@ describe('validateAtmosphereOptions', () => {
       sun: true,
       sky: true,
       exposureFollowTimeline: true,
-      exposureDay: 1.5,
+      exposureDay: 1.2,
       exposureNight: 0.1,
       exposureTwilightAngleDegrees: 6,
       exposure: 1.5,
+      groundDim: 0.8,
       debugMode: 0
     })
   })

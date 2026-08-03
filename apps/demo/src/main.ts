@@ -162,11 +162,14 @@ async function main(): Promise<void> {
   if (mode === 'atmosphere') {
     // B 路径场景开关（完全参考 cesium-clouds-atmosphere）：
     // - logarithmicDepthBuffer=true：地形 z-fighting/深度必需。
-    // - globe.enableLighting=true：B 路径用 Cesium 原生光照（大气只叠加透射/内散射，不重算 lighting）。
+    // - globe.enableLighting：B 路径用 Cesium 原生光照（大气只叠加透射/内散射，不重算 lighting）。
+    //   代价：太空视角下昼夜分界线（terminator）+ 地形 LOD 边界法向 discontinuity 显现为弧线/多条
+    //   「水波纹」（非大气 artifact）。URL ?lighting=0 可关（地表全亮无 terminator，大气 inscatter 仍
+    //   提供昼夜感）；默认开（地表昼夜自然，代价是太空视角 terminator 明显）。
     // - showGroundAtmosphere=false / fog.enabled=false：避免与后处理大气双重叠加。
     // - depthTestAgainstTerrain：createAtmosphereStage 内部强制（PostProcess depthTexture 拿真实地形深度）。
     scene.logarithmicDepthBuffer = true
-    scene.globe.enableLighting = true
+    scene.globe.enableLighting = getString('lighting') !== '0'
     scene.globe.showGroundAtmosphere = false
     scene.fog.enabled = false
     // 低 LOD 占位色：globe 对「地形几何已加载（depth<1，走 B 路径）但影像未贴图」的瓦片渲染 baseColor。
@@ -187,9 +190,11 @@ async function main(): Promise<void> {
     )
     const options: AtmosphereStageOptions = {
       debugMode: getNumber('debug') ?? 0,
-      // 动态曝光可 URL 微调（默认 day=1.5 / night=0.1 / twilight±6°，按相机当地太阳高度角自动）
+      // 动态曝光可 URL 微调（默认 day=1.2 / night=0.1 / twilight±6°，按相机当地太阳高度角自动）
       ...(getNumber('exposureDay') != null ? { exposureDay: getNumber('exposureDay')! } : {}),
-      ...(getNumber('exposureNight') != null ? { exposureNight: getNumber('exposureNight')! } : {})
+      ...(getNumber('exposureNight') != null ? { exposureNight: getNumber('exposureNight')! } : {}),
+      // 地面反射衰减（默认 0.7 压地面过曝；URL ?groundDim=N 微调，1.0=不衰减）
+      ...(getNumber('groundDim') != null ? { groundDim: getNumber('groundDim')! } : {})
     }
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =

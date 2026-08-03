@@ -42,6 +42,7 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   exposureNight?: number // 太阳低于晨昏带时的曝光（默认 0.1）
   exposureTwilightAngleDegrees?: number // 晨昏过渡半角（默认 6°）：地平下 -angle 到地平上 +angle 间线性插值
   exposure?: number // 手动曝光（仅 exposureFollowTimeline=false 时生效）
+  groundDim?: number // 地面反射衰减（finalColor=originalColor·trans·groundDim+inscatter，分离 exposure 压地面过曝，默认 0.7）
   debugMode?: number // u_debugMode
 }
 
@@ -52,6 +53,7 @@ export interface ResolvedAtmosphereStageOptions extends Required<AerialPerspecti
   exposureNight: number
   exposureTwilightAngleDegrees: number
   exposure: number
+  groundDim: number
   debugMode: number
 }
 
@@ -126,10 +128,11 @@ export function validateAtmosphereOptions(
     sun: options.sun ?? true,
     sky: options.sky ?? true,
     exposureFollowTimeline: options.exposureFollowTimeline ?? true,
-    exposureDay: options.exposureDay ?? 1.5,
+    exposureDay: options.exposureDay ?? 1.2,
     exposureNight: options.exposureNight ?? 0.1,
     exposureTwilightAngleDegrees: options.exposureTwilightAngleDegrees ?? 6,
     exposure: options.exposure ?? 1.5,
+    groundDim: options.groundDim ?? 0.8,
     debugMode: options.debugMode ?? 0
   }
 }
@@ -155,6 +158,7 @@ export function buildAtmosphereUniforms(
     altitudeCorrection: () => state.altitudeCorrection,
     exposure: () => state.exposure, // 动态（preRender 更新）
     u_debugMode: options.debugMode,
+    u_groundDim: options.groundDim,
     cosSunAngularRadius: Math.cos(SUN_ANGULAR_RADIUS)
   }
 }

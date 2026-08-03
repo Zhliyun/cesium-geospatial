@@ -47,6 +47,7 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'altitudeCorrection',
   'exposure',
   'u_debugMode',
+  'u_groundDim',
   'cosSunAngularRadius'
 ]
 
@@ -69,11 +70,13 @@ uniform sampler2D irradiance_texture;
 
 // 每帧 uniform（命名对齐源仓库）。altitudeCorrection 单位米（shader 内 *METER_TO_LENGTH_UNIT 转 km）。
 // u_debugMode：0=正常 1=log(1+finalColor) 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor。
+// u_groundDim：地面反射衰减（分离 exposure——exposure 管 inscatter/天空，groundDim 单独压地面过曝）。
 const FRAME_UNIFORMS_GLSL = `
 uniform vec3 sunDirection;
 uniform vec3 altitudeCorrection;
 uniform float exposure;
 uniform float u_debugMode;
+uniform float u_groundDim;
 `
 
 // [SKY && SUN] cos(SUN_ANGULAR_RADIUS)，SUN 日盘角半径阈值。
@@ -92,10 +95,23 @@ vec3 ACESFilmic(vec3 x) {
   const float e = 0.14;
   return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
-// 线性 HDR → 显示：ACES + gamma 1/2.2。单次 OETF，B 路径末端统一（对齐源库 tonemapDisplay）。
+// interleaved gradient noise（屏幕空间低频噪声，dithering 用，无纹理依赖）。
+float interleavedGradientNoise(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+// 线性 HDR → 显示：ACES + gamma 1/2.2 + dithering。单次 OETF，B 路径末端统一（对齐源库 tonemapDisplay）。
+// dithering：display 空间加 ±0.5/255 噪声，打破 8-bit framebuffer 量化阶梯。ACES 在中间调拉伸输入会
+// 放大 8-bit 量化 → 远处渐变 banding（「水波纹」）；源库用 float HDR render target 无此问题，Cesium
+// globe 只到 RGBA8，故需 dithering。
 vec4 tonemapDisplay(vec3 linearHdr, float a) {
+  // ACES filmic + gamma 1/2.2（对齐源库 tonemapDisplay，对比度强、太阳盘自然；Reinhard 偏灰白弃用）。
+  // display triangular dithering ±1.5 LSB 打散 8-bit output 量化；ACES 暗部放大 input 的 banding 由
+  // main 入口的 input dithering 在源头（originalColor）打散。
   vec3 c = ACESFilmic(linearHdr);
   c = pow(c, vec3(1.0 / 2.2));
+  float dither = interleavedGradientNoise(gl_FragCoord.xy)
+    + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
+  c += dither * 1.5 / 255.0;
   return vec4(c, a);
 }
 // 视线重建：czm_windowToEyeCoordinates 近/远平面差分（源库 reconstructRay）。
@@ -179,6 +195,13 @@ in vec2 v_textureCoordinates;
 
 void main() {
   vec4 originalColor = texture(colorTexture, v_textureCoordinates);
+  // input dithering：8-bit originalColor 是 ACES banding 的源头（ACES 中间调放大 2-3 倍 → 远处渐变
+  // 「水波纹」）。在源头加 triangular 噪声 ±0.5 LSB，经 ACES+gamma 映射到 display 自然打散阶梯
+  //（比纯 display 空间 dithering 更高效——display dithering 只盖 output 量化，盖不住被 ACES 放大的
+  // input 阶梯）。
+  float inDither = interleavedGradientNoise(gl_FragCoord.xy)
+    + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
+  originalColor.rgb += inDither * 1.5 / 255.0;
   float depth = czm_readDepth(depthTexture, v_textureCoordinates);
 
   // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
@@ -264,16 +287,33 @@ ${skyBranch}  } else if (hasScene) {
       sunDirection,
       transmittance
     );
-    finalColor = originalColor.rgb * transmittance + inscatter;
+    finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
   } else {
-    // depth=1 地面（瓦片异步加载期间未渲染）：透传原色 fallback。此时 colorTexture=clearColor（黑），
-    // 透传黑色——加载完该瓦片 depth<1 自动切 B 路径恢复真实山体+大气。比 false 下用椭球面 distance
-    // 走 B 路径（山体持续透明、看到背后地平线大气）可接受得多（黑色是瞬态、局部的未加载占位）。
-    out_FragColor = tonemapDisplay(originalColor.rgb * exposure, originalColor.a);
-    return;
+    // depth=1 地面（瓦片异步加载期间未渲染/凸出椭球的远区）：用 ray-sphere（椭球面）distance + inscatter
+    // 走 B 路径，与 hasScene 连续——避免边界 inscatter discontinuity（hasScene 有 inscatter、depth=1 透传
+    // 无 inscatter）→ hasScene/depth=1 边界出现圆形弧线「水波纹」（俯视时远处未渲染区绕 nadir 成环）。
+    // 椭球面 distance 在远处未渲染区 ≈ 真实地形 distance（远处地形起伏相对地球半径可忽略），inscatter 连续。
+    {
+      float bG = dot(cameraPosition, rayDirection);
+      float cG = dot(cameraPosition, cameraPosition) - bottomR * bottomR;
+      float discG = bG * bG - cG;
+      if (discG > 0.0) {
+        float sG = sqrt(discG);
+        float tHitG = -bG - sG;
+        if (tHitG <= 1e-6) tHitG = -bG + sG;
+        vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
+        vec3 inscatter = GetSkyRadianceToPoint(
+          cameraPosition, scenePosKm, 0.0, sunDirection, transmittance);
+        finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
+      } else {
+        // 视线不交椭球面（不应发生，到这分支说明 lookingAtGround）：透传原色保险
+        out_FragColor = tonemapDisplay(originalColor.rgb * exposure, originalColor.a);
+        return;
+      }
+    }
   }
 
-  // —— 诊断（延续：1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——
+  // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——
   if (u_debugMode > 5.5) {
     out_FragColor = originalColor;
     return;
