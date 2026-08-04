@@ -445,13 +445,14 @@ ${skyBranch}  }
   }
   // —— fogEnhance：远处雾浓衰减（近 ×1 山体清晰，远 ×scale 雾浓）——
   // base/fore 已量级一致（mix 无圆），远处雾浓由末端基于距离的 fog 衰减补回。
-  // fog 距离用 tHitG（椭球解析距离，纯数学无 depth）：相机俯仰变化时瓦片 LOD 过渡致 depthTexture 时序
-  // 不稳（未加载区 depth=1、不同 LOD depth 精度不一；加载结束才稳），fog 若读 sceneDist 会逐帧抖、
-  // ×scale 放大成波纹；tHitG 解析平滑 → fog 逐帧稳无抖。fore/mask 仍读 sceneDist（保山体清晰），但其
-  // 时序抖动 ×1 未放大、且平地 fore≈base（mix 自抵消）→ 次源微弱。近处 tHitG<CLOSE_KM → fog=1（山体
-  // 清晰）；中远 tHitG>CLOSE_KM → fog>1（距离雾浓，物理）。sky 不进此分支（lookingAtGround=false）。
+  // fog 距离用 sceneDist（真实地形距离 → 散射边界与真实地平线重合，无椭球错位）；无 depth 处（远景
+  // 瓦片未加载 depth=1）用 tHitG 椭球兜底。代价：sceneDist 读 depthTexture，相机俯仰变化时瓦片 LOD
+  // 过渡致逐帧抖、×scale 放大成同心波纹（静止加载结束才稳）。此波纹是 Cesium 瓦片异步加载 + DUAL
+  //（fore 必读 depth 保山体清晰）的固有限制，无纯空间解；减弱靠降 u_inscatterScale，彻底消除需时序
+  // 平滑（TAA）。sky 不进此分支（lookingAtGround=false），保 sky ×scale 不变。
   if (lookingAtGround) {
-    float fog = mix(1.0, u_inscatterScale, smoothstep(CLOSE_KM, horizonKm, tHitG));
+    float fogDist = hasScene ? sceneDist : tHitG;
+    float fog = mix(1.0, u_inscatterScale, smoothstep(CLOSE_KM, horizonKm, fogDist));
     inscatter *= fog;
   }
   finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
