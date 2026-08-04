@@ -16,6 +16,7 @@
     "cesium": "*"
   },
   "devDependencies": {
+    "@types/node": "^20",
     "cesium": "^1.143.0",
     "glslang-validator-prebuilt-predownloaded": "0.0.2",
     "typescript": "^5.9.2",
