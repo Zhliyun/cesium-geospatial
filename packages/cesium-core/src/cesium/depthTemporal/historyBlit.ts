@@ -15,6 +15,7 @@ import {
   TextureMinificationFilter,
   TextureMagnificationFilter,
   TextureWrap,
+  Framebuffer,
   defined,
 } from 'cesium'
 import type { Context, DrawCommand } from 'cesium'
@@ -133,4 +134,23 @@ export function buildBlitCommand(context: Context, srcTexture: unknown): DrawCom
     },
   })
   return cmd
+}
+
+// 构造 history FBO：绑定 write Tex 作 color attachment。
+//
+// destroyAttachments=false 关键（@cesium/engine Source/Renderer/Framebuffer.js:84）：texture 由
+// historyState ping-pong 管理（resize 时 historyState.textures.forEach destroy），FBO 不 own——
+// 避免 FBO.destroy 连带 destroy texture 与 historyState 双重 destroy。
+//
+// 调用方（Task 8 lifecycle postRender）：cmd.framebuffer = buildHistoryFBO(ctx, writeTex); cmd.execute(ctx)。
+// !!每帧 new Framebuffer() 泄漏 GL framebuffer handle：gl.createFramebuffer 是有限 GL 资源，仅
+// Framebuffer.destroy()/gl.deleteFramebuffer 释放（JS GC 不触发 GL 释放）；60fps 长时累积 ~21.6万/h。
+// 缓存优化（2 FBO ping-pong，各绑定 1 history Tex，与 historyState 同生命周期，resize 时 destroy 重建）
+// 待后续 task，Task 14 results 记 ticket。
+export function buildHistoryFBO(context: Context, colorTexture: Texture): Framebuffer {
+  return new Framebuffer({
+    context,
+    colorTextures: [colorTexture],
+    destroyAttachments: false,
+  })
 }

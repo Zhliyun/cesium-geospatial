@@ -1,8 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   Cartesian3,
   Ellipsoid,
+  Matrix4,
+  JulianDate,
   PixelDatatype,
+  PostProcessStage,
   PostProcessStageComposite
 } from 'cesium'
 import {
@@ -28,27 +31,53 @@ import {
 
 // depthTemporal historyBlit 隔离 mock：node 环境无 WebGL，真实 Texture 构造会失败。
 // historyBlit.test.ts 已独立覆盖 ping-pong/bridge/sanityCheck 逻辑，本文件只测 AtmosphereStage 装配
-// （stage 创建/add 顺序/handle 字段/UNSIGNED_BYTE 兜底），故隔离 Texture 构造。
-vi.mock('./depthTemporal/historyBlit', () => ({
-  createHistoryState: (_ctx: unknown, w: number, h: number, dt: number) => ({
-    textures: [
-      { _texture: { id: 1 }, _target: 0x0de1, destroy: () => {} },
-      { _texture: { id: 2 }, _target: 0x0de1, destroy: () => {} }
-    ],
-    readIndex: 0,
-    width: w,
-    height: h,
-    pixelDatatype: dt
-  }),
-  getHistoryBridge: (state: {
-    textures: Array<{ _texture: unknown; _target: number }>
-    readIndex: number
-  }) => {
-    const tex = state.textures[state.readIndex]
-    return { _texture: tex._texture, _target: tex._target }
-  },
-  sanityCheckOutputTexture: (t: unknown) => t != null
+// （stage 创建/add 顺序/handle 字段/UNSIGNED_BYTE 兜底）+ Task 8 lifecycle（blit/swap/resize），故隔离
+// Texture 构造。Task 8 lifecycle 用 vi.hoisted 暴露 spy（buildBlitCommand/buildHistoryFBO/swapHistory/
+// createHistoryState），跨测试 mockClear 验证调用次数/参数。
+const dtSpies = vi.hoisted(() => ({
+  createHistoryState: vi.fn(),
+  buildBlitCommand: vi.fn(),
+  buildHistoryFBO: vi.fn(),
+  swapHistory: vi.fn(),
 }))
+
+vi.mock('./depthTemporal/historyBlit', () => {
+  // createHistoryState 默认实现：返回 ping-pong 两张 mock Texture（含 destroy spy，供 resize 销毁验证）
+  dtSpies.createHistoryState.mockImplementation(
+    (_ctx: unknown, w: number, h: number, dt: number) => ({
+      textures: [
+        { _texture: { id: 1 }, _target: 0x0de1, destroy: vi.fn() },
+        { _texture: { id: 2 }, _target: 0x0de1, destroy: vi.fn() }
+      ],
+      readIndex: 0,
+      width: w,
+      height: h,
+      pixelDatatype: dt
+    })
+  )
+  // buildBlitCommand 默认返回含 execute spy 的 mock cmd（lifecycle 调 cmd.execute 不崩）
+  dtSpies.buildBlitCommand.mockReturnValue({ execute: vi.fn(), framebuffer: undefined })
+  // swapHistory 默认翻转 readIndex（与真实实现一致，便于状态断言）
+  dtSpies.swapHistory.mockImplementation((state: { readIndex: number }) => {
+    state.readIndex = 1 - state.readIndex
+  })
+  return {
+    createHistoryState: dtSpies.createHistoryState,
+    getHistoryBridge: (state: {
+      textures: Array<{ _texture: unknown; _target: number }>
+      readIndex: number
+    }) => {
+      const tex = state.textures[state.readIndex]
+      return { _texture: tex._texture, _target: tex._target }
+    },
+    sanityCheckOutputTexture: (t: unknown) => t != null,
+    getWriteTexture: (state: { textures: unknown[]; readIndex: number }) =>
+      state.textures[1 - state.readIndex],
+    swapHistory: dtSpies.swapHistory,
+    buildBlitCommand: dtSpies.buildBlitCommand,
+    buildHistoryFBO: dtSpies.buildHistoryFBO
+  }
+})
 
 // —— 测试桩：node 环境无 WebGL，PostProcessStage 不实例化，只测纯函数 ——
 
@@ -280,6 +309,7 @@ function mockSceneWithAddSpy(
     drawingBufferWidth: 1920,
     drawingBufferHeight: 1080,
     preRender: { addEventListener: () => () => {} },
+    postRender: { addEventListener: () => () => {} }, // Task 8 lifecycle 注册 postRender listener（assembly 测试不 trigger，仅需属性存在）
     postProcessStages: { add: addSpy, remove: () => false }
   } as unknown as import('cesium').Scene
   return { scene, addSpy }
@@ -380,5 +410,181 @@ describe('createAtmosphereStage — depthTemporal 装配', () => {
     expect(typeof uniforms.u_temporalAlpha).toBe('function')
     // u_temporalAlpha 初始 = HIGH_ALPHA（0.5，首帧偏 current）
     expect((uniforms.u_temporalAlpha as () => number)()).toBe(0.5)
+  })
+})
+
+// —— depthTemporal lifecycle（Task 8）：preRender resize + postRender blit/swap/prevVP/alpha ——
+// 模块级 listener 存储（mockSceneWithDepthTemporal 每次调用清空，triggerPreRender/PostRender 触发）
+const preRenderListeners: Array<(s?: unknown, t?: unknown) => void> = []
+const postRenderListeners: Array<(s?: unknown, t?: unknown) => void> = []
+
+// 扩展 mockScene：preRender/postRender event listener 存储（lifecycle 注册后可 trigger）+ camera mock
+// （positionWC/directionWC/viewMatrix/frustum.projectionMatrix，postRender 更新 prevVP/alpha 读）。
+function mockSceneWithDepthTemporal(opts: {
+  halfFloat?: boolean
+  drawingBufferWidth?: number
+  drawingBufferHeight?: number
+} = {}): { scene: import('cesium').Scene; addSpy: ReturnType<typeof vi.fn> } {
+  preRenderListeners.length = 0
+  postRenderListeners.length = 0
+  const half = opts.halfFloat ?? true
+  const addSpy = vi.fn()
+  const scene = {
+    context: {
+      halfFloatingPointTexture: half,
+      colorBufferHalfFloat: half,
+      floatingPointTexture: !half,
+      colorBufferFloat: false
+    },
+    globe: { depthTestAgainstTerrain: false, ellipsoid: Ellipsoid.WGS84 },
+    camera: {
+      positionWC: new Cartesian3(6378137, 0, 0),
+      directionWC: new Cartesian3(0, 0, 1),
+      viewMatrix: Matrix4.clone(Matrix4.IDENTITY),
+      frustum: { projectionMatrix: Matrix4.clone(Matrix4.IDENTITY) }
+    },
+    drawingBufferWidth: opts.drawingBufferWidth ?? 1920,
+    drawingBufferHeight: opts.drawingBufferHeight ?? 1080,
+    preRender: {
+      addEventListener: (cb: (s?: unknown, t?: unknown) => void) => {
+        preRenderListeners.push(cb)
+        return () => {
+          const idx = preRenderListeners.indexOf(cb)
+          if (idx >= 0) preRenderListeners.splice(idx, 1)
+        }
+      }
+    },
+    postRender: {
+      addEventListener: (cb: (s?: unknown, t?: unknown) => void) => {
+        postRenderListeners.push(cb)
+        return () => {
+          const idx = postRenderListeners.indexOf(cb)
+          if (idx >= 0) postRenderListeners.splice(idx, 1)
+        }
+      }
+    },
+    postProcessStages: { add: addSpy, remove: () => false }
+  } as unknown as import('cesium').Scene
+  return { scene, addSpy }
+}
+
+// 触发 preRender listeners（lifecycle resize 检测 + 既有 sunDirection/exposure 更新）
+function triggerPreRender(scene: import('cesium').Scene, time = new JulianDate()): void {
+  preRenderListeners.forEach((cb) => cb(scene, time))
+}
+
+// 触发 postRender listeners（lifecycle blit/swap/prevVP/alpha）
+function triggerPostRender(scene: import('cesium').Scene): void {
+  postRenderListeners.forEach((cb) => cb(scene))
+}
+
+// 覆写 depthTemporal stage 的 outputTexture getter（node 无 _textureCache，原型 getter 返 undefined；
+// 实例级 defineProperty 影子原型 getter，模拟 stage 就绪/未就绪两种态）。
+function setDtOutputTexture(stage: PostProcessStage, value: unknown): void {
+  Object.defineProperty(stage, 'outputTexture', {
+    get: () => value,
+    configurable: true
+  })
+}
+
+describe('depthTemporal lifecycle', () => {
+  beforeEach(() => {
+    // 清 spy 调用记录（mockClear 不清 mockImplementation/mockReturnValue，factory 设的默认实现保留）
+    dtSpies.createHistoryState.mockClear()
+    dtSpies.buildBlitCommand.mockClear()
+    dtSpies.buildHistoryFBO.mockClear()
+    dtSpies.swapHistory.mockClear()
+  })
+
+  it('postRender：blit depthTemporal.outputTexture → write history + swap（lifecycle 全链）', () => {
+    const { scene } = mockSceneWithDepthTemporal()
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
+    triggerPostRender(scene)
+    // blit command 构造（src=outputTexture）+ history FBO 构造（write Tex）+ swap 翻转
+    expect(dtSpies.buildBlitCommand).toHaveBeenCalledTimes(1)
+    expect(dtSpies.buildHistoryFBO).toHaveBeenCalledTimes(1)
+    expect(dtSpies.swapHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('postRender：outputTexture undefined → 跳过 blit（保持上帧 history，不 swap）', () => {
+    const { scene } = mockSceneWithDepthTemporal()
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    setDtOutputTexture(handle.depthTemporalStage!, undefined)
+    triggerPostRender(scene)
+    expect(dtSpies.buildBlitCommand).not.toHaveBeenCalled()
+    expect(dtSpies.buildHistoryFBO).not.toHaveBeenCalled()
+    expect(dtSpies.swapHistory).not.toHaveBeenCalled()
+  })
+
+  it('resize：preRender 检测 drawingBufferWidth 变化 → 重建 history 到新尺寸', () => {
+    const { scene } = mockSceneWithDepthTemporal({ drawingBufferWidth: 1920 })
+    createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    // 构造期 createHistoryState 调一次（1920）
+    expect(dtSpies.createHistoryState).toHaveBeenCalledTimes(1)
+    expect(dtSpies.createHistoryState).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      1920,
+      1080,
+      expect.anything()
+    )
+    // resize：drawingBufferWidth 1920 → 3840
+    ;(scene as unknown as { drawingBufferWidth: number }).drawingBufferWidth = 3840
+    triggerPreRender(scene)
+    // resize 触发 createHistoryState 二次调用（新尺寸 3840）
+    expect(dtSpies.createHistoryState).toHaveBeenCalledTimes(2)
+    expect(dtSpies.createHistoryState).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      3840,
+      1080,
+      expect.anything()
+    )
+  })
+
+  it('首帧：postRender blit 当前 output 作 history 基线（非跳过/非 loadNull）', () => {
+    const { scene } = mockSceneWithDepthTemporal()
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
+    // 首帧 postRender：outputTexture 就绪 → blit（作 history 基线，非跳过）
+    triggerPostRender(scene)
+    expect(dtSpies.buildBlitCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('postRender blit 后 prevViewProjection/temporalAlpha 更新（下帧 uniforms 自动反映）', () => {
+    const { scene } = mockSceneWithDepthTemporal()
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
+    const dt = handle.depthTemporalStage!
+    const uniforms = (dt as unknown as { uniforms: Record<string, unknown> }).uniforms
+    // 构造期：temporalAlpha = HIGH_ALPHA（0.5，首帧偏 current）
+    expect((uniforms.u_temporalAlpha as () => number)()).toBe(0.5)
+    // 首帧 postRender：prevPos=ZERO → 巨大 positionDelta（6378137m）→ motion 高 → HIGH_ALPHA
+    triggerPostRender(scene)
+    expect((uniforms.u_temporalAlpha as () => number)()).toBeCloseTo(0.5, 5)
+    // 次帧 postRender：首帧已更新 prevPos==camera.positionWC（静止）+ prevDir==directionWC
+    // → positionDelta=0 + directionDelta=0 → motion=0 → smoothstep(0,1,0)=0 → LOW_ALPHA=0.05
+    triggerPostRender(scene)
+    expect((uniforms.u_temporalAlpha as () => number)()).toBeCloseTo(0.05, 5)
+    // prevViewProjection 经 Matrix4.multiply(proj, view, new Matrix4()) 更新（新 Matrix4 实例，非 IDENTITY 引用）
+    const prevVP = (uniforms.u_prevViewProjection as () => unknown)()
+    expect(prevVP).not.toBe(Matrix4.IDENTITY)
+  })
+
+  it('destroy：清理 depthTemporal preRender/postRender listener（remove 后 trigger 不再调 blit）', () => {
+    const { scene } = mockSceneWithDepthTemporal()
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
+    // 销毁前 listener 已注册
+    expect(postRenderListeners.length).toBeGreaterThan(0)
+    handle.destroy()
+    // destroy 调 removeDtPreRender/removeDtPostRender → postRender lifecycle listener 从数组移除
+    // （既有 sunDirection/exposure 等 preRender listener 也 remove，preRenderListeners 清空）
+    expect(postRenderListeners.length).toBe(0)
+    // destroy 后 trigger：blit 不再被调（listener 已 remove）
+    const before = dtSpies.buildBlitCommand.mock.calls.length
+    triggerPostRender(scene)
+    expect(dtSpies.buildBlitCommand.mock.calls.length).toBe(before)
   })
 })

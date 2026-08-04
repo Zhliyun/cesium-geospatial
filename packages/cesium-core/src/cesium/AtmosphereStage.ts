@@ -51,9 +51,14 @@ import {
   createHistoryState,
   getHistoryBridge,
   sanityCheckOutputTexture,
+  getWriteTexture,
+  swapHistory,
+  buildBlitCommand,
+  buildHistoryFBO,
   type HistoryState
 } from './depthTemporal/historyBlit'
-import { DEPTH_THRESHOLD_DEFAULT, HIGH_ALPHA } from './depthTemporal/depthTemporalConstants'
+import { computeTemporalAlpha } from './depthTemporal/temporalAlpha'
+import { DEPTH_THRESHOLD_DEFAULT, HIGH_ALPHA, LOW_ALPHA, MAX_DELTA_K } from './depthTemporal/depthTemporalConstants'
 
 // B 路径 options：天空/日盘宏开关 + 动态曝光参数。
 export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
@@ -355,12 +360,19 @@ export function createAtmosphereStage(
   // prevViewProjection / temporalAlpha 初始值（Task 8 lifecycle 每帧更新：postRender 写本帧 VP、
   // preRender 算 motion→alpha）。Task 7 只接线 uniforms 函数形式，值由 Task 8 更新即生效。
   // !!Task 8 lifecycle 注意：reassign prevViewProjection 时用 new Matrix4() 作 result（如
-  // prevViewProjection = Matrix4.multiply(view, proj, new Matrix4())），勿 in-place mutate
-  // （如 Matrix4.multiply(view, proj, prevViewProjection)）——IDENTITY 是 Object.freeze 的 frozen
+  // prevViewProjection = Matrix4.multiply(proj, view, new Matrix4())），勿 in-place mutate
+  // （如 Matrix4.multiply(proj, view, prevViewProjection)）——Matrix4.multiply(A,B,result)=A·B，
+  // VP=proj·view（proj 在前，与下方 L457-460 代码一致）；IDENTITY 是 Object.freeze 的 frozen
   // 共享常量（Core/Matrix4.js:3070），首帧 prevVP===IDENTITY 时 in-place mutate 在 strict mode fail-fast 抛错。
   let prevViewProjection = Matrix4.IDENTITY
   let temporalAlpha = HIGH_ALPHA // 首帧偏 current（避免 history 未就绪时空值累积）
   let removeSanityCheck: (() => void) | undefined
+  // Task 8 lifecycle 状态：prev position/dir（运动门控 position+direction 双项）+ lifecycle listener
+  // remove 函数。
+  let prevPositionWC = Cartesian3.ZERO.clone()
+  let prevDir = Cartesian3.ZERO.clone()
+  let removeDtPreRender: (() => void) | undefined
+  let removeDtPostRender: (() => void) | undefined
 
   if (temporalEmaEnabled) {
     const context = (scene as unknown as { context: unknown }).context
@@ -403,6 +415,63 @@ export function createAtmosphereStage(
           '[depthTemporal] outputTexture undefined at startup（stage 未就绪；Task 8 blit 判空跳过）'
         )
       }
+    })
+
+    // —— Task 8 lifecycle ——
+
+    // preRender resize：drawingBuffer 变化 → 重建 historyState + readIndex=0。
+    // 必须在 collection.update 前（preRender 早于 postProcessStages execute），保证同帧 depthTemporal
+    // output 与 history 同尺寸（避免 GL framebuffer size mismatch）。
+    removeDtPreRender = scene.preRender.addEventListener(() => {
+      if (!historyState) return
+      const w = scene.drawingBufferWidth
+      const h = scene.drawingBufferHeight
+      if (w !== historyState.width || h !== historyState.height) {
+        // resize：销毁旧 history textures（ping-pong 两张），重建新尺寸。
+        historyState.textures.forEach((t) => t.destroy())
+        historyState = createHistoryState(context, w, h, postHdrDatatype)
+        historyState.readIndex = 0
+      }
+    })
+
+    // postRender blit/swap/prevVP/alpha：所有 stage 渲染后，把 depthTemporal.outputTexture blit 到 write
+    // history Tex（首帧也 blit，作 history 基线，非 loadNull 全 0）+ swap 翻转 + 更新下帧 prevVP/alpha。
+    removeDtPostRender = scene.postRender.addEventListener(() => {
+      if (!depthTemporalStage || !historyState) return
+      const src = depthTemporalStage.outputTexture
+      // 判空：首帧/stage disabled 时 outputTexture 可 undefined → 跳过 blit，保持上帧 history（避免崩）。
+      if (!sanityCheckOutputTexture(src)) return
+
+      // blit depthTemporal output → write history Tex
+      const writeTex = getWriteTexture(historyState)
+      const blitCmd = buildBlitCommand(context as Parameters<typeof buildBlitCommand>[0], src)
+      blitCmd.framebuffer = buildHistoryFBO(context as Parameters<typeof buildHistoryFBO>[0], writeTex)
+      blitCmd.execute(context as Parameters<typeof blitCmd.execute>[0])
+
+      // 更新下帧 uniforms（prevVP / temporalAlpha）——camera 是本帧渲染完毕时的位姿。
+      const camera = scene.camera
+      // !!Matrix4 reassign：用 new Matrix4() 作 result，勿 in-place mutate（IDENTITY 是 Object.freeze
+      // 的 frozen 共享常量，见上方注释；首帧 prevVP===IDENTITY 时 in-place mutate 在 strict mode 抛错）。
+      prevViewProjection = Matrix4.multiply(
+        camera.frustum.projectionMatrix,
+        camera.viewMatrix,
+        new Matrix4()
+      )
+      // 运动门控：position 平移量 + direction 旋转量（1-dot，orbit 时 positionDelta 小但 direction 项大）。
+      const positionDelta = Cartesian3.distance(camera.positionWC, prevPositionWC)
+      const directionDelta = 1 - Math.abs(Cartesian3.dot(camera.directionWC, prevDir))
+      const cameraHeight = Cartesian3.magnitude(camera.positionWC)
+      temporalAlpha = computeTemporalAlpha({
+        cameraHeight,
+        maxDelta: cameraHeight * MAX_DELTA_K, // 高度归一化（1Mm→10km）
+        positionDelta,
+        directionDelta,
+        lowAlpha: LOW_ALPHA,
+        highAlpha: HIGH_ALPHA
+      })
+      prevPositionWC = camera.positionWC.clone()
+      prevDir = camera.directionWC.clone()
+      swapHistory(historyState) // read↔write 翻转，下帧 u_historyTexture 读新 read（本帧 write）
     })
   }
 
@@ -514,6 +583,8 @@ export function createAtmosphereStage(
     },
     destroy() {
       removePreRender()
+      if (removeDtPreRender) removeDtPreRender()
+      if (removeDtPostRender) removeDtPostRender()
       if (removeSanityCheck) removeSanityCheck()
       // historyState ping-pong Texture 销毁（createHistoryState 创建的两张 RT）。
       if (historyState) {

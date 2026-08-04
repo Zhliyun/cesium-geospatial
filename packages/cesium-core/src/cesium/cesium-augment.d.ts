@@ -76,6 +76,21 @@ declare module 'cesium' {
     execute(context: Context, options?: { framebuffer?: unknown }): void
   }
 
+  // Framebuffer（@cesium/engine Renderer 内部类，Cesium.js re-export，公开 .d.ts 缺失）。
+  // depthTemporal history blit 用：绑定 write Tex 作 color attachment。destroyAttachments=false
+  // （texture 由 historyState ping-pong 管理，FBO 不 own——避免 resize 时 FBO.destroy 连带 destroy
+  // texture，与 historyState.textures.forEach destroy 双重 destroy）。
+  export class Framebuffer {
+    constructor(options: {
+      context: Context
+      colorTextures?: Texture[]
+      depthTexture?: Texture
+      depthStencilTexture?: Texture
+      destroyAttachments?: boolean
+    })
+    destroy(): void
+  }
+
   // PostProcessStage.outputTexture getter（私有，PostProcessStage.js:346-356，可返 undefined）。
   // depthTemporal history blit 用（Task 7/8 读 depthTemporal stage 输出纹理）。
   // declaration merging：augment 公开 PostProcessStage 类，补 outputTexture 成员类型。
