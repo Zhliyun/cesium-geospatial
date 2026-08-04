@@ -163,6 +163,15 @@ async function main(): Promise<void> {
   scene.globe.preloadAncestors = true
   scene.globe.preloadSiblings = true
 
+  // LOD 切换阈值（Cesium 默认 2）：调高（如 4-6）→ 瓦片更晚细化、LOD 切换频率/幅度降 → depthTexture
+  // 时序抖减（缓解相机移动/俯仰时瓦片 LOD 过渡导致的 inscatter 同心波纹）。代价：地形/影像更粗糙。
+  // 波纹根因是 fore/mask 读 depthTexture 的时序抖（瓦片异步加载），降 SSE 是治标首层（廉价）；
+  // 不够再上时域 EMA（中等工程）。URL ?sse=N 可调，诊断波纹与 LOD 抖动关系。
+  const sse = getNumber('sse')
+  if (sse != null && sse > 0) {
+    scene.globe.maximumScreenSpaceError = sse
+  }
+
   if (mode === 'atmosphere') {
     // B 路径场景开关（完全参考 cesium-clouds-atmosphere）：
     // - logarithmicDepthBuffer=true：地形 z-fighting/深度必需。
