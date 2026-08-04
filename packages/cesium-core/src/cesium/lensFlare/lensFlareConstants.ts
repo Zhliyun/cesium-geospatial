@@ -17,6 +17,7 @@ export const CHROMATIC_ABERRATION = 10.0
 
 export const UPSAMPLE_RADIUS = 0.85
 export const DEPTH_EPSILON = 1e-6
+export const OCCLUSION_TEXTURE_SCALE = 0.0625 // occlusion 标量降分（spec §3，空间常数全分浪费）
 
 export const LEARNOGLY_DOWNSAMPLE_WEIGHTS = {
   center: 0.125, innerCorner: 0.125, edgeMid: 0.0625, outerCorner: 0.03125

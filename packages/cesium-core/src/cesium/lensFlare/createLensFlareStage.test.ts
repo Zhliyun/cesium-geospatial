@@ -24,6 +24,16 @@ import {
   PixelDatatype
 } from 'cesium'
 import { createLensFlareStage } from './createLensFlareStage'
+import {
+  THRESHOLD_LEVEL_DEFAULT,
+  THRESHOLD_RANGE_DEFAULT,
+  INTENSITY_DEFAULT,
+  GHOST_AMOUNT_DEFAULT,
+  HALO_AMOUNT_DEFAULT,
+  CHROMATIC_ABERRATION,
+  UPSAMPLE_RADIUS
+} from './lensFlareConstants'
+import { SUN_ANGULAR_RADIUS } from '../../math/atmosphereParameters'
 
 function mockScene(postHdrDatatype: PixelDatatype = PixelDatatype.HALF_FLOAT) {
   return {
@@ -187,5 +197,34 @@ describe('createLensFlareStage', () => {
     expect(compositeStage.uniforms.u_intensity).toBe(0.02)
     expect(featuresStage.uniforms.u_ghostAmount).toBe(0.1)
     expect(featuresStage.uniforms.u_haloAmount).toBe(0.08)
+  })
+
+  it('默认值：不传 options 时 threshold/composite/features 落到 DEFAULT 常量', () => {
+    // 不传 options（第三个参数缺省）→ 全部走 lensFlareConstants 默认
+    const handle = createLensFlareStage(mockScene(), mockState())
+    const threshold = stagesOf(handle.bloomComposite)[0]
+    expect(threshold.uniforms.u_thresholdLevel).toBe(THRESHOLD_LEVEL_DEFAULT)
+    expect(threshold.uniforms.u_thresholdRange).toBe(THRESHOLD_RANGE_DEFAULT)
+    expect(handle.compositeStage.uniforms.u_intensity).toBe(INTENSITY_DEFAULT)
+    expect(handle.featuresStage.uniforms.u_ghostAmount).toBe(GHOST_AMOUNT_DEFAULT)
+    expect(handle.featuresStage.uniforms.u_haloAmount).toBe(HALO_AMOUNT_DEFAULT)
+  })
+
+  it('occlusion 动态 uniform 是 function 闭包（每帧读 state/scene）', () => {
+    const { occlusionStage } = createLensFlareStage(mockScene(), mockState())
+    expect(typeof occlusionStage.uniforms.u_sunDirectionWC).toBe('function')
+    expect(typeof occlusionStage.uniforms.u_cameraPositionWC).toBe('function')
+    expect(typeof occlusionStage.uniforms.u_ellipsoidRadiiSquared).toBe('function')
+  })
+
+  it('常量 uniform 值：chromaticAberration/upsampleRadius/sunAngularRadius 用常量', () => {
+    const { bloomComposite, featuresStage, occlusionStage } = createLensFlareStage(
+      mockScene(),
+      mockState()
+    )
+    expect(featuresStage.uniforms.u_chromaticAberration).toBe(CHROMATIC_ABERRATION)
+    const up0 = stagesOf(bloomComposite).find((s: any) => s.name === 'lf_up0')!
+    expect(up0.uniforms.u_upsampleRadius).toBe(UPSAMPLE_RADIUS)
+    expect(occlusionStage.uniforms.u_sunAngularRadius).toBe(SUN_ANGULAR_RADIUS)
   })
 })

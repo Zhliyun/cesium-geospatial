@@ -52,7 +52,8 @@ import {
   INTENSITY_DEFAULT,
   GHOST_AMOUNT_DEFAULT,
   HALO_AMOUNT_DEFAULT,
-  CHROMATIC_ABERRATION
+  CHROMATIC_ABERRATION,
+  OCCLUSION_TEXTURE_SCALE
 } from './lensFlareConstants'
 
 /** LensFlare 可调参数（全部可选，缺省取 lensFlareConstants 默认）。 */
@@ -126,8 +127,9 @@ export function createLensFlareStage(
   const haloAmount = options.haloAmount ?? HALO_AMOUNT_DEFAULT
   const chromaticAberration = options.chromaticAberration ?? CHROMATIC_ABERRATION
 
-  // ellipsoid.radiiSquared：occlusion ray-ellipsoid 椭球遮挡用（Cartesian3，闭包每帧读最新引用）。
-  const ellipsoidRadiiSquared = (scene as any).globe.ellipsoid.radiiSquared
+  // ellipsoid.radiiSquared：occlusion ray-ellipsoid 椭球遮挡用。
+  // create 时捕获一次——Ellipsoid 在 app 生命周期内固定，radiiSquared Cartesian3 不变。
+  const ellipsoidRadiiSquared = scene.globe.ellipsoid.radiiSquared
 
   // ── lf_bloom series composite ──────────────────────────────────────────────
   // C2：get0 = lf_threshold（非 down0）。down0 的 series 前驱是 threshold，读阈值化结果。
@@ -205,11 +207,11 @@ export function createLensFlareStage(
     fragmentShader: buildOcclusionFragmentShader(),
     uniforms: {
       u_sunDirectionWC: () => state.sunDirection,
-      u_cameraPositionWC: () => (scene as any).camera.positionWC,
+      u_cameraPositionWC: () => scene.camera.positionWC,
       u_sunAngularRadius: SUN_ANGULAR_RADIUS,
       u_ellipsoidRadiiSquared: () => ellipsoidRadiiSquared
     },
-    textureScale: 0.0625,
+    textureScale: OCCLUSION_TEXTURE_SCALE,
     sampleMode: PostProcessStageSampleMode.NEAREST,
     pixelFormat: PixelFormat.RGBA,
     pixelDatatype: postHdrDatatype
