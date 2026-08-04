@@ -14,6 +14,12 @@ describe('buildTonemapFragmentShader（链尾 ToneMapping stage）', () => {
     expect(s).toContain('1.5 / 255.0')
   })
 
+  it('display dithering 系数 × u_ditherScale（与 atmosphere input dithering 同源强度倍率）', () => {
+    const s = buildTonemapFragmentShader()
+    expect(s).toContain('uniform float u_ditherScale')
+    expect(s).toContain('dither * 1.5 / 255.0 * u_ditherScale')
+  })
+
   it('debug=1..6 透传（atmosphere 已输出 display ready 可视化值）', () => {
     const s = buildTonemapFragmentShader()
     expect(s).toContain('u_debugMode > 0.5')
@@ -57,8 +63,8 @@ describe('buildTonemapFragmentShader（链尾 ToneMapping stage）', () => {
 })
 
 describe('TONEMAP_UNIFORM_NAMES', () => {
-  it('仅 u_debugMode（colorTexture 是 Cesium 内建白名单）', () => {
-    expect(TONEMAP_UNIFORM_NAMES).toEqual(['u_debugMode'])
+  it('u_debugMode + u_ditherScale（colorTexture 是 Cesium 内建白名单）', () => {
+    expect(TONEMAP_UNIFORM_NAMES).toEqual(['u_debugMode', 'u_ditherScale'])
   })
 
   it('TONEMAP_UNIFORM_NAMES 与 shader 声明的 uniform 一致（colorTexture 白名单）', () => {

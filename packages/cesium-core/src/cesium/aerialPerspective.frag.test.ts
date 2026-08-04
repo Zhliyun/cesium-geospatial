@@ -42,10 +42,13 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).not.toContain('tonemapDisplay(')
   })
 
-  it('仍含 input dithering（打散 originalColor RGBA8 banding，留在 atmosphere）', () => {
+  it('仍含 input dithering（打散 originalColor RGBA8 banding，留在 atmosphere）+ u_ditherScale 强度倍率', () => {
     const s = buildAerialPerspectiveFragmentShader({})
     expect(s).toContain('inDither')
     expect(s).toContain('interleavedGradientNoise')
+    // input dithering 系数 × u_ditherScale（1.0=phase1 默认 ±1.5/255；URL ?ditherScale= 放大打散 banding）
+    expect(s).toContain('uniform float u_ditherScale')
+    expect(s).toContain('inDither * 1.5 / 255.0 * u_ditherScale')
   })
 
   it('debug 级联被 < 6.5 整体包裹：debug=7（>6.5）跳过所有可视化分支，走末端线性输出供 tonemap 归一化验证 HDR', () => {

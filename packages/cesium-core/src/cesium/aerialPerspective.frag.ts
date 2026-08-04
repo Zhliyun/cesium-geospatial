@@ -52,7 +52,8 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'u_groundDim',
   'cosSunAngularRadius',
   'u_distanceScale',
-  'u_inscatterScale'
+  'u_inscatterScale',
+  'u_ditherScale'
 ]
 
 // Cesium PostProcessStage 内建纹理 uniform——必须由 shader 显式声明（Cesium 仅提供 uniform 值，
@@ -83,6 +84,7 @@ uniform float u_debugMode;
 uniform float u_groundDim;
 uniform float u_distanceScale;  // 散射距离缩放（方案 A，等效空气密度倍率；1.0=phase1 物理，>1 中近距散射强）
 uniform float u_inscatterScale;  // inscatter 放大（方案 B 远处白雾浓；1.0=phase1 物理，>1 远处雾浓，可超物理饱和）
+uniform float u_ditherScale;  // input dithering 强度倍率（1.0=phase1 默认 ±1.5/255；>1 更强打散 ACES 放大暴露的 banding，但噪声增）
 `
 
 // [SKY && SUN] cos(SUN_ANGULAR_RADIUS)，SUN 日盘角半径阈值。
@@ -323,7 +325,7 @@ void main() {
   // input 阶梯）。
   float inDither = interleavedGradientNoise(gl_FragCoord.xy)
     + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
-  originalColor.rgb += inDither * 1.5 / 255.0;
+  originalColor.rgb += inDither * 1.5 / 255.0 * u_ditherScale;
   float depth = czm_readDepth(depthTexture, v_textureCoordinates);
 
   // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos

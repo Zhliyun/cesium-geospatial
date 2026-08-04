@@ -211,7 +211,9 @@ async function main(): Promise<void> {
       // 散射距离缩放（方案 A，等效空气密度倍率）：默认 1.0=phase1 物理，?distanceScale=N 中近距散射增强
       ...(getNumber('distanceScale') != null ? { distanceScale: getNumber('distanceScale')! } : {}),
       // inscatter 放大（方案 B 远处白雾浓）：默认 25（用户验收固化），?inscatterScale=1 回退 phase1 物理量级
-      ...(getNumber('inscatterScale') != null ? { inscatterScale: getNumber('inscatterScale')! } : {})
+      ...(getNumber('inscatterScale') != null ? { inscatterScale: getNumber('inscatterScale')! } : {}),
+      // dithering 强度倍率：默认 1.0=phase1；?ditherScale=N 放大 input+display dithering 打散 inscatterScale 放大 ACES 输入暴露的弧线波纹
+      ...(getNumber('ditherScale') != null ? { ditherScale: getNumber('ditherScale')! } : {})
     }
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =

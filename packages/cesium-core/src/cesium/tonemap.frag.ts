@@ -20,6 +20,7 @@
 const UNIFORMS_GLSL = `
 uniform sampler2D colorTexture;
 uniform float u_debugMode;
+uniform float u_ditherScale;  // display dithering 强度倍率（1.0=phase1 默认 ±1.5/255；与 atmosphere input dithering 同源）
 `
 
 // ACESFilmic + interleavedGradientNoise（从 aerialPerspective.frag 迁来，原样）。
@@ -58,13 +59,13 @@ void main() {
   // display triangular dithering ±1.5 LSB 打散 8-bit output 量化。
   float dither = interleavedGradientNoise(gl_FragCoord.xy)
     + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
-  t += dither * 1.5 / 255.0;
+  t += dither * 1.5 / 255.0 * u_ditherScale;
   out_FragColor = vec4(t, c.a);
 }
 `
 
 // 供 Task 3 接线一致性测试：tonemap stage 声明的 uniform（colorTexture 是 Cesium 内建白名单）。
-export const TONEMAP_UNIFORM_NAMES: string[] = ['u_debugMode']
+export const TONEMAP_UNIFORM_NAMES: string[] = ['u_debugMode', 'u_ditherScale']
 
 // 组装 PostProcessStage 用 fragment shader（含 czm_* automatic uniform 引用，仅供 Cesium 运行时）。
 export function buildTonemapFragmentShader(): string {

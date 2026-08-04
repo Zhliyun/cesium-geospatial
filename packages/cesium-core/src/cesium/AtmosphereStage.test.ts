@@ -124,6 +124,7 @@ describe('validateAtmosphereOptions', () => {
       debugMode: 0,
       distanceScale: 1.0,
       inscatterScale: 25.0,
+      ditherScale: 1.0,
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
@@ -293,5 +294,16 @@ describe('createAtmosphereStage（phase2b 三 stage 集成）', () => {
     const { scene } = mockSceneWithAddSpy()
     createAtmosphereStage(scene, stubLuts, {})
     expect((scene as unknown as { globe: { depthTestAgainstTerrain: boolean } }).globe.depthTestAgainstTerrain).toBe(true)
+  })
+
+  it('tonomap stage uniforms 含 u_ditherScale（与 atmosphere input dithering 同源；默认 1.0=phase1）', () => {
+    const { scene } = mockSceneWithAddSpy()
+    const handle = createAtmosphereStage(scene, stubLuts, {})
+    const tonoUniforms = (handle.tonemapStage as unknown as { uniforms: Record<string, unknown> }).uniforms
+    expect(tonoUniforms.u_ditherScale).toBe(1.0)
+    // options 覆盖 ditherScale 时 tonomap 跟随（setMode rebuild 同源）
+    const handle2 = createAtmosphereStage(scene, stubLuts, { ditherScale: 3.0 })
+    const tonoUniforms2 = (handle2.tonemapStage as unknown as { uniforms: Record<string, unknown> }).uniforms
+    expect(tonoUniforms2.u_ditherScale).toBe(3.0)
   })
 })
