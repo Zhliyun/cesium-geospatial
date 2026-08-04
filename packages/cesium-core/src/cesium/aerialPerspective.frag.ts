@@ -11,8 +11,10 @@
 //   originalColor 是 Cesium 光照后的显示量级，exposure≈1.5 即可，灾消被压制 10×。
 //   cesium-clouds-atmosphere 用同样 half-float LUT 但工作正常，证明问题在集成方式而非 LUT。
 //
-// 保留我的架构（比源库双 stage 更简洁）：单 PostProcessStage 合并天空+地面，末端 ACES tonemap。
-// 源库双 stage（天空 HDR → 地面 ACES）是为云预留中间 HDR；我无云，单 stage 末端 ACES 逻辑等价。
+// 架构（phase2a HDR 管线）：本 stage 合并天空+地面，末端输出线性 finalColor·exposure（HalfFloat RT）；
+// ACES+gamma+dithering 已拆到链尾独立 tonomap stage（tonemap.frag.ts）收尾。源库双 stage（天空 HDR →
+// 地面 ACES）是为云预留中间 HDR；我无云，单 atmosphere stage 末端线性 + 链尾 tonemap 逻辑等价，
+// 且支持 tonemap debug=7 HDR 归一化验证。
 //
 // Cesium 地形适配（源库 demo 无地形，不需；我必需，保留）：
 // - depthTestAgainstTerrain=true（AtmosphereStage 设）：PostProcess depthTexture 拿真实地形深度。
@@ -86,33 +88,11 @@ uniform float cosSunAngularRadius;
 
 // 辅助函数（移植源库 aerialPerspectiveEffect.frag + AtmospherePostProcess）。
 const HELPERS_GLSL = `
-// ACES filmic tonemap（源库 aerialPerspectiveEffect.frag:37-44）。
-vec3 ACESFilmic(vec3 x) {
-  const float a = 2.51;
-  const float b = 0.03;
-  const float c = 2.43;
-  const float d = 0.59;
-  const float e = 0.14;
-  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
-// interleaved gradient noise（屏幕空间低频噪声，dithering 用，无纹理依赖）。
+// interleaved gradient noise（屏幕空间低频噪声，input dithering 用，无纹理依赖）。
+// ACESFilmic + tonemapDisplay 已迁到链尾 tonomap.frag.ts（atmosphere 末端输出线性 HalfFloat，
+// 由独立 tonomap stage 做 ACES+gamma+dithering 收尾；此处仅留 input dithering 用的噪声函数）。
 float interleavedGradientNoise(vec2 p) {
   return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
-}
-// 线性 HDR → 显示：ACES + gamma 1/2.2 + dithering。单次 OETF，B 路径末端统一（对齐源库 tonemapDisplay）。
-// dithering：display 空间加 ±0.5/255 噪声，打破 8-bit framebuffer 量化阶梯。ACES 在中间调拉伸输入会
-// 放大 8-bit 量化 → 远处渐变 banding（「水波纹」）；源库用 float HDR render target 无此问题，Cesium
-// globe 只到 RGBA8，故需 dithering。
-vec4 tonemapDisplay(vec3 linearHdr, float a) {
-  // ACES filmic + gamma 1/2.2（对齐源库 tonemapDisplay，对比度强、太阳盘自然；Reinhard 偏灰白弃用）。
-  // display triangular dithering ±1.5 LSB 打散 8-bit output 量化；ACES 暗部放大 input 的 banding 由
-  // main 入口的 input dithering 在源头（originalColor）打散。
-  vec3 c = ACESFilmic(linearHdr);
-  c = pow(c, vec3(1.0 / 2.2));
-  float dither = interleavedGradientNoise(gl_FragCoord.xy)
-    + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
-  c += dither * 1.5 / 255.0;
-  return vec4(c, a);
 }
 // 视线重建：czm_windowToEyeCoordinates 近/远平面差分（源库 reconstructRay）。
 // 避免 ndc + inverseProjection 在仰视净空 / log-depth / 多视锥下方向退化。
@@ -190,7 +170,7 @@ function buildMainFn(o: ResolvedOptions): string {
 `
     : `
     finalColor = originalColor.rgb;
-    out_FragColor = tonemapDisplay(finalColor * exposure, originalColor.a);
+    out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性，链尾 tonomap 收尾
     return;
 `
 
@@ -311,7 +291,7 @@ ${skyBranch}  }
   finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——
-  if (u_debugMode > 5.5) {
+  if (u_debugMode > 5.5 && u_debugMode < 6.5) {
     out_FragColor = originalColor;
     return;
   }
@@ -334,7 +314,7 @@ ${skyBranch}  }
     return;
   }
 
-  out_FragColor = tonemapDisplay(finalColor * exposure, originalColor.a);
+  out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性 HDR，由链尾 tonomap stage 收尾
 }
 `
 }

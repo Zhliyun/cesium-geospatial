@@ -20,12 +20,29 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter')
   })
 
-  it('ACES tonemap（替换 Reinhard）', () => {
+  it('末端输出线性 finalColor·exposure（不再内联 ACES，由链尾 tonomap stage 收尾）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('ACESFilmic(')
-    expect(s).toContain('pow(c, vec3(1.0 / 2.2))')
-    // 旧 Reinhard 已弃
-    expect(s).not.toContain('radiance / (vec3(1.0) + radiance)')
+    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, originalColor.a)')
+    expect(s).not.toContain('tonemapDisplay(')
+    expect(s).not.toContain('ACESFilmic(')
+  })
+
+  it('sky=false 分支也线性输出（否则 tonemapDisplay 移除后编译失败）', () => {
+    const s = buildAerialPerspectiveFragmentShader({ sky: false })
+    expect(s).toContain('finalColor = originalColor.rgb')
+    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, originalColor.a)')
+    expect(s).not.toContain('tonemapDisplay(')
+  })
+
+  it('仍含 input dithering（打散 originalColor RGBA8 banding，留在 atmosphere）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    expect(s).toContain('inDither')
+    expect(s).toContain('interleavedGradientNoise')
+  })
+
+  it('debug=6 分支上限 < 6.5（让 debug=7 走正常线性输出，由 tonomap 归一化验证 HDR）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    expect(s).toContain('u_debugMode > 5.5 && u_debugMode < 6.5')
   })
 
   it('不含 A 路径残留（法线/lighting/几何误差校正/反伽马）', () => {
