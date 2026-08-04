@@ -15,6 +15,10 @@ import {
 import {
   loadAtmosphereLUTs,
   createAtmosphereStage,
+  INTENSITY_DEFAULT,
+  THRESHOLD_LEVEL_DEFAULT,
+  GHOST_AMOUNT_DEFAULT,
+  HALO_AMOUNT_DEFAULT,
   type AtmosphereStageOptions
 } from '@cesium-geospatial/core'
 import { createSkyStage } from './SkyStage'
@@ -196,7 +200,14 @@ async function main(): Promise<void> {
       // 地面反射衰减（默认 0.5 压地面过曝；URL ?groundDim=N 微调，1.0=不衰减）
       ...(getNumber('groundDim') != null ? { groundDim: getNumber('groundDim')! } : {}),
       // URL ?hdr=0 强制 RGBA8 兜底（跳过 HalfFloat 检测，用于在 HalfFloat 设备上对比验证兜底路径）
-      ...(getString('hdr') === '0' ? { disableHalfFloat: true } : {})
+      ...(getString('hdr') === '0' ? { disableHalfFloat: true } : {}),
+      // phase2b LensFlare（spec §5.10）：默认全开，?lensflare=0 关闭回退 phase2a 行为。
+      // 调参 ?lfIntensity=/?lfThreshold=/?lfGhost=/?lfHalo= 用于实测标定（默认值来自 lensFlareConstants）。
+      lensFlare: getString('lensflare') !== '0',
+      lensFlareIntensity: getNumber('lfIntensity') ?? INTENSITY_DEFAULT,
+      lensFlareThreshold: getNumber('lfThreshold') ?? THRESHOLD_LEVEL_DEFAULT,
+      lensFlareGhost: getNumber('lfGhost') ?? GHOST_AMOUNT_DEFAULT,
+      lensFlareHalo: getNumber('lfHalo') ?? HALO_AMOUNT_DEFAULT
     }
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =

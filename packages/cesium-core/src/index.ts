@@ -32,3 +32,10 @@ export type {
   AtmosphereStageHandle,
   AtmosphereFrameState
 } from './cesium/AtmosphereStage'
+// phase2b LensFlare 默认值常量（demo URL 参数 fallback 用，spec §5.10）
+export {
+  INTENSITY_DEFAULT,
+  THRESHOLD_LEVEL_DEFAULT,
+  GHOST_AMOUNT_DEFAULT,
+  HALO_AMOUNT_DEFAULT
+} from './cesium/lensFlare/lensFlareConstants'
