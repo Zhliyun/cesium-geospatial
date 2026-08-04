@@ -17,6 +17,7 @@ import {
   PostProcessStageSampleMode,
   Cartesian3,
   Matrix3,
+  Matrix4,
   Simon1994PlanetaryPositions,
   Transforms,
   JulianDate,
@@ -45,6 +46,14 @@ import {
   SUN_ANGULAR_RADIUS
 } from '../math/atmosphereParameters'
 import type { AtmosphereLUTs } from './lutLoader'
+import { buildDepthTemporalFragmentShader } from './depthTemporal/depthTemporal.frag'
+import {
+  createHistoryState,
+  getHistoryBridge,
+  sanityCheckOutputTexture,
+  type HistoryState
+} from './depthTemporal/historyBlit'
+import { DEPTH_THRESHOLD_DEFAULT, HIGH_ALPHA } from './depthTemporal/depthTemporalConstants'
 
 // B 路径 options：天空/日盘宏开关 + 动态曝光参数。
 export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
@@ -248,6 +257,14 @@ export function buildAtmosphereUniforms(
 
 export interface AtmosphereStageHandle {
   readonly atmosphereStage: PostProcessStage
+  /**
+   * depthTemporal EMA stage（activeStages[0]，atmosphere 前）。UNSIGNED_BYTE 设备（无 float RT 能力）
+   * 或 disableHalfFloat 时 undefined——跳过 EMA，回退现状。Task 7 装配 + uniforms 接线 + sanity check；
+   * lifecycle（resize/postRender blit+swap/每帧 prevVP+alpha/首帧 clear）由 Task 8 接。
+   */
+  readonly depthTemporalStage?: PostProcessStage
+  /** depthTemporal 是否启用（= postHdrDatatype !== UNSIGNED_BYTE）。false 时 depthTemporalStage undefined。 */
+  readonly temporalEmaEnabled: boolean
   /** phase2b LensFlare 外层 non-series composite（lensFlare=false 时 undefined）。 */
   readonly lensFlareStage?: PostProcessStageComposite
   readonly tonemapStage: PostProcessStage
@@ -329,6 +346,66 @@ export function createAtmosphereStage(
     lensFlareStage = lfHandle.lensflareComposite
   }
 
+  // depthTemporal EMA（Task 7）：复用 atmosphere 同套 HDR 检测。UNSIGNED_BYTE → 跳过（无 float history RT，
+  // EMA 在 8-bit 量化 depth 上无意义且灾消），回退现状（仅 atmosphere → lensflare → tonomap）。
+  const temporalEmaEnabled = postHdrDatatype !== PixelDatatype.UNSIGNED_BYTE
+
+  let depthTemporalStage: PostProcessStage | undefined
+  let historyState: HistoryState | undefined
+  // prevViewProjection / temporalAlpha 初始值（Task 8 lifecycle 每帧更新：postRender 写本帧 VP、
+  // preRender 算 motion→alpha）。Task 7 只接线 uniforms 函数形式，值由 Task 8 更新即生效。
+  // !!Task 8 lifecycle 注意：reassign prevViewProjection 时用 new Matrix4() 作 result（如
+  // prevViewProjection = Matrix4.multiply(view, proj, new Matrix4())），勿 in-place mutate
+  // （如 Matrix4.multiply(view, proj, prevViewProjection)）——IDENTITY 是 Object.freeze 的 frozen
+  // 共享常量（Core/Matrix4.js:3070），首帧 prevVP===IDENTITY 时 in-place mutate 在 strict mode fail-fast 抛错。
+  let prevViewProjection = Matrix4.IDENTITY
+  let temporalAlpha = HIGH_ALPHA // 首帧偏 current（避免 history 未就绪时空值累积）
+  let removeSanityCheck: (() => void) | undefined
+
+  if (temporalEmaEnabled) {
+    const context = (scene as unknown as { context: unknown }).context
+    historyState = createHistoryState(
+      context,
+      scene.drawingBufferWidth,
+      scene.drawingBufferHeight,
+      postHdrDatatype
+    )
+    depthTemporalStage = new PostProcessStage({
+      name: 'czm_depth_temporal',
+      fragmentShader: buildDepthTemporalFragmentShader({ enabled: true }),
+      pixelDatatype: postHdrDatatype, // float RT 承载 smoothDepth 精度（HALF_FLOAT/FLOAT）
+      textureScale: 1.0, // 全分辨率（与 globe depth 1:1 像素对齐）
+      sampleMode: PostProcessStageSampleMode.NEAREST, // 显式钉死：smoothDepth 打包进 .a，LINEAR 插值产无意义中间 depth → 污染 atmosphere sceneDist 反演（比 tonomap 只处理 color 更敏感）
+      uniforms: {
+        // 函数形式（每帧调用取最新值）：Task 8 lifecycle 更新 historyState/prevVP/alpha 后自动反映。
+        u_historyTexture: () => (historyState ? getHistoryBridge(historyState) : null),
+        u_prevViewProjection: () => prevViewProjection,
+        u_temporalAlpha: () => temporalAlpha,
+        u_depthThreshold: DEPTH_THRESHOLD_DEFAULT // 静态值（log-depth 相对阈值 0.1 ≈ 7% 距离变化容差）
+      }
+    })
+    // depthTemporal 必须在 atmosphereStage add 前 add（activeStages[0]）：
+    // atmosphere 的 colorTexture = depthTemporal 输出（含 smoothDepth.a 透传），保证
+    // aerialPerspective 读到的 scene color 已经过 EMA 平滑的 depth 通道。
+    scene.postProcessStages.add(depthTemporalStage)
+
+    // sanity check（评审：graceful degrade）：outputTexture 首帧/stage 未就绪时可 undefined，不崩。
+    // Task 8 lifecycle postRender blit 也判空跳过；此处仅启动期首次 dev console.debug 诊断（不重复 warn）。
+    let sanityWarned = false
+    removeSanityCheck = scene.preRender.addEventListener(() => {
+      if (
+        !sanityWarned &&
+        depthTemporalStage &&
+        !sanityCheckOutputTexture(depthTemporalStage.outputTexture)
+      ) {
+        sanityWarned = true
+        console.debug(
+          '[depthTemporal] outputTexture undefined at startup（stage 未就绪；Task 8 blit 判空跳过）'
+        )
+      }
+    })
+  }
+
   let atmosphereStage = buildAtmosphereStage()
   let tonemapStage = buildTonemapStage()
   scene.postProcessStages.add(atmosphereStage)
@@ -389,6 +466,12 @@ export function createAtmosphereStage(
     get atmosphereStage() {
       return atmosphereStage
     },
+    get depthTemporalStage() {
+      return depthTemporalStage
+    },
+    get temporalEmaEnabled() {
+      return temporalEmaEnabled
+    },
     get lensFlareStage() {
       return lensFlareStage
     },
@@ -402,6 +485,9 @@ export function createAtmosphereStage(
       // setMode/destroy 全仓库 0 调用属 dead code（demo 切 mode 靠页面重载）。
       // 既有逻辑：rebuild atmosphere+tonomap（不 removePreRender——preRender 闭包持 state/resolved
       // 引用，resolved 更新后自动生效）。两 stage uniform 同源 u_debugMode 同步重建。
+      // TODO(Task 8): depthTemporal 不随 setMode rebuild（enabled 由 HDR caps 决定，非 options），
+      // 但 setMode remove+re-add atmosphere/tonomap 会打乱 activeStages 顺序（depthTemporal 应在 atmosphere 前）。
+      // setMode 是 dead code，暂不处理；Task 8 lifecycle 接入后若需 rebuild depthTemporal 再补。
       removeAndDestroy(atmosphereStage)
       removeAndDestroy(tonemapStage)
       resolved = validateAtmosphereOptions(newOptions)
@@ -428,6 +514,12 @@ export function createAtmosphereStage(
     },
     destroy() {
       removePreRender()
+      if (removeSanityCheck) removeSanityCheck()
+      // historyState ping-pong Texture 销毁（createHistoryState 创建的两张 RT）。
+      if (historyState) {
+        historyState.textures.forEach((t) => t.destroy())
+      }
+      if (depthTemporalStage) removeAndDestroy(depthTemporalStage)
       removeAndDestroy(atmosphereStage)
       if (lensFlareStage) removeAndDestroy(lensFlareStage)
       removeAndDestroy(tonemapStage)

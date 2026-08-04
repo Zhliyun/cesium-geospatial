@@ -26,6 +26,30 @@ import {
   HALO_AMOUNT_DEFAULT
 } from './lensFlare/lensFlareConstants'
 
+// depthTemporal historyBlit 隔离 mock：node 环境无 WebGL，真实 Texture 构造会失败。
+// historyBlit.test.ts 已独立覆盖 ping-pong/bridge/sanityCheck 逻辑，本文件只测 AtmosphereStage 装配
+// （stage 创建/add 顺序/handle 字段/UNSIGNED_BYTE 兜底），故隔离 Texture 构造。
+vi.mock('./depthTemporal/historyBlit', () => ({
+  createHistoryState: (_ctx: unknown, w: number, h: number, dt: number) => ({
+    textures: [
+      { _texture: { id: 1 }, _target: 0x0de1, destroy: () => {} },
+      { _texture: { id: 2 }, _target: 0x0de1, destroy: () => {} }
+    ],
+    readIndex: 0,
+    width: w,
+    height: h,
+    pixelDatatype: dt
+  }),
+  getHistoryBridge: (state: {
+    textures: Array<{ _texture: unknown; _target: number }>
+    readIndex: number
+  }) => {
+    const tex = state.textures[state.readIndex]
+    return { _texture: tex._texture, _target: tex._target }
+  },
+  sanityCheckOutputTexture: (t: unknown) => t != null
+}))
+
 // —— 测试桩：node 环境无 WebGL，PostProcessStage 不实例化，只测纯函数 ——
 
 const stubLuts = {
@@ -237,17 +261,24 @@ describe('resolvePostHdrDatatype（PostProcessStage HDR 像素数据类型检测
 // mockScene 提供 resolvePostHdrDatatype 的 context caps + globe.ellipsoid（createLensFlareStage 读
 // radiiSquared）+ preRender.addEventListener（返 no-op remover）+ postProcessStages.add spy（记顺序）。
 // preRender 闭包内的 camera 访问不在构造期触发，故 camera mock 仅占位。
-function mockSceneWithAddSpy(): { scene: import('cesium').Scene; addSpy: ReturnType<typeof vi.fn> } {
+function mockSceneWithAddSpy(
+  opts: { halfFloat?: boolean } = {}
+): { scene: import('cesium').Scene; addSpy: ReturnType<typeof vi.fn> } {
+  // halfFloat=true（默认）：context caps 让 resolvePostHdrDatatype 返回 HALF_FLOAT（与既有用例一致）。
+  // halfFloat=false：全 false → 返回 UNSIGNED_BYTE（depthTemporal 兜底测试用）。
+  const half = opts.halfFloat ?? true
   const addSpy = vi.fn()
   const scene = {
     context: {
-      halfFloatingPointTexture: true,
-      colorBufferHalfFloat: true,
-      floatingPointTexture: true,
+      halfFloatingPointTexture: half,
+      colorBufferHalfFloat: half,
+      floatingPointTexture: !half,
       colorBufferFloat: false
     },
     globe: { depthTestAgainstTerrain: false, ellipsoid: Ellipsoid.WGS84 },
     camera: { positionWC: new Cartesian3(6378137, 0, 0) },
+    drawingBufferWidth: 1920,
+    drawingBufferHeight: 1080,
     preRender: { addEventListener: () => () => {} },
     postProcessStages: { add: addSpy, remove: () => false }
   } as unknown as import('cesium').Scene
@@ -305,5 +336,49 @@ describe('createAtmosphereStage（phase2b 三 stage 集成）', () => {
     const handle2 = createAtmosphereStage(scene, stubLuts, { ditherScale: 3.0 })
     const tonoUniforms2 = (handle2.tonemapStage as unknown as { uniforms: Record<string, unknown> }).uniforms
     expect(tonoUniforms2.u_ditherScale).toBe(3.0)
+  })
+})
+
+// —— depthTemporal 装配（Task 7）：activeStages[0] + UNSIGNED_BYTE 兜底 + sanity check ——
+describe('createAtmosphereStage — depthTemporal 装配', () => {
+  it('HDR 设备（HALF_FLOAT）→ depthTemporal 装配为 activeStages[0]（atmosphere 前）', () => {
+    const { scene, addSpy } = mockSceneWithAddSpy({ halfFloat: true })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    expect(handle.temporalEmaEnabled).toBe(true)
+    expect(handle.depthTemporalStage).toBeDefined()
+    // add 顺序：depthTemporal[0] → atmosphere → tonomap（lensFlare=false 跳过 lensflare）
+    const added = addSpy.mock.calls.map((c: unknown[]) => c[0])
+    expect((added[0] as { name?: string }).name).toMatch(/depth_temporal/i)
+    const dtIdx = added.findIndex((s) => s === handle.depthTemporalStage)
+    const atmoIdx = added.findIndex((s) => s === handle.atmosphereStage)
+    expect(dtIdx).toBe(0) // activeStages[0]
+    expect(atmoIdx).toBeGreaterThan(dtIdx) // atmosphere 在 depthTemporal 后
+  })
+
+  it('UNSIGNED_BYTE 设备（无 HALF_FLOAT/FLOAT）→ temporalEmaEnabled=false，不装配 depthTemporal', () => {
+    const { scene, addSpy } = mockSceneWithAddSpy({ halfFloat: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    expect(handle.temporalEmaEnabled).toBe(false)
+    expect(handle.depthTemporalStage).toBeUndefined()
+    // 确认无 depth_temporal stage 被 add（兜底回退现状）
+    const added = addSpy.mock.calls.map((c: unknown[]) => c[0])
+    expect(
+      added.some((s) => (s as { name?: string })?.name?.match?.(/depth_temporal/i))
+    ).toBe(false)
+  })
+
+  it('depthTemporal stage uniforms 接线（函数形式：history/prevVP/alpha + 静态 threshold）', () => {
+    const { scene } = mockSceneWithAddSpy({ halfFloat: true })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const dt = handle.depthTemporalStage!
+    const uniforms = (dt as unknown as { uniforms: Record<string, unknown> }).uniforms
+    // u_depthThreshold 静态值（DEPTH_THRESHOLD_DEFAULT = 0.1）
+    expect(uniforms.u_depthThreshold).toBe(0.1)
+    // 函数形式 uniform（构造期不调用，调用取最新 bridge/prevVP/alpha）
+    expect(typeof uniforms.u_historyTexture).toBe('function')
+    expect(typeof uniforms.u_prevViewProjection).toBe('function')
+    expect(typeof uniforms.u_temporalAlpha).toBe('function')
+    // u_temporalAlpha 初始 = HIGH_ALPHA（0.5，首帧偏 current）
+    expect((uniforms.u_temporalAlpha as () => number)()).toBe(0.5)
   })
 })
