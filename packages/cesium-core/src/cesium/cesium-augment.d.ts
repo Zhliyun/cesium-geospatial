@@ -1,4 +1,4 @@
-// cesium 公开 .d.ts 未声明 Texture3D / Context / Texture（内部 Renderer 类），
+// cesium 公开 .d.ts 未声明 Texture3D / Context / Texture / Sampler / TextureWrap（内部 Renderer 类），
 // 但运行时从 'cesium' 可导入（Cesium.js re-export @cesium/engine）。补充最小类型。
 declare module 'cesium' {
   export class Texture3D {
@@ -16,14 +16,46 @@ declare module 'cesium' {
     })
   }
 
+  // Texture 构造支持两种变体：
+  //   1) 数据纹理：source: { width, height, arrayBufferView }（LUT 路径）
+  //   2) 空纹理（RT 目标）：width/height + sampler（history ping-pong 路径）
   export class Texture {
     constructor(options: {
       context: Context
-      source: { width: number; height: number; arrayBufferView: ArrayBufferView }
+      source?: {
+        width: number
+        height: number
+        arrayBufferView: ArrayBufferView
+      }
+      width?: number
+      height?: number
       pixelFormat?: number
       pixelDatatype?: number
+      sampler?: Sampler
       flipY?: boolean
     })
+    width: number
+    height: number
+    destroy(): void
+  }
+
+  // Sampler（@cesium/engine Renderer 内部类，Cesium.js re-export，公开 .d.ts 缺失）。
+  // Texture 构造的 sampler 形参需 Sampler 实例（见 cesium-clouds-atmosphere/CloudShadowPass.js）。
+  export class Sampler {
+    constructor(options?: {
+      wrapS?: TextureWrap
+      wrapT?: TextureWrap
+      minificationFilter?: TextureMinificationFilter
+      magnificationFilter?: TextureMagnificationFilter
+      maximumAnisotropy?: number
+    })
+  }
+
+  // TextureWrap（@cesium/engine 冻结对象，值同 WebGLConstants）。
+  export enum TextureWrap {
+    CLAMP_TO_EDGE = 33071,
+    REPEAT = 10497,
+    MIRRORED_REPEAT = 33648,
   }
 
   // eslint-disable-next-line @typescript-eslint/no-empty-interface
