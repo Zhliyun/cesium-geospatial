@@ -129,11 +129,19 @@ function texelSizeForSourceScale(scene: Scene, sourceScale: number): () => Carte
  * 不加入 scene.postProcessStages（由 AtmosphereStage / 上层决定何时 add，便于排序与销毁）。
  * uniforms：uniform-name texture 引用用 string 字面量（I9/I10）；每帧动态量（sunDirection/
  * cameraPosition/ellipsoidRadii/exposure）用 function 闭包读 state/scene。
+ *
+ * Task 10：depthTemporalStageName（可选）= depthTemporal stage 名（temporalEmaEnabled=true 传
+ * 'czm_depth_temporal'）。传入时 occlusion 的 depthTexture uniform 指向该 stage（uniform-name
+ * string 跨 stage 引用，Cesium textureCache 经 collection.getStageByName 解析为 outputTexture；
+ * combine 优先 user uniform 覆盖内建 scene depth），shader 读 texture().a（smoothDepth，raw log-depth
+ * EMA），与 atmosphere 同源 smoothDepth 统一消抖。不传（UNSIGNED_BYTE 兜底，无 depthTemporal）时
+ * occlusion 不覆盖 depthTexture（Cesium 内建 scene globe depth），shader 用 legacy czm_readDepth。
  */
 export function createLensFlareStage(
   scene: Scene,
   state: AtmosphereFrameState,
-  options: LensFlareOptions = {}
+  options: LensFlareOptions = {},
+  depthTemporalStageName?: string
 ): LensFlareStageHandle {
   const postHdrDatatype = resolvePostHdrDatatype(scene)
   const intensity = options.intensity ?? INTENSITY_DEFAULT
@@ -224,15 +232,25 @@ export function createLensFlareStage(
   })
 
   // occlusion：标量降分（textureScale 0.0625）——36 点 depth 采样网格成本低，输出低分够用。
+  // Task 10：depthTemporalStageName 传入时（temporalEmaEnabled=true）shader 用 smoothDepth
+  // （texture().a + 1e-4）+ depthTexture uniform 指向 depthTemporal（uniform-name string 跨 stage 引用）；
+  // 未传（UNSIGNED_BYTE 兜底）shader 用 legacy czm_readDepth + 不覆盖 depthTexture（Cesium 内建 scene depth）。
+  const useSmoothDepth = !!depthTemporalStageName
+  const occlusionUniforms: Record<string, unknown> = {
+    u_sunDirectionWC: () => state.sunDirection,
+    u_cameraPositionWC: () => scene.camera.positionWC,
+    u_sunAngularRadius: SUN_ANGULAR_RADIUS,
+    u_ellipsoidRadiiSquared: () => ellipsoidRadiiSquared
+  }
+  if (depthTemporalStageName) {
+    // uniform-name string：Cesium textureCache.updateUniformTextures 经 collection.getStageByName 解析
+    // 为 depthTemporal.outputTexture（getOutputTexture）；combine 优先 user uniform 覆盖内建 scene depth。
+    occlusionUniforms.depthTexture = depthTemporalStageName
+  }
   const occlusion = new PostProcessStage({
     name: 'lf_occlusion',
-    fragmentShader: buildOcclusionFragmentShader(),
-    uniforms: {
-      u_sunDirectionWC: () => state.sunDirection,
-      u_cameraPositionWC: () => scene.camera.positionWC,
-      u_sunAngularRadius: SUN_ANGULAR_RADIUS,
-      u_ellipsoidRadiiSquared: () => ellipsoidRadiiSquared
-    },
+    fragmentShader: buildOcclusionFragmentShader({ useSmoothDepth }),
+    uniforms: occlusionUniforms,
     textureScale: OCCLUSION_TEXTURE_SCALE,
     sampleMode: PostProcessStageSampleMode.NEAREST,
     pixelFormat: PixelFormat.RGBA,

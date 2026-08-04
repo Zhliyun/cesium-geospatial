@@ -336,24 +336,32 @@ export function createAtmosphereStage(
     })
   }
 
+  // depthTemporal EMA（Task 7）：复用 atmosphere 同套 HDR 检测。UNSIGNED_BYTE → 跳过（无 float history RT，
+  // EMA 在 8-bit 量化 depth 上无意义且灾消），回退现状（仅 atmosphere → lensflare → tonomap）。
+  // 提前到 lensflare 前算：lensflare occlusion 需据 temporalEmaEnabled 决定 depthTexture 同源指向（Task 10）。
+  const temporalEmaEnabled = postHdrDatatype !== PixelDatatype.UNSIGNED_BYTE
+
   // phase2b LensFlare（spec §5.9）：外层 non-series composite，插在 atmosphere 与 tonomap 之间。
   // lensFlare=false → 不创建（phase2a 两 stage 行为，防回归）。
   // ?lensflare=0 运行时切换走 lensFlareStage.enabled=false（M1：非 setMode rebuild 15 子 stage），
   // 由上层（demo main.ts）持 handle 直接设；stage 仍 add 在集合中，透传 atmosphere 输出。
+  // Task 10：temporalEmaEnabled 时 occlusion 同源 depthTemporal smoothDepth（depthTexture 指向
+  // 'czm_depth_temporal'，与 atmosphere 同源 EMA 消抖）；UNSIGNED_BYTE 兜底 occlusion 用 scene globe depth。
   let lensFlareStage: PostProcessStageComposite | undefined
   if (resolved.lensFlare) {
-    const lfHandle = createLensFlareStage(scene, state, {
-      intensity: resolved.lensFlareIntensity,
-      thresholdLevel: resolved.lensFlareThreshold,
-      ghostAmount: resolved.lensFlareGhost,
-      haloAmount: resolved.lensFlareHalo
-    })
+    const lfHandle = createLensFlareStage(
+      scene,
+      state,
+      {
+        intensity: resolved.lensFlareIntensity,
+        thresholdLevel: resolved.lensFlareThreshold,
+        ghostAmount: resolved.lensFlareGhost,
+        haloAmount: resolved.lensFlareHalo
+      },
+      temporalEmaEnabled ? 'czm_depth_temporal' : undefined
+    )
     lensFlareStage = lfHandle.lensflareComposite
   }
-
-  // depthTemporal EMA（Task 7）：复用 atmosphere 同套 HDR 检测。UNSIGNED_BYTE → 跳过（无 float history RT，
-  // EMA 在 8-bit 量化 depth 上无意义且灾消），回退现状（仅 atmosphere → lensflare → tonomap）。
-  const temporalEmaEnabled = postHdrDatatype !== PixelDatatype.UNSIGNED_BYTE
 
   let depthTemporalStage: PostProcessStage | undefined
   let historyState: HistoryState | undefined

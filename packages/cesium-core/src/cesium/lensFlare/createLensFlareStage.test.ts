@@ -267,3 +267,57 @@ describe('createLensFlareStage', () => {
     expect(featuresStage.uniforms.u_texelSize().x).toBeCloseTo(1.0 / 1920, 10)
   })
 })
+
+// Task 10：occlusion stage depthTexture uniform 指向 depthTemporal（同源 smoothDepth，方案 A uniform-name string）。
+// temporalEmaEnabled=true（HDR）：occlusion.depthTexture = 'czm_depth_temporal'（uniform-name string 跨 stage
+// 引用，Cesium textureCache 解析为 depthTemporal.outputTexture），shader 读 texture().a（smoothDepth）。
+// UNSIGNED_BYTE 兜底（无 depthTemporal）：不传 depthTemporalStageName → 不覆盖 depthTexture（Cesium 内建
+// scene globe depth），shader 用 legacy czm_readDepth。
+describe('createLensFlareStage Task 10：occlusion 同源 depthTemporal', () => {
+  it('传 depthTemporalStageName 时 occlusion.depthTexture = 该 name（uniform-name string 跨 stage 引用）', () => {
+    const { occlusionStage } = createLensFlareStage(
+      mockScene(),
+      mockState(),
+      {},
+      'czm_depth_temporal' // temporalEmaEnabled=true 路径
+    )
+    // uniform-name string（非 function）：Cesium textureCache.updateUniformTextures 解析为
+    // depthTemporal.outputTexture（getOutputTexture(name)），combine 优先 user uniform 覆盖内建 scene depth。
+    expect(typeof occlusionStage.uniforms.depthTexture).toBe('string')
+    expect(occlusionStage.uniforms.depthTexture).toBe('czm_depth_temporal')
+  })
+
+  it('传 depthTemporalStageName 时 shader 用 smoothDepth（texture().a + 1e-4，禁 czm_readDepth）', () => {
+    const { occlusionStage } = createLensFlareStage(
+      mockScene(),
+      mockState(),
+      {},
+      'czm_depth_temporal'
+    )
+    expect(occlusionStage.fragmentShader).toMatch(/texture\(depthTexture,\s*sampleUV\)\.a/)
+    expect(occlusionStage.fragmentShader).not.toContain('czm_readDepth')
+    expect(occlusionStage.fragmentShader).toMatch(/1\.0\s*-\s*1e-4/)
+  })
+
+  it('不传 depthTemporalStageName（UNSIGNED_BYTE）时 occlusion 不覆盖 depthTexture（Cesium 内建 scene depth）', () => {
+    const { occlusionStage } = createLensFlareStage(mockScene(), mockState(), {})
+    // 无 depthTexture uniform 覆盖 → Cesium 内建 scene globe depth（stage._depthTexture）
+    expect(occlusionStage.uniforms.depthTexture).toBeUndefined()
+    // shader 用 legacy czm_readDepth（scene globe depth log-depth 解码）
+    expect(occlusionStage.fragmentShader).toContain('czm_readDepth')
+    expect(occlusionStage.fragmentShader).toContain('1.0 - DEPTH_EPSILON')
+  })
+
+  it('occlusion 其余 uniform 不受 depthTemporalStageName 影响（sun/camera/ellipsoid 闭包不变）', () => {
+    const { occlusionStage } = createLensFlareStage(
+      mockScene(),
+      mockState(),
+      {},
+      'czm_depth_temporal'
+    )
+    expect(typeof occlusionStage.uniforms.u_sunDirectionWC).toBe('function')
+    expect(typeof occlusionStage.uniforms.u_cameraPositionWC).toBe('function')
+    expect(typeof occlusionStage.uniforms.u_ellipsoidRadiiSquared).toBe('function')
+    expect(occlusionStage.uniforms.u_sunAngularRadius).toBe(SUN_ANGULAR_RADIUS)
+  })
+})
