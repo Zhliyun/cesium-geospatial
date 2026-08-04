@@ -73,7 +73,7 @@ uniform sampler2D irradiance_texture;
 `
 
 // 每帧 uniform（命名对齐源仓库）。altitudeCorrection 单位米（shader 内 *METER_TO_LENGTH_UNIT 转 km）。
-// u_debugMode：0=正常 1=log(1+finalColor) 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor 7=线性输出（HDR 链验证，由 tonemap 归一化）。
+// u_debugMode：0=正常 1=log(1+finalColor) 2=太阳方向 3=相机 r 量级 5=smoothDepth（log-depth EMA）/r 6=透传 inputColor 7=线性输出（HDR 链验证，由 tonemap 归一化）。
 // u_groundDim：地面反射衰减（分离 exposure——exposure 管 inscatter/天空，groundDim 单独压地面过曝）。
 const FRAME_UNIFORMS_GLSL = `
 uniform vec3 sunDirection;
@@ -433,7 +433,7 @@ ${skyBranch}  }
   }
   finalColor = originalColor * transmittance * u_groundDim + inscatter * u_inscatterScale;
 
-  // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
+  // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=smoothDepth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——
   // 整个级联被 if (u_debugMode < 6.5) 包裹：debug=7（>6.5）跳过所有可视化分支，直接落到末端线性输出
   //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
@@ -446,6 +446,9 @@ ${skyBranch}  }
     }
     if (u_debugMode > 4.5) {
       // Task 9：depth 变量已移除，debug=5 改可视化 smoothDepth（depthTemporal EMA 后的 raw log-depth）。
+      // **值分布从 Task 9 前 window-depth [0,1] linear 变为 log-depth（远密集近稀疏），画面外观与 Task 9 前不可直接对比**：
+      // 远处地形 log-depth 仍接近 1（与 window-depth 远处接近 1 相似），近处 log-depth 向 0 散开但分布密度不同
+      // （log-depth 近处拉伸、远处压缩），故近处比 Task 9 前 window-depth 更亮、远处梯度更陡。
       out_FragColor = vec4(smoothDepth, 0.0, length(cameraPosition) / 6420.0, 1.0);
       return;
     }

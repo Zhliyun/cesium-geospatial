@@ -222,6 +222,15 @@ describe('depthTemporal 集成（Task 9）', () => {
     expect(s).toContain('1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist)')
   })
 
+  it('debug=5 显示 smoothDepth（colorTexture.a，EMA 后 log-depth）+ header 注释规范（Task 11 补 Task 9 M1/M4）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    // debug=5 输出 smoothDepth（Task 9 已临时改，本 task 规范）
+    expect(s).toMatch(/debugMode.*5[\s\S]*out_FragColor\s*=\s*vec4\(.*smoothDepth/)
+    // header 注释规范（5=smoothDepth，非旧 5=depth/r）
+    expect(s).toContain('5=smoothDepth')
+    expect(s).not.toContain('5=depth/r')
+  })
+
   it('glslang 编译通过（2-arg czm_windowToEyeCoordinates 桩）', () => {
     const standalone = buildStandaloneShaderForValidation()
     const result = compileFragment(standalone)

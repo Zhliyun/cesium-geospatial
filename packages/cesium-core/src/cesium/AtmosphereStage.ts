@@ -401,7 +401,8 @@ export function createAtmosphereStage(
         u_historyTexture: () => (historyState ? getHistoryBridge(historyState) : null),
         u_prevViewProjection: () => prevViewProjection,
         u_temporalAlpha: () => temporalAlpha,
-        u_depthThreshold: DEPTH_THRESHOLD_DEFAULT // 静态值（log-depth 相对阈值 0.1 ≈ 7% 距离变化容差）
+        u_depthThreshold: DEPTH_THRESHOLD_DEFAULT, // 静态值（log-depth 相对阈值 0.1 ≈ 7% 距离变化容差）
+        u_debugMode: resolved.debugMode // 与 atmosphere 同源 debugMode（URL ?debug=8 触发 depthTemporal raw depth 输出）
       }
     })
     // depthTemporal 必须在 atmosphereStage add 前 add（activeStages[0]）：

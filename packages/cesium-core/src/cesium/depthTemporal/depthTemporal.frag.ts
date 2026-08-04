@@ -24,7 +24,8 @@ export const DEPTH_TEMPORAL_UNIFORM_NAMES: string[] = [
   'u_historyTexture',
   'u_prevViewProjection',
   'u_temporalAlpha',
-  'u_depthThreshold'
+  'u_depthThreshold',
+  'u_debugMode'
 ]
 
 // 组装 PostProcessStage 用 fragment shader（含 czm_* automatic uniform 引用，仅供 Cesium 运行时）。
@@ -48,6 +49,8 @@ void main() {
   // 方案 A 单 stage：读本帧 scene color（RGB 透传）+ raw log-depth（.r），EMA 平滑后打包到 alpha。
   // 链尾 stage（atmosphere/tonemap）读 colorTexture.rgb 即拿到原 scene color；history ping-pong
   // 读本 stage 输出的 .a（见 historyBlit.ts，后续 Task）。
+  // u_debugMode + debug=8 分支始终 emit（enabled=true 路径），runtime resolved.debugMode 控制
+  //（对齐 atmosphere pattern——u_debugMode 在 FRAME_UNIFORMS_GLSL 始终 emit，无 compile-time debugMode option）。
   return `
 #define LOG_DEPTH
 precision highp float;
@@ -57,11 +60,23 @@ uniform sampler2D u_historyTexture;   // 上帧 smoothDepth（.a）
 uniform mat4 u_prevViewProjection;    // 上帧 VP（ECEF 米域）
 uniform float u_temporalAlpha;        // [0,1] 运动门控（position+direction 双项）
 uniform float u_depthThreshold;       // log-depth 相对阈值
+uniform float u_debugMode;            // 8=raw globe depth（诊断抖动源/EMA 对比，EMA 前基准）
 in vec2 v_textureCoordinates;
 
 void main() {
   vec3 sceneColor = texture(colorTexture, v_textureCoordinates).rgb;
   float curLogDepth = texture(depthTexture, v_textureCoordinates).r;  // raw log-depth（直接读 .r，不经 window-depth 反演）
+
+  // debug=8 输出 raw globe depth（depthTemporal 输入的未平滑 log-depth，EMA 前基准）。
+  // 与 atmosphere debug=5（smoothDepth，EMA 后）对比 → 验证 EMA 平滑效果（远密集近稀疏 log-depth 域）。
+  // debug=8 > 7.5 与 atmosphere debug 级联（< 6.5）分离：URL ?debug=8 时 depthTemporal 输出 raw depth（红通道），
+  // atmosphere debug=8 > 6.5 跳过自身 debug cascade，走正常计算（transmittance/groundDim/inscatter 调制）+ 链尾
+  // ACES tonemap 显示——非 clean 透传；与 debug=5（atmosphere debug cascade 内 return，纯 smoothDepth）显示路径
+  // 不同。但对观察时序抖动稳定性够用——抖动不依赖亮度调制。
+  if (u_debugMode > 7.5) {
+    out_FragColor = vec4(texture(depthTexture, v_textureCoordinates).r, 0.0, 0.0, 1.0);
+    return;
+  }
 
   // 反演 worldPosECEF（纯 ECEF 米域，禁高度修正向量 / 米→km 换算因子）。
   // 2-arg czm_windowToEyeCoordinates（LOG_DEPTH 分支，接收 log-depth，返回 .xyz 真眼坐标，禁 /=w）：

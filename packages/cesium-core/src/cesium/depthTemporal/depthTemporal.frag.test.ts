@@ -50,3 +50,23 @@ describe('buildDepthTemporalFragmentShader', () => {
     expect(result.ok, `glslang 编译失败:\n${result.output}`).toBe(true)
   })
 })
+
+describe('debug=8 raw globe depth（Task 11，抖动源/EMA 对比诊断）', () => {
+  it('enabled=true 始终 emit u_debugMode + debug=8 分支（runtime resolved.debugMode 控制，对齐 atmosphere pattern）', () => {
+    const s = buildDepthTemporalFragmentShader({ enabled: true })
+    // u_debugMode uniform 始常驻（无 compile-time debugMode option，与 atmosphere 一致）
+    expect(s).toContain('uniform float u_debugMode')
+    expect(s).toMatch(/debugMode.*8[\s\S]*out_FragColor\s*=\s*vec4\(.*texture\(depthTexture.*\)\.r/)
+  })
+
+  it('enabled=false 不 emit u_debugMode（透传兜底最小化）', () => {
+    const s = buildDepthTemporalFragmentShader({ enabled: false })
+    expect(s).not.toContain('u_debugMode')
+  })
+
+  it('debug=8 glslang 编译通过（u_debugMode 声明在 shader body 内，无需额外桩）', () => {
+    const standalone = buildDepthTemporalStandaloneShaderForValidation({ enabled: true })
+    const result = compileFragment(standalone)
+    expect(result.ok, `glslang 编译失败:\n${result.output}`).toBe(true)
+  })
+})
