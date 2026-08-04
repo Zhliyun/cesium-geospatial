@@ -34,9 +34,11 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).toContain('inscatter = mix(inscatter, foreInscatter, mask)')
     // fore 赋值不放大（×1）：foreInscatter = GetSkyRadianceToPointScaled(...) 直接收尾，无 ×scale
     expect(s).toContain('foreTrans\n      );')
-    // 末端 fogEnhance：远处雾浓由基于距离的 fog 衰减补回（近 ×1 山体清晰，远 ×scale 雾浓）
+    // 末端 fogEnhance：fog 距离用 tHitG（椭球解析，无 depth 时序抖——瓦片 LOD 过渡时 depthTexture 不稳，
+    // fog 读 sceneDist 会逐帧抖 ×scale 放大成波纹；tHitG 平滑 → fog 逐帧稳）
     expect(s).toContain('inscatter *= fog')
-    expect(s).toContain('mix(1.0, u_inscatterScale, smoothstep(CLOSE_KM, horizonKm, fogDist))')
+    expect(s).toContain('mix(1.0, u_inscatterScale, smoothstep(CLOSE_KM, horizonKm, tHitG))')
+    expect(s).not.toContain('fogDist = hasScene')
     // 全局 scale 模式彻底移除（旧 finalColor 的 inscatter * u_inscatterScale）
     expect(s).not.toContain('inscatter * u_inscatterScale')
   })

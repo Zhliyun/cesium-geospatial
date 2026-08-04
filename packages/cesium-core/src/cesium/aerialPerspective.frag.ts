@@ -445,11 +445,13 @@ ${skyBranch}  }
   }
   // —— fogEnhance：远处雾浓衰减（近 ×1 山体清晰，远 ×scale 雾浓）——
   // base/fore 已量级一致（mix 无圆），远处雾浓由末端基于距离的 fog 衰减补回。
-  // fogDist：有真实 depth 用 sceneDist（精确，山体近→fog=1 清晰），无 depth 用 tHitG（椭球，远处雾浓）。
-  // sceneDist 已 5-tap 平滑 → fog 无抖；sky 不进此分支（lookingAtGround=false），保 sky ×scale 不变。
+  // fog 距离用 tHitG（椭球解析距离，纯数学无 depth）：相机俯仰变化时瓦片 LOD 过渡致 depthTexture 时序
+  // 不稳（未加载区 depth=1、不同 LOD depth 精度不一；加载结束才稳），fog 若读 sceneDist 会逐帧抖、
+  // ×scale 放大成波纹；tHitG 解析平滑 → fog 逐帧稳无抖。fore/mask 仍读 sceneDist（保山体清晰），但其
+  // 时序抖动 ×1 未放大、且平地 fore≈base（mix 自抵消）→ 次源微弱。近处 tHitG<CLOSE_KM → fog=1（山体
+  // 清晰）；中远 tHitG>CLOSE_KM → fog>1（距离雾浓，物理）。sky 不进此分支（lookingAtGround=false）。
   if (lookingAtGround) {
-    float fogDist = hasScene ? sceneDist : tHitG;
-    float fog = mix(1.0, u_inscatterScale, smoothstep(CLOSE_KM, horizonKm, fogDist));
+    float fog = mix(1.0, u_inscatterScale, smoothstep(CLOSE_KM, horizonKm, tHitG));
     inscatter *= fog;
   }
   finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
