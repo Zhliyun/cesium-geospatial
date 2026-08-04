@@ -30,6 +30,7 @@ import {
   buildStandaloneShaderForValidation,
   type AerialPerspectiveFragOptions
 } from './aerialPerspective.frag'
+import { buildStandaloneShaderForValidation as buildTonemapStandalone } from './tonemap.frag'
 
 // spec §4.2 合法宏组合枚举——A 路径 / B 路径 / 仅透射 / 仅内散射。
 // options 形状与 brief 一致（未列字段走 buildAerialPerspectiveFragmentShader
@@ -158,5 +159,15 @@ void main() { out_FragColor = vec4(thisIdentifierDoesNotExist); }`
     const { ok, output } = compileFragment(broken)
     expect(ok).toBe(false)
     expect(output).toContain('ERROR')
+  })
+
+  it('编译通过：tonemap stage（链尾 ToneMapping）', () => {
+    const src = buildTonemapStandalone()
+    expect(src.startsWith('#version 300 es')).toBe(true)
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(`glslangValidator 编译失败（tonemap）:\n${output}`)
+    }
+    expect(ok).toBe(true)
   })
 })
