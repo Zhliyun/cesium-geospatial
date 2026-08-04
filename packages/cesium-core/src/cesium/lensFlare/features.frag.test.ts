@@ -15,6 +15,14 @@ describe('buildFeaturesFragmentShader', () => {
     expect(s).toContain('clamp(length(0.5 - suv)')  // clamp 防负色
     expect(s.match(/for\s*\(\s*int\s+i/g)?.length ?? 0).toBeGreaterThanOrEqual(1)
   })
+  it('ghost 衰减常数对齐 three-geospatial SQRT_2=1/√2=0.70710678（防回归：圆斑缩半修复重叠成线）', () => {
+    const s = buildFeaturesFragmentShader()
+    // three-geospatial SQRT_2 命名误导：实为 1/√2=0.70710678，非 √2=1.41421356。
+    // 误用 √2 → 分母翻倍 → d 减半 → pow(1-d,3) 衰减变缓 → ghost 圆斑半径 ~2x → 密集 offset 重叠成线。
+    // 钉死除数表达式（regex 仅匹配代码中的除法，不误伤注释里的说明性字面量）。
+    expect(s).toMatch(/\/\s*\(0\.5\s*\*\s*0\.70710678\)/)
+    expect(s).not.toMatch(/0\.5\s*\*\s*1\.41421356/)
+  })
   it('ghost + halo 都采 u_preBlurTexture（C1 忠实移植，非采 threshold/bloom）', () => {
     const s = buildFeaturesFragmentShader()
     expect(s).toContain('uniform sampler2D u_preBlurTexture')

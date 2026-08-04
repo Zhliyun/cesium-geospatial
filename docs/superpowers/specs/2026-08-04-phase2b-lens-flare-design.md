@@ -257,7 +257,7 @@ vec3 mainFeatures(vec2 uv) {
   vec3 ghosts = vec3(0.0);
   for (int i = 0; i < 9; ++i) {
     vec2 suv = clamp(1.0 - uv + direction * u_ghostOffset[i], 0.0, 1.0);
-    float d = clamp(length(0.5 - suv) / (0.5 * 1.41421356), 0.0, 1.0);  // v2 M5：补 clamp
+    float d = clamp(length(0.5 - suv) / (0.5 * 0.70710678), 0.0, 1.0);  // v2 M5：补 clamp；对齐 three-geospatial SQRT_2=0.70710678=1/√2（命名误导，非 √2）
     ghosts += texture(u_preBlurTexture, suv).rgb * u_ghostTint[i] * pow(1.0 - d, 3.0);
   }
   ghosts *= u_ghostAmount;

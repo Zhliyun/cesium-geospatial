@@ -78,7 +78,9 @@ void main() {
   vec3 ghosts = vec3(0.0);
   for (int i = 0; i < 9; ++i) {
     vec2 suv = clamp(1.0 - uv + direction * GHOST_OFFSETS[i], 0.0, 1.0);
-    float d = clamp(length(0.5 - suv) / (0.5 * 1.41421356), 0.0, 1.0);
+    // three-geospatial SQRT_2 = 0.70710678（实为 1/√2，命名误导）；分母 0.5*0.70710678=0.35355339。
+    // 勿用 1.41421356（√2）——那会让分母翻倍、d 减半、pow(1-d,3) 衰减变缓 → ghost 圆斑半径 ~2x → 重叠成线。
+    float d = clamp(length(0.5 - suv) / (0.5 * 0.70710678), 0.0, 1.0);
     ghosts += texture(u_preBlurTexture, suv).rgb * GHOST_TINTS[i] * pow(1.0 - d, 3.0);
   }
   ghosts *= u_ghostAmount;
