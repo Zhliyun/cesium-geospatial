@@ -65,6 +65,7 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   lensFlareThreshold?: number // 阈值电平（默认 THRESHOLD_LEVEL_DEFAULT）
   lensFlareGhost?: number // ghost 总强度（默认 GHOST_AMOUNT_DEFAULT）
   lensFlareHalo?: number // halo 总强度（默认 HALO_AMOUNT_DEFAULT）
+  distanceScale?: number // 散射距离缩放（方案 A，1.0=phase1 物理，>1 中近距散射强，建议 1.0-3.0，超 3 需评估 half-float 灾消）
 }
 
 // 校验后的完整 options。
@@ -82,6 +83,7 @@ export interface ResolvedAtmosphereStageOptions extends Required<AerialPerspecti
   lensFlareThreshold: number
   lensFlareGhost: number
   lensFlareHalo: number
+  distanceScale: number
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
@@ -166,7 +168,8 @@ export function validateAtmosphereOptions(
     lensFlareIntensity: options.lensFlareIntensity ?? INTENSITY_DEFAULT,
     lensFlareThreshold: options.lensFlareThreshold ?? THRESHOLD_LEVEL_DEFAULT,
     lensFlareGhost: options.lensFlareGhost ?? GHOST_AMOUNT_DEFAULT,
-    lensFlareHalo: options.lensFlareHalo ?? HALO_AMOUNT_DEFAULT
+    lensFlareHalo: options.lensFlareHalo ?? HALO_AMOUNT_DEFAULT,
+    distanceScale: options.distanceScale ?? 1.0 // 默认 1.0 = phase1 行为零回归
   }
 }
 
@@ -229,6 +232,7 @@ export function buildAtmosphereUniforms(
     exposure: () => state.exposure, // 动态（preRender 更新）
     u_debugMode: options.debugMode,
     u_groundDim: options.groundDim,
+    u_distanceScale: options.distanceScale,
     cosSunAngularRadius: Math.cos(SUN_ANGULAR_RADIUS)
   }
 }
