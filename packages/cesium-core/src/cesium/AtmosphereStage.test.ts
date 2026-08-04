@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { Cartesian3, Ellipsoid } from 'cesium'
+import { Cartesian3, Ellipsoid, PixelDatatype } from 'cesium'
 import {
   buildAerialPerspectiveFragmentShader,
   AERIAL_PERSPECTIVE_UNIFORM_NAMES
@@ -8,6 +8,7 @@ import {
   validateAtmosphereOptions,
   buildAtmosphereUniforms,
   getEffectiveAtmosphereExposure,
+  resolvePostHdrDatatype,
   type AtmosphereFrameState
 } from './AtmosphereStage'
 import { SUN_ANGULAR_RADIUS } from '../math/atmosphereParameters'
@@ -149,5 +150,40 @@ describe('getEffectiveAtmosphereExposure（动态曝光，按相机当地太阳�
     // dot(up,sun)=cos(84°)=sin(6°)，elev=asin(sin6°)=6°
     expect(getEffectiveAtmosphereExposure(pos, ell, sun, 1.5, 0.1, 6)).toBeCloseTo(1.5, 4)
     void up
+  })
+})
+
+describe('resolvePostHdrDatatype（PostProcessStage HDR 像素数据类型检测）', () => {
+  function makeCtx(half: boolean, halfCb: boolean, full: boolean, fullCb: boolean): unknown {
+    return {
+      halfFloatingPointTexture: half,
+      colorBufferHalfFloat: halfCb,
+      floatingPointTexture: full,
+      colorBufferFloat: fullCb
+    }
+  }
+  function makeScene(ctx: unknown): import('cesium').Scene {
+    return { context: ctx } as unknown as import('cesium').Scene
+  }
+
+  it('HalfFloat 采样+渲染都支持 → HALF_FLOAT', () => {
+    const ctx = makeCtx(true, true, false, false)
+    expect(resolvePostHdrDatatype(makeScene(ctx))).toBe(PixelDatatype.HALF_FLOAT)
+  })
+
+  it('仅 float 支持 → FLOAT', () => {
+    const ctx = makeCtx(false, false, true, true)
+    expect(resolvePostHdrDatatype(makeScene(ctx))).toBe(PixelDatatype.FLOAT)
+  })
+
+  it('都不支持 → UNSIGNED_BYTE 兜底', () => {
+    const ctx = makeCtx(false, false, false, false)
+    expect(resolvePostHdrDatatype(makeScene(ctx))).toBe(PixelDatatype.UNSIGNED_BYTE)
+  })
+
+  it('HalfFloat 采样支持但 render target 不支持 → 回退 FLOAT（halfCb 缺失拒 HALF_FLOAT）', () => {
+    // 半精度纹理可采样但不可作 color buffer attach → 不能作 RT，跳过 HALF_FLOAT。
+    const ctx = makeCtx(true, false, true, true)
+    expect(resolvePostHdrDatatype(makeScene(ctx))).toBe(PixelDatatype.FLOAT)
   })
 })

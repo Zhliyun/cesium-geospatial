@@ -81,6 +81,10 @@ export function buildStandaloneShaderForValidation(): string {
   return [
     '#version 300 es',
     'precision highp float;',
+    // GLSL ES 3.00 sampler 不继承 float precision，移动 GPU 严格需独立声明（对齐 phase1
+    // aerialPerspective.frag 的 validation 桩）。tonomap 无 sampler3D，不声明那条。
+    'precision highp int;',
+    'precision highp sampler2D;',
     VALIDATION_STUBS_GLSL,
     buildTonemapFragmentShader()
   ].join('\n')

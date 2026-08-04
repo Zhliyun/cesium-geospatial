@@ -19,6 +19,8 @@ import {
   Transforms,
   JulianDate,
   Math as CesiumMath,
+  PixelDatatype,
+  PixelFormat,
   type Scene,
   type Camera,
   type Ellipsoid
@@ -27,6 +29,7 @@ import {
   buildAerialPerspectiveFragmentShader,
   type AerialPerspectiveFragOptions
 } from './aerialPerspective.frag'
+import { buildTonemapFragmentShader } from './tonemap.frag'
 import { getAltitudeCorrectionOffset } from '../math/altitudeCorrection'
 import {
   ATMOSPHERE_BOTTOM_RADIUS_M,
@@ -138,6 +141,43 @@ export function validateAtmosphereOptions(
 }
 
 /**
+ * PostProcessStage RT 所需的 WebGL 浮点能力子集（Cesium Context 运行时持有，但 Scene.context 及这些
+ * capability 字段不在公开类型里——这里声明用到的最小集合做受控访问）。
+ */
+interface PostProcessGpuContextCaps {
+  halfFloatingPointTexture: boolean
+  colorBufferHalfFloat: boolean
+  floatingPointTexture: boolean
+  colorBufferFloat: boolean
+}
+
+/**
+ * 检测 PostProcessStage 可用的最高 HDR 像素数据类型（对齐 cesium-clouds-atmosphere AtmospherePostProcess）。
+ *
+ * atmosphere stage 需 HDR 中间 RT 承载 finalColor·exposure 的线性 >1 段（供链尾 tonemap 做 ACES 压缩）。
+ * HALF_FLOAT 优先（精度够 + 性能好 + 32-bit color buffer 罕见）；FLOAT 次选；UNSIGNED_BYTE 兜底（>1 被 clip，
+ * tonemap debug=7 false-color 会显示暗区，可证伪 HDR 链是否生效）。
+ *
+ * WebGL2 下 halfFloatingPointTexture 恒 true（管 RGBA16F 采样），colorBufferHalfFloat 实测
+ * EXT_color_buffer_float（覆盖 RGBA16F renderable）。两者配合覆盖采样 + 渲染两端：缺任一则不能作 RT。
+ *
+ * 纯函数：node 单测 mock context 即可断言三分支。
+ */
+export function resolvePostHdrDatatype(scene: Scene): PixelDatatype {
+  // Scene.context 运行时存在但不在公开类型——同 demo/main.ts 的访问方式，受控 cast。
+  const ctx = (scene as unknown as { context: PostProcessGpuContextCaps }).context
+  // HALF_FLOAT：采样（halfFloatingPointTexture）+ 渲染目标（colorBufferHalfFloat）须同时支持。
+  if (ctx.halfFloatingPointTexture && ctx.colorBufferHalfFloat) {
+    return PixelDatatype.HALF_FLOAT
+  }
+  // FLOAT：32-bit color buffer + 32-bit 采样（更罕见，但某些桌面 GPU 支持全精度浮点链）。
+  if (ctx.colorBufferFloat && ctx.floatingPointTexture) {
+    return PixelDatatype.FLOAT
+  }
+  return PixelDatatype.UNSIGNED_BYTE
+}
+
+/**
  * 构建 PostProcessStage 的 uniforms（覆盖 AERIAL_PERSPECTIVE_UNIFORM_NAMES 全部）。
  * 每帧量（sunDirection/altitudeCorrection/exposure）走闭包；静态量传值。
  * 纯函数：不实例化 PostProcessStage，node 单测可直接断言。
@@ -164,7 +204,9 @@ export function buildAtmosphereUniforms(
 }
 
 export interface AtmosphereStageHandle {
-  readonly stage: PostProcessStage
+  readonly atmosphereStage: PostProcessStage
+  readonly tonemapStage: PostProcessStage
+  readonly postHdrDatatype: PixelDatatype
   setMode(newOptions: AtmosphereStageOptions): void
   destroy(): void
 }
@@ -198,15 +240,34 @@ export function createAtmosphereStage(
   const sunInertialScratch = new Cartesian3()
   const icrfScratch = new Matrix3()
 
-  function buildStage(): PostProcessStage {
+  // phase2a HDR 管线：一次性检测 atmosphere stage 中间 RT 可用的最高 HDR 像素类型。
+  // HALF_FLOAT 优先（精度够 + 性能好），FLOAT 次选，UNSIGNED_BYTE 兜底。
+  const postHdrDatatype = resolvePostHdrDatatype(scene)
+
+  // atmosphere stage：aerialPerspective fragment（Task 2 末端线性输出 finalColor·exposure）。
+  // pixelDatatype=HalfFloat 带兜底让中间 RT 承载线性 >1 段，供链尾 tonemap ACES 压缩。
+  function buildAtmosphereStage(): PostProcessStage {
     return new PostProcessStage({
       fragmentShader: buildAerialPerspectiveFragmentShader(resolved),
-      uniforms: buildAtmosphereUniforms(luts, resolved, state)
+      uniforms: buildAtmosphereUniforms(luts, resolved, state),
+      pixelFormat: PixelFormat.RGBA,
+      pixelDatatype: postHdrDatatype
+    })
+  }
+  // tonemap stage：链尾 ACES + gamma 1/2.2 + display triangular dithering → RGBA8 display。
+  // sampleMode 默认 NEAREST（Cesium 默认，勿改）——保护 atmosphere 的 input dithering 经 HDR RT 中转
+  // 逐像素直通；改 LINEAR 会插值抹掉 dither 噪声 → 水波纹回归。默认 RGBA8 兜底（display ready）。
+  function buildTonemapStage(): PostProcessStage {
+    return new PostProcessStage({
+      fragmentShader: buildTonemapFragmentShader(),
+      uniforms: { u_debugMode: resolved.debugMode } // 与 atmosphere 同源；setMode rebuild 同步
     })
   }
 
-  let stage = buildStage()
-  scene.postProcessStages.add(stage)
+  let atmosphereStage = buildAtmosphereStage()
+  let tonemapStage = buildTonemapStage()
+  scene.postProcessStages.add(atmosphereStage)
+  scene.postProcessStages.add(tonemapStage) // 链尾，读 atmosphere 线性输出
 
   // 每帧更新：altitudeCorrection + sunDirection（Simon1994）+ 动态曝光
   const removePreRender = scene.preRender.addEventListener((_scene: Scene, time: JulianDate) => {
@@ -255,19 +316,31 @@ export function createAtmosphereStage(
   }
 
   return {
-    get stage() {
-      return stage
+    get atmosphereStage() {
+      return atmosphereStage
+    },
+    get tonemapStage() {
+      return tonemapStage
+    },
+    get postHdrDatatype() {
+      return postHdrDatatype
     },
     setMode(newOptions: AtmosphereStageOptions) {
-      const next = validateAtmosphereOptions(newOptions)
-      removeAndDestroy(stage)
-      resolved = next
-      stage = buildStage()
-      scene.postProcessStages.add(stage)
+      // setMode/destroy 全仓库 0 调用属 dead code（demo 切 mode 靠页面重载）。
+      // 简化为 rebuild 两 stage（不 removePreRender——preRender 闭包持 state/resolved 引用，
+      // resolved 更新后自动生效）。两 stage uniform 同源 u_debugMode 同步重建。
+      removeAndDestroy(atmosphereStage)
+      removeAndDestroy(tonemapStage)
+      resolved = validateAtmosphereOptions(newOptions)
+      atmosphereStage = buildAtmosphereStage()
+      tonemapStage = buildTonemapStage()
+      scene.postProcessStages.add(atmosphereStage)
+      scene.postProcessStages.add(tonemapStage)
     },
     destroy() {
       removePreRender()
-      removeAndDestroy(stage)
+      removeAndDestroy(atmosphereStage)
+      removeAndDestroy(tonemapStage)
     }
   }
 }
