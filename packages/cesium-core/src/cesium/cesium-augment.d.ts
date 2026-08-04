@@ -75,4 +75,11 @@ declare module 'cesium' {
     owner?: unknown
     execute(context: Context, options?: { framebuffer?: unknown }): void
   }
+
+  // PostProcessStage.outputTexture getter（私有，PostProcessStage.js:346-356，可返 undefined）。
+  // depthTemporal history blit 用（Task 7/8 读 depthTemporal stage 输出纹理）。
+  // declaration merging：augment 公开 PostProcessStage 类，补 outputTexture 成员类型。
+  export interface PostProcessStage {
+    readonly outputTexture: Texture | undefined
+  }
 }
