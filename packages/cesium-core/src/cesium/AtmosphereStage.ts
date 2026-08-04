@@ -13,6 +13,7 @@
 
 import {
   PostProcessStage,
+  PostProcessStageComposite,
   PostProcessStageSampleMode,
   Cartesian3,
   Matrix3,
@@ -31,6 +32,13 @@ import {
   type AerialPerspectiveFragOptions
 } from './aerialPerspective.frag'
 import { buildTonemapFragmentShader } from './tonemap.frag'
+import { createLensFlareStage } from './lensFlare/createLensFlareStage'
+import {
+  INTENSITY_DEFAULT,
+  THRESHOLD_LEVEL_DEFAULT,
+  GHOST_AMOUNT_DEFAULT,
+  HALO_AMOUNT_DEFAULT
+} from './lensFlare/lensFlareConstants'
 import { getAltitudeCorrectionOffset } from '../math/altitudeCorrection'
 import {
   ATMOSPHERE_BOTTOM_RADIUS_M,
@@ -49,6 +57,14 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   groundDim?: number // 地面反射衰减（finalColor=originalColor·trans·groundDim+inscatter，分离 exposure 压地面过曝，默认 0.5）
   debugMode?: number // u_debugMode
   disableHalfFloat?: boolean // URL ?hdr=0 强制 UNSIGNED_BYTE 兜底调试（跳过 HalfFloat 能力检测）
+  // phase2b LensFlare（spec §5.9）：lensflare 作为第三 stage 插在 atmosphere 与 tonomap 之间。
+  // lensFlare=false → 不创建 lensflare composite（phase2a 两 stage 行为，防回归）。
+  // ?lensflare=0 运行时切换走 lensFlareStage.enabled=false（M1：非 setMode rebuild 15 子 stage）。
+  lensFlare?: boolean // 默认 true
+  lensFlareIntensity?: number // 总强度（默认 INTENSITY_DEFAULT）
+  lensFlareThreshold?: number // 阈值电平（默认 THRESHOLD_LEVEL_DEFAULT）
+  lensFlareGhost?: number // ghost 总强度（默认 GHOST_AMOUNT_DEFAULT）
+  lensFlareHalo?: number // halo 总强度（默认 HALO_AMOUNT_DEFAULT）
 }
 
 // 校验后的完整 options。
@@ -60,6 +76,12 @@ export interface ResolvedAtmosphereStageOptions extends Required<AerialPerspecti
   exposure: number
   groundDim: number
   debugMode: number
+  // phase2b LensFlare resolved 字段（spec §5.9）
+  lensFlare: boolean
+  lensFlareIntensity: number
+  lensFlareThreshold: number
+  lensFlareGhost: number
+  lensFlareHalo: number
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
@@ -138,7 +160,13 @@ export function validateAtmosphereOptions(
     exposureTwilightAngleDegrees: options.exposureTwilightAngleDegrees ?? 6,
     exposure: options.exposure ?? 1.5,
     groundDim: options.groundDim ?? 0.5,
-    debugMode: options.debugMode ?? 0
+    debugMode: options.debugMode ?? 0,
+    // phase2b LensFlare 默认（spec §5.9）：透传 lensFlareConstants 标定值。
+    lensFlare: options.lensFlare ?? true,
+    lensFlareIntensity: options.lensFlareIntensity ?? INTENSITY_DEFAULT,
+    lensFlareThreshold: options.lensFlareThreshold ?? THRESHOLD_LEVEL_DEFAULT,
+    lensFlareGhost: options.lensFlareGhost ?? GHOST_AMOUNT_DEFAULT,
+    lensFlareHalo: options.lensFlareHalo ?? HALO_AMOUNT_DEFAULT
   }
 }
 
@@ -207,6 +235,8 @@ export function buildAtmosphereUniforms(
 
 export interface AtmosphereStageHandle {
   readonly atmosphereStage: PostProcessStage
+  /** phase2b LensFlare 外层 non-series composite（lensFlare=false 时 undefined）。 */
+  readonly lensFlareStage?: PostProcessStageComposite
   readonly tonemapStage: PostProcessStage
   readonly postHdrDatatype: PixelDatatype
   setMode(newOptions: AtmosphereStageOptions): void
@@ -271,10 +301,26 @@ export function createAtmosphereStage(
     })
   }
 
+  // phase2b LensFlare（spec §5.9）：外层 non-series composite，插在 atmosphere 与 tonomap 之间。
+  // lensFlare=false → 不创建（phase2a 两 stage 行为，防回归）。
+  // ?lensflare=0 运行时切换走 lensFlareStage.enabled=false（M1：非 setMode rebuild 15 子 stage），
+  // 由上层（demo main.ts）持 handle 直接设；stage 仍 add 在集合中，透传 atmosphere 输出。
+  let lensFlareStage: PostProcessStageComposite | undefined
+  if (resolved.lensFlare) {
+    const lfHandle = createLensFlareStage(scene, state, {
+      intensity: resolved.lensFlareIntensity,
+      thresholdLevel: resolved.lensFlareThreshold,
+      ghostAmount: resolved.lensFlareGhost,
+      haloAmount: resolved.lensFlareHalo
+    })
+    lensFlareStage = lfHandle.lensflareComposite
+  }
+
   let atmosphereStage = buildAtmosphereStage()
   let tonemapStage = buildTonemapStage()
   scene.postProcessStages.add(atmosphereStage)
-  scene.postProcessStages.add(tonemapStage) // 链尾，读 atmosphere 线性输出
+  if (lensFlareStage) scene.postProcessStages.add(lensFlareStage) // atmosphere → lensflare → tonomap
+  scene.postProcessStages.add(tonemapStage) // 链尾，读 lensflare（或 atmosphere）线性输出
 
   // 每帧更新：altitudeCorrection + sunDirection（Simon1994）+ 动态曝光
   const removePreRender = scene.preRender.addEventListener((_scene: Scene, time: JulianDate) => {
@@ -315,8 +361,12 @@ export function createAtmosphereStage(
       : resolved.exposure
   })
 
-  /** 从集合移除并销毁；remove 成功时集合内部已 destroy，失败（不在集合中）则自行销毁 */
-  function removeAndDestroy(s: PostProcessStage): void {
+  /**
+   * 从集合移除并销毁；remove 成功时集合内部已 destroy，失败（不在集合中）则自行销毁。
+   * 接受 PostProcessStage 或 PostProcessStageComposite（Cesium remove/add 重载都收两者；
+   * lensflare 外层是 Composite，destroy 链尾时走本路径）。
+   */
+  function removeAndDestroy(s: PostProcessStage | PostProcessStageComposite): void {
     if (!scene.postProcessStages.remove(s)) {
       s.destroy()
     }
@@ -326,6 +376,9 @@ export function createAtmosphereStage(
     get atmosphereStage() {
       return atmosphereStage
     },
+    get lensFlareStage() {
+      return lensFlareStage
+    },
     get tonemapStage() {
       return tonemapStage
     },
@@ -334,19 +387,36 @@ export function createAtmosphereStage(
     },
     setMode(newOptions: AtmosphereStageOptions) {
       // setMode/destroy 全仓库 0 调用属 dead code（demo 切 mode 靠页面重载）。
-      // 简化为 rebuild 两 stage（不 removePreRender——preRender 闭包持 state/resolved 引用，
-      // resolved 更新后自动生效）。两 stage uniform 同源 u_debugMode 同步重建。
+      // 既有逻辑：rebuild atmosphere+tonomap（不 removePreRender——preRender 闭包持 state/resolved
+      // 引用，resolved 更新后自动生效）。两 stage uniform 同源 u_debugMode 同步重建。
       removeAndDestroy(atmosphereStage)
       removeAndDestroy(tonemapStage)
       resolved = validateAtmosphereOptions(newOptions)
       atmosphereStage = buildAtmosphereStage()
       tonemapStage = buildTonemapStage()
       scene.postProcessStages.add(atmosphereStage)
+      // lensflare：用 enabled 开关（M1，非 rebuild 15 子 stage）。
+      // - 之前未建（lensFlare=false）且新 options.lensFlare=true → 按需 create + add；
+      // - 既有 lensflare composite 不 remove/re-add（Cesium remove 会 destroy，违背"enabled 非 rebuild"
+      //   原则），仅按 newResolved.lensFlare 切 enabled。dead code 简化：集合内位置不调整。
+      if (!lensFlareStage && resolved.lensFlare) {
+        const lfHandle = createLensFlareStage(scene, state, {
+          intensity: resolved.lensFlareIntensity,
+          thresholdLevel: resolved.lensFlareThreshold,
+          ghostAmount: resolved.lensFlareGhost,
+          haloAmount: resolved.lensFlareHalo
+        })
+        lensFlareStage = lfHandle.lensflareComposite
+        scene.postProcessStages.add(lensFlareStage)
+      } else if (lensFlareStage) {
+        lensFlareStage.enabled = resolved.lensFlare
+      }
       scene.postProcessStages.add(tonemapStage)
     },
     destroy() {
       removePreRender()
       removeAndDestroy(atmosphereStage)
+      if (lensFlareStage) removeAndDestroy(lensFlareStage)
       removeAndDestroy(tonemapStage)
     }
   }

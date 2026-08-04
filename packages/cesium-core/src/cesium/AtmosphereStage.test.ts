@@ -1,10 +1,16 @@
-import { describe, it, expect } from 'vitest'
-import { Cartesian3, Ellipsoid, PixelDatatype } from 'cesium'
+import { describe, it, expect, vi } from 'vitest'
+import {
+  Cartesian3,
+  Ellipsoid,
+  PixelDatatype,
+  PostProcessStageComposite
+} from 'cesium'
 import {
   buildAerialPerspectiveFragmentShader,
   AERIAL_PERSPECTIVE_UNIFORM_NAMES
 } from './aerialPerspective.frag'
 import {
+  createAtmosphereStage,
   validateAtmosphereOptions,
   buildAtmosphereUniforms,
   getEffectiveAtmosphereExposure,
@@ -13,6 +19,12 @@ import {
 } from './AtmosphereStage'
 import { SUN_ANGULAR_RADIUS } from '../math/atmosphereParameters'
 import type { AtmosphereLUTs } from './lutLoader'
+import {
+  INTENSITY_DEFAULT,
+  THRESHOLD_LEVEL_DEFAULT,
+  GHOST_AMOUNT_DEFAULT,
+  HALO_AMOUNT_DEFAULT
+} from './lensFlare/lensFlareConstants'
 
 // —— 测试桩：node 环境无 WebGL，PostProcessStage 不实例化，只测纯函数 ——
 
@@ -99,7 +111,7 @@ describe('buildAtmosphereUniforms', () => {
 })
 
 describe('validateAtmosphereOptions', () => {
-  it('默认值（B 路径全量 + 动态曝光）', () => {
+  it('默认值（B 路径全量 + 动态曝光 + lensflare 默认）', () => {
     expect(validateAtmosphereOptions({})).toEqual({
       sun: true,
       sky: true,
@@ -109,8 +121,37 @@ describe('validateAtmosphereOptions', () => {
       exposureTwilightAngleDegrees: 6,
       exposure: 1.5,
       groundDim: 0.5,
-      debugMode: 0
+      debugMode: 0,
+      lensFlare: true,
+      lensFlareIntensity: INTENSITY_DEFAULT,
+      lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
+      lensFlareGhost: GHOST_AMOUNT_DEFAULT,
+      lensFlareHalo: HALO_AMOUNT_DEFAULT
     })
+  })
+
+  it('lensflare 默认透传 lensFlareConstants（intensity/threshold/ghost/halo）', () => {
+    const r = validateAtmosphereOptions({})
+    expect(r.lensFlare).toBe(true)
+    expect(r.lensFlareIntensity).toBe(INTENSITY_DEFAULT) // 0.01
+    expect(r.lensFlareThreshold).toBe(THRESHOLD_LEVEL_DEFAULT) // 3.0
+    expect(r.lensFlareGhost).toBe(GHOST_AMOUNT_DEFAULT) // 0.05
+    expect(r.lensFlareHalo).toBe(HALO_AMOUNT_DEFAULT) // 0.05
+  })
+
+  it('lensflare options 可覆盖默认', () => {
+    const r = validateAtmosphereOptions({
+      lensFlare: false,
+      lensFlareIntensity: 0.02,
+      lensFlareThreshold: 4.0,
+      lensFlareGhost: 0.1,
+      lensFlareHalo: 0.08
+    })
+    expect(r.lensFlare).toBe(false)
+    expect(r.lensFlareIntensity).toBe(0.02)
+    expect(r.lensFlareThreshold).toBe(4.0)
+    expect(r.lensFlareGhost).toBe(0.1)
+    expect(r.lensFlareHalo).toBe(0.08)
   })
 
   it('部分覆盖，其余默认', () => {
@@ -185,5 +226,70 @@ describe('resolvePostHdrDatatype（PostProcessStage HDR 像素数据类型检测
     // 半精度纹理可采样但不可作 color buffer attach → 不能作 RT，跳过 HALF_FLOAT。
     const ctx = makeCtx(true, false, true, true)
     expect(resolvePostHdrDatatype(makeScene(ctx))).toBe(PixelDatatype.FLOAT)
+  })
+})
+
+// —— createAtmosphereStage 集成（phase2b 三 stage：atmosphere → lensflare → tonomap）——
+// node 无 WebGL：PostProcessStage/Composite 构造仅赋值字段（不建 GL 资源），可直接 new。
+// mockScene 提供 resolvePostHdrDatatype 的 context caps + globe.ellipsoid（createLensFlareStage 读
+// radiiSquared）+ preRender.addEventListener（返 no-op remover）+ postProcessStages.add spy（记顺序）。
+// preRender 闭包内的 camera 访问不在构造期触发，故 camera mock 仅占位。
+function mockSceneWithAddSpy(): { scene: import('cesium').Scene; addSpy: ReturnType<typeof vi.fn> } {
+  const addSpy = vi.fn()
+  const scene = {
+    context: {
+      halfFloatingPointTexture: true,
+      colorBufferHalfFloat: true,
+      floatingPointTexture: true,
+      colorBufferFloat: false
+    },
+    globe: { depthTestAgainstTerrain: false, ellipsoid: Ellipsoid.WGS84 },
+    camera: { positionWC: new Cartesian3(6378137, 0, 0) },
+    preRender: { addEventListener: () => () => {} },
+    postProcessStages: { add: addSpy, remove: () => false }
+  } as unknown as import('cesium').Scene
+  return { scene, addSpy }
+}
+
+describe('createAtmosphereStage（phase2b 三 stage 集成）', () => {
+  it('产三 stage（atmosphere + lensflare + tonomap），add 顺序正确', () => {
+    const { scene, addSpy } = mockSceneWithAddSpy()
+    const handle = createAtmosphereStage(scene, stubLuts, {})
+    expect(handle.atmosphereStage).toBeDefined()
+    expect(handle.lensFlareStage).toBeDefined() // phase2b 新增
+    expect(handle.tonemapStage).toBeDefined()
+    // add 顺序：atmosphere → lensflare → tonomap（spec §5.9）
+    const added = addSpy.mock.calls.map((c: unknown[]) => c[0])
+    const atmoIdx = added.findIndex(s => s === handle.atmosphereStage)
+    const lensIdx = added.findIndex(s => s === handle.lensFlareStage)
+    const tonoIdx = added.findIndex(s => s === handle.tonemapStage)
+    expect(atmoIdx).toBeGreaterThanOrEqual(0)
+    expect(lensIdx).toBeGreaterThan(atmoIdx) // atmosphere → lensflare
+    expect(tonoIdx).toBeGreaterThan(lensIdx) // lensflare → tonomap
+  })
+
+  it('lensFlare=false 不创建 lensflare（phase2a 两 stage 行为，防回归）', () => {
+    const { scene } = mockSceneWithAddSpy()
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    expect(handle.lensFlareStage).toBeUndefined()
+    expect(handle.atmosphereStage).toBeDefined()
+    expect(handle.tonemapStage).toBeDefined()
+  })
+
+  it('handle.lensFlareStage 是外层 lensflare Composite（inputPreviousStageTexture=false）', () => {
+    const { scene } = mockSceneWithAddSpy()
+    const handle = createAtmosphereStage(scene, stubLuts, {})
+    expect(handle.lensFlareStage).toBeDefined()
+    const lf = handle.lensFlareStage as PostProcessStageComposite
+    // 外层 non-series composite（spec §3）：各兄弟 stage 的 input = composite 输入（atmosphere），
+    // 非 series 前驱；跨 stage 依赖靠 uniform-name string 引用（I10）。
+    expect(lf.inputPreviousStageTexture).toBe(false)
+    expect(lf.name).toBe('lensflare')
+  })
+
+  it('lensFlare=true 时 depthTestAgainstTerrain 被强制 true（B 路径硬前提不因 lensflare 改变）', () => {
+    const { scene } = mockSceneWithAddSpy()
+    createAtmosphereStage(scene, stubLuts, {})
+    expect((scene as unknown as { globe: { depthTestAgainstTerrain: boolean } }).globe.depthTestAgainstTerrain).toBe(true)
   })
 })
