@@ -12,7 +12,7 @@
 //   cesium-clouds-atmosphere 用同样 half-float LUT 但工作正常，证明问题在集成方式而非 LUT。
 //
 // 架构（phase2a HDR 管线）：本 stage 合并天空+地面，末端输出线性 finalColor·exposure（HalfFloat RT）；
-// ACES+gamma+dithering 已拆到链尾独立 tonomap stage（tonemap.frag.ts）收尾。源库双 stage（天空 HDR →
+// ACES+gamma+dithering 已拆到链尾独立 tonemap stage（tonemap.frag.ts）收尾。源库双 stage（天空 HDR →
 // 地面 ACES）是为云预留中间 HDR；我无云，单 atmosphere stage 末端线性 + 链尾 tonemap 逻辑等价，
 // 且支持 tonemap debug=7 HDR 归一化验证。
 //
@@ -71,7 +71,7 @@ uniform sampler2D irradiance_texture;
 `
 
 // 每帧 uniform（命名对齐源仓库）。altitudeCorrection 单位米（shader 内 *METER_TO_LENGTH_UNIT 转 km）。
-// u_debugMode：0=正常 1=log(1+finalColor) 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor。
+// u_debugMode：0=正常 1=log(1+finalColor) 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor 7=线性输出（HDR 链验证，由 tonemap 归一化）。
 // u_groundDim：地面反射衰减（分离 exposure——exposure 管 inscatter/天空，groundDim 单独压地面过曝）。
 const FRAME_UNIFORMS_GLSL = `
 uniform vec3 sunDirection;
@@ -89,8 +89,8 @@ uniform float cosSunAngularRadius;
 // 辅助函数（移植源库 aerialPerspectiveEffect.frag + AtmospherePostProcess）。
 const HELPERS_GLSL = `
 // interleaved gradient noise（屏幕空间低频噪声，input dithering 用，无纹理依赖）。
-// ACESFilmic + tonemapDisplay 已迁到链尾 tonomap.frag.ts（atmosphere 末端输出线性 HalfFloat，
-// 由独立 tonomap stage 做 ACES+gamma+dithering 收尾；此处仅留 input dithering 用的噪声函数）。
+// ACESFilmic + tonemapDisplay 已迁到链尾 tonemap.frag.ts（atmosphere 末端输出线性 HalfFloat，
+// 由独立 tonemap stage 做 ACES+gamma+dithering 收尾；此处仅留 input dithering 用的噪声函数）。
 float interleavedGradientNoise(vec2 p) {
   return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
 }
@@ -162,7 +162,7 @@ ${sun ? SUN_DISK_GLSL : ''}
 `
 }
 
-// 主流程（合并天空+地面单 stage；移植源库天空判定 + B 路径合成 + ACES）。
+// 主流程（合并天空+地面单 stage；移植源库天空判定 + B 路径合成 + 末端线性输出）。
 function buildMainFn(o: ResolvedOptions): string {
   const skyBranch = o.sky
     ? `
@@ -170,7 +170,7 @@ function buildMainFn(o: ResolvedOptions): string {
 `
     : `
     finalColor = originalColor.rgb;
-    out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性，链尾 tonomap 收尾
+    out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性，链尾 tonemap 收尾
     return;
 `
 
@@ -290,31 +290,38 @@ ${skyBranch}  }
   }
   finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
 
-  // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——
-  if (u_debugMode > 5.5 && u_debugMode < 6.5) {
-    out_FragColor = originalColor;
-    return;
-  }
-  if (u_debugMode > 4.5) {
-    out_FragColor = vec4(depth, 0.0, length(cameraPosition) / 6420.0, 1.0);
-    return;
-  }
-  if (u_debugMode > 2.5) {
-    float r = length(cameraPosition) / 6420.0;
-    out_FragColor = vec4(vec3(r), 1.0);
-    return;
-  }
-  if (u_debugMode > 1.5) {
-    out_FragColor = vec4(sunDirection * 0.5 + 0.5, 1.0);
-    return;
-  }
-  if (u_debugMode > 0.5) {
-    vec3 v = log(vec3(1.0) + max(finalColor, vec3(0.0))) / log(100.0);
-    out_FragColor = vec4(clamp(v, 0.0, 1.0), 1.0);
-    return;
+  // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
+  //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——
+  // 整个级联被 if (u_debugMode < 6.5) 包裹：debug=7（>6.5）跳过所有可视化分支，直接落到末端线性输出
+  //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
+  // 归一化验证 HDR 承载 >1（spec §5.2/§6.3）。曾因降序级联无统一上限，debug=7 被 >4.5 分支截断输出
+  // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。
+  if (u_debugMode < 6.5) {
+    if (u_debugMode > 5.5) {
+      out_FragColor = originalColor;
+      return;
+    }
+    if (u_debugMode > 4.5) {
+      out_FragColor = vec4(depth, 0.0, length(cameraPosition) / 6420.0, 1.0);
+      return;
+    }
+    if (u_debugMode > 2.5) {
+      float r = length(cameraPosition) / 6420.0;
+      out_FragColor = vec4(vec3(r), 1.0);
+      return;
+    }
+    if (u_debugMode > 1.5) {
+      out_FragColor = vec4(sunDirection * 0.5 + 0.5, 1.0);
+      return;
+    }
+    if (u_debugMode > 0.5) {
+      vec3 v = log(vec3(1.0) + max(finalColor, vec3(0.0))) / log(100.0);
+      out_FragColor = vec4(clamp(v, 0.0, 1.0), 1.0);
+      return;
+    }
   }
 
-  out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性 HDR，由链尾 tonomap stage 收尾
+  out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性 HDR，由链尾 tonemap stage 收尾
 }
 `
 }

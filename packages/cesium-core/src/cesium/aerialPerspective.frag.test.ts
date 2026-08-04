@@ -20,7 +20,7 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter')
   })
 
-  it('末端输出线性 finalColor·exposure（不再内联 ACES，由链尾 tonomap stage 收尾）', () => {
+  it('末端输出线性 finalColor·exposure（不再内联 ACES，由链尾 tonemap stage 收尾）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
     expect(s).toContain('out_FragColor = vec4(finalColor * exposure, originalColor.a)')
     expect(s).not.toContain('tonemapDisplay(')
@@ -40,9 +40,14 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).toContain('interleavedGradientNoise')
   })
 
-  it('debug=6 分支上限 < 6.5（让 debug=7 走正常线性输出，由 tonomap 归一化验证 HDR）', () => {
+  it('debug 级联被 < 6.5 整体包裹：debug=7（>6.5）跳过所有可视化分支，走末端线性输出供 tonemap 归一化验证 HDR', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('u_debugMode > 5.5 && u_debugMode < 6.5')
+    // 方案 B：整个级联被 if (u_debugMode < 6.5) 包裹，debug=7 直接落到末端线性输出
+    expect(s).toContain('if (u_debugMode < 6.5)')
+    // debug=6 分支不再单独带 < 6.5 上限（已被外层包裹，单分支上限是旧方案 A 残留）
+    expect(s).not.toContain('u_debugMode > 5.5 && u_debugMode < 6.5')
+    // 末端线性输出存在（debug=7 落点：finalColor*exposure，>1 原样写 HalfFloat）
+    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, originalColor.a)')
   })
 
   it('不含 A 路径残留（法线/lighting/几何误差校正/反伽马）', () => {
