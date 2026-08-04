@@ -52,8 +52,7 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'u_groundDim',
   'cosSunAngularRadius',
   'u_distanceScale',
-  'u_inscatterScale',
-  'u_ditherScale'
+  'u_inscatterScale'
 ]
 
 // Cesium PostProcessStage 内建纹理 uniform——必须由 shader 显式声明（Cesium 仅提供 uniform 值，
@@ -83,8 +82,7 @@ uniform float exposure;
 uniform float u_debugMode;
 uniform float u_groundDim;
 uniform float u_distanceScale;  // 散射距离缩放（方案 A，等效空气密度倍率；1.0=phase1 物理，>1 中近距散射强）
-uniform float u_inscatterScale;  // 末端 fogEnhance 衰减系数 + sky 放大：近处雾×1（山体清晰），远处雾×scale（白雾浓）；sky inscatter 也 ×scale（天空亮度）。base/fore 量级一致不再各自放大（修弧线/圆形波纹）
-uniform float u_ditherScale;  // input dithering 强度倍率（1.0=phase1 默认 ±1.5/255；>1 更强打散 ACES 放大暴露的 banding，但噪声增）
+uniform float u_inscatterScale;  // inscatter 放大（方案 B 远处白雾浓；1.0=phase1 物理，>1 远处雾浓，可超物理饱和）
 `
 
 // [SKY && SUN] cos(SUN_ANGULAR_RADIUS)，SUN 日盘角半径阈值。
@@ -306,7 +304,7 @@ ${sun ? SUN_DISK_GLSL : ''}
 function buildMainFn(o: ResolvedOptions): string {
   const skyBranch = o.sky
     ? `
-    inscatter = getSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, fragmentAngle, transmittance) * u_inscatterScale;
+    inscatter = getSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, fragmentAngle, transmittance);
 `
     : `
     finalColor = originalColor.rgb;
@@ -325,7 +323,7 @@ void main() {
   // input 阶梯）。
   float inDither = interleavedGradientNoise(gl_FragCoord.xy)
     + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
-  originalColor.rgb += inDither * 1.5 / 255.0 * u_ditherScale;
+  originalColor.rgb += inDither * 1.5 / 255.0;
   float depth = czm_readDepth(depthTexture, v_textureCoordinates);
 
   // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
@@ -338,22 +336,14 @@ void main() {
   float topR = ATMOSPHERE.top_radius;
   float camR = length(cameraPosition);
 
-  // —— depth 反演：5-tap 邻域平均抗 depthTexture 不抗锯齿的高频抖动 ——
-  // sceneDist 驱动 mask/fore/fogEnhance，抖动会放大成弧线/圆形波纹（视角变时逐像素闪）。
-  // 中心+4邻域 depth 平均后反演，消除 depth 高频（对数深度空间平均≈几何平均距离，抗锯齿近似可接受）。
-  // hasScene/sceneDist 只在 foreInscatter（近处 mask>0）和末端 fogEnhance 被消费；远处/掠射 sceneDist 大
-  // → mask=0 不读它 → 无条纹。sky/ground 主分类仍用 lookingAtGround（平滑），depth 不参与分类。
+  // —— depth 反演：为近处地形（含地平线上方山峰）提供真实 sceneDist，算前景雾、保持山体不透明。**不参与
+  // sky/ground 主分类**——分类用 lookingAtGround（平滑），避免 depthTexture 不抗锯齿在掠射地平线处逐像素
+  // 硬翻转的条纹。hasScene/sceneDist 只在 foreInscatter（近处 mask>0）被消费；远处/掠射 sceneDist 大
+  // → mask=0 不读它 → 无条纹。
   bool hasScene = false;
   float sceneDist = 0.0;
   if (depth < 1.0) {
-    vec2 texel = 1.0 / vec2(textureSize(depthTexture, 0));
-    float dC = depth;
-    float dR = czm_readDepth(depthTexture, v_textureCoordinates + vec2(texel.x, 0.0));
-    float dL = czm_readDepth(depthTexture, v_textureCoordinates - vec2(texel.x, 0.0));
-    float dU = czm_readDepth(depthTexture, v_textureCoordinates + vec2(0.0, texel.y));
-    float dD = czm_readDepth(depthTexture, v_textureCoordinates - vec2(0.0, texel.y));
-    float depthAvg = (dC + dR + dL + dU + dD) * 0.2;
-    vec4 eyePos = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depthAvg, 1.0));
+    vec4 eyePos = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depth, 1.0));
     if (abs(eyePos.w) > 1e-6) {
       eyePos /= eyePos.w;
       if (eyePos.z < -1e-4) {
@@ -387,15 +377,12 @@ void main() {
   float discG = bG * bG - cG;
 
   // —— DUAL inscatter：平滑基线 + depth 前景雾，mask 过渡带终点在地平线 → 分界线与地平线重合 ——
-  // baseInscatter（平滑、不读 depth → 无掠射条纹）：地面→椭球面 tHitG ×1，天空→getSkyRadiance ×u_inscatterScale。
-  // foreInscatter（depth 真实距离 sceneDist → 山体不透明、前景雾正确）：hasScene 且 mask>0 时叠加，×1。
-  // **量级一致**：base ×1 与 fore ×1 → mix 过渡带无 25:1 跳变（旧 base×scale/fore×1 导致过渡带可见圆/弧）。
-  // 远处雾浓由末端 fogEnhance 统一补回（基于 sceneDist/tHitG 距离衰减），不破坏 mix 量级一致。
-  // mask = 1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist)：近=1（depth fore 山体）、地平线 sceneDist≈horizonKm → mask=0（base 基线）。
-  // sceneDist 已 5-tap 邻域平均（消 depthTexture 不抗锯齿的高频抖动 → mask 等值线无逐像素抖 → 无圆形/弧线波纹）。
-  // 用 1.0-smoothstep(CLOSE_KM, horizonKm) 而非 smoothstep(horizonKm, CLOSE_KM)：后者 edge0>edge1 触发 GLSL UB。
+  // baseInscatter（平滑、不读 depth → 无掠射条纹）：地面→椭球面 tHitG，天空→getSkyRadiance。
+  // foreInscatter（depth 真实距离 sceneDist → 山体不透明、前景雾正确）：hasScene 且 mask>0 时叠加。
+  // mask = smoothstep(horizonKm, CLOSE_KM, sceneDist)：近=1（depth）、地平线 sceneDist≈horizonKm → mask=0（基线）。
   // horizonKm = 相机到椭球面切线距离（随高度自适应 √(camR²-bottomR²)）→ 过渡带终点在地平线，分界线与地平线
-  // 重合。wide band → 渐变无硬弧。
+  // 重合。wide band → 渐变无硬弧。曾试 mask 用 tHitG 消除地平线轮廓残余闪动，但 tHitG>sceneDist → ground 过早
+  // 全基线 → 分界线内移、闪动更明显，已回退用 sceneDist（残余小幅闪动为可接受代价）。
   const float CLOSE_KM = 20.0;
   float horizonKm = sqrt(max(0.0, camR * camR - bottomR * bottomR));
   // 椭球面交点 tHitG（ground 基线距离 + mask 距离用）。
@@ -409,8 +396,7 @@ void main() {
   vec3 inscatter = vec3(0.0);
   vec3 finalColor;
   if (lookingAtGround && discG > 0.0) {
-    // 地面基线：椭球面 tHitG（平滑）。base ×1（量级与 fore 一致，mix 过渡带无 25:1 跳变 → 无可见圆/弧）；
-    // 远处雾浓由末端 fogEnhance 统一补回（基于 sceneDist/tHitG 距离衰减）。
+    // 地面基线：椭球面 tHitG（平滑）。
     vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
     inscatter = GetSkyRadianceToPointScaled(
       cameraPosition,
@@ -422,13 +408,10 @@ void main() {
   } else {
     // 天空基线（sky:false 在 skyBranch 内透传 return）。
 ${skyBranch}  }
-  // 近处地形按 mask 叠加 depth 前景雾 → 山体不透明。mask 用 sceneDist（已 5-tap 平滑），地平线处 mask=0 走基线
-  //（分界线与地平线重合）。mask>0 才算 foreInscatter（远处省 LUT）。
-  // inscatter 量级（修弧线/圆形波纹）：base（地面/天空基线，平滑不抖）×1；fore（depth 反演，sceneDist 已
-  // 5-tap 平滑）×1。此处 mix(base×1, fore×1, mask) → 过渡带量级一致无 25:1 跳变 → 无可见圆/弧。
-  // 远处雾浓由末端 fogEnhance 统一补回（基于距离衰减，不再依赖 base×scale）。
+  // 近处地形按 mask 叠加 depth 前景雾 → 山体不透明。mask 用 sceneDist，地平线处 mask=0 走基线（分界线与地平线
+  // 重合）。mask>0 才算 foreInscatter（远处省 LUT）。
   if (hasScene) {
-    float mask = 1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist);
+    float mask = smoothstep(horizonKm, CLOSE_KM, sceneDist);
     if (mask > 0.0) {
       vec3 scenePosKm = cameraPosition + rayDirection * sceneDist;
       vec3 foreTrans;
@@ -443,19 +426,7 @@ ${skyBranch}  }
       inscatter = mix(inscatter, foreInscatter, mask);
     }
   }
-  // —— fogEnhance：远处雾浓衰减（近 ×1 山体清晰，远 ×scale 雾浓）——
-  // base/fore 已量级一致（mix 无圆），远处雾浓由末端基于距离的 fog 衰减补回。
-  // fog 距离用 sceneDist（真实地形距离 → 散射边界与真实地平线重合，无椭球错位）；无 depth 处（远景
-  // 瓦片未加载 depth=1）用 tHitG 椭球兜底。代价：sceneDist 读 depthTexture，相机俯仰变化时瓦片 LOD
-  // 过渡致逐帧抖、×scale 放大成同心波纹（静止加载结束才稳）。此波纹是 Cesium 瓦片异步加载 + DUAL
-  //（fore 必读 depth 保山体清晰）的固有限制，无纯空间解；减弱靠降 u_inscatterScale，彻底消除需时序
-  // 平滑（TAA）。sky 不进此分支（lookingAtGround=false），保 sky ×scale 不变。
-  if (lookingAtGround) {
-    float fogDist = hasScene ? sceneDist : tHitG;
-    float fog = mix(1.0, u_inscatterScale, smoothstep(CLOSE_KM, horizonKm, fogDist));
-    inscatter *= fog;
-  }
-  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
+  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale;
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——

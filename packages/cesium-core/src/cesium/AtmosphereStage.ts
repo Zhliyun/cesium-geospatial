@@ -240,7 +240,8 @@ export function buildAtmosphereUniforms(
     u_groundDim: options.groundDim,
     u_distanceScale: options.distanceScale,
     u_inscatterScale: options.inscatterScale,
-    u_ditherScale: options.ditherScale,
+    // u_ditherScale 不传：aerialPerspective.frag 回退到 363e441（input dithering 用固定 1.5/255，无 uniform）。
+    // display dithering 的 u_ditherScale 仍在 tonomapStage 消费（?ditherScale= 仍有效）。
     cosSunAngularRadius: Math.cos(SUN_ANGULAR_RADIUS)
   }
 }

@@ -15,56 +15,17 @@ const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
 ]
 
 describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds-atmosphere）', () => {
-  it('B 路径合成：finalColor = originalColor·trans·groundDim + inscatter（base/fore 量级一致 ×1；fogEnhance 末端衰减 + sky ×scale）', () => {
+  it('B 路径合成：originalColor·transmittance + inscatter·u_inscatterScale（方案 B 远处白雾浓）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    // finalColor 不再含全局 inscatter * u_inscatterScale（弧线波纹根因：全局放大含 fore depth 抖动）
-    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter;')
-    expect(s).not.toContain('inscatter * u_inscatterScale')
+    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale')
   })
 
-  it('u_inscatterScale 末端 fogEnhance 衰减 + sky 放大；base/fore 量级一致 ×1（修弧线/圆形波纹）', () => {
+  it('u_inscatterScale uniform 声明 + 默认合成（方案 B，默认 1.0=phase1 物理，>1 远处白雾浓）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
     // uniform 声明（FRAME_UNIFORMS_GLSL）
     expect(s).toContain('uniform float u_inscatterScale')
-    // ground 基线 base ×1（赋值点不再 ×scale，量级与 fore 一致 → mix 过渡带无 25:1 跳变 → 无可见圆/弧）
-    expect(s).not.toContain('transmittance\n    ) * u_inscatterScale')
-    // sky 基线（赋值点）×scale（天空亮度维持，fogEnhance 只作用 ground 分支）
-    expect(s).toContain('fragmentAngle, transmittance) * u_inscatterScale')
-    // DUAL mix 保留：base（×1）↔ fore（×1）。量级一致，过渡带无圆/弧
-    expect(s).toContain('inscatter = mix(inscatter, foreInscatter, mask)')
-    // fore 赋值不放大（×1）：foreInscatter = GetSkyRadianceToPointScaled(...) 直接收尾，无 ×scale
-    expect(s).toContain('foreTrans\n      );')
-    // 末端 fogEnhance：fog 距离用 sceneDist（真实地形，散射边界与真实地平线重合，无椭球错位）；
-    // 无 depth 处用 tHitG 椭球兜底。波纹（瓦片 LOD 时序抖 ×scale）靠降 scale 减弱或 TAA 彻底消除。
-    expect(s).toContain('inscatter *= fog')
-    expect(s).toContain('fogDist = hasScene ? sceneDist : tHitG')
-    expect(s).toContain('mix(1.0, u_inscatterScale, smoothstep(CLOSE_KM, horizonKm, fogDist))')
-    // 全局 scale 模式彻底移除（旧 finalColor 的 inscatter * u_inscatterScale）
-    expect(s).not.toContain('inscatter * u_inscatterScale')
-  })
-
-  it('sceneDist 5-tap 邻域平均抗 depthTexture 高频抖动（消弧线/圆形波纹逐像素抖）', () => {
-    const s = buildAerialPerspectiveFragmentShader({})
-    // textureSize 求 texel 尺寸（GLSL ES 3.00 内建，不需桩）
-    expect(s).toContain('textureSize(depthTexture, 0)')
-    // 中心 + 4 邻域 depth 平均
-    expect(s).toContain('float dC = depth;')
-    expect(s).toContain('czm_readDepth(depthTexture, v_textureCoordinates + vec2(texel.x, 0.0))')
-    expect(s).toContain('czm_readDepth(depthTexture, v_textureCoordinates - vec2(texel.x, 0.0))')
-    expect(s).toContain('czm_readDepth(depthTexture, v_textureCoordinates + vec2(0.0, texel.y))')
-    expect(s).toContain('czm_readDepth(depthTexture, v_textureCoordinates - vec2(0.0, texel.y))')
-    expect(s).toContain('float depthAvg = (dC + dR + dL + dU + dD) * 0.2;')
-    // 用 depthAvg 反演（不再用单点 depth）
-    expect(s).toContain('czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depthAvg, 1.0))')
-  })
-
-  it('smoothstep UB 修正：1.0 - smoothstep(CLOSE_KM, horizonKm)（edge0<edge1，无 UB）', () => {
-    const s = buildAerialPerspectiveFragmentShader({})
-    // 旧写法 smoothstep(horizonKm, CLOSE_KM) 中 edge0(horizonKm≈138) > edge1(CLOSE_KM=20) → GLSL UB，已移除
-    //（断言带 float mask 前缀只匹配代码语句，注释里说明性提及不算）
-    expect(s).not.toContain('float mask = smoothstep(horizonKm, CLOSE_KM')
-    // 新写法 edge0<edge1，近处 mask=1 走 fore 山体，远处 mask=0 走 base 平滑
-    expect(s).toContain('1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist)')
+    // finalColor 合成 inscatter × u_inscatterScale（DUAL 合成后总 inscatter，ground+sky 分支都 scale）
+    expect(s).toContain('inscatter * u_inscatterScale')
   })
 
   it('末端输出线性 finalColor·exposure（不再内联 ACES，由链尾 tonemap stage 收尾）', () => {
@@ -81,13 +42,10 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).not.toContain('tonemapDisplay(')
   })
 
-  it('仍含 input dithering（打散 originalColor RGBA8 banding，留在 atmosphere）+ u_ditherScale 强度倍率', () => {
+  it('仍含 input dithering（打散 originalColor RGBA8 banding，留在 atmosphere）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
     expect(s).toContain('inDither')
     expect(s).toContain('interleavedGradientNoise')
-    // input dithering 系数 × u_ditherScale（1.0=phase1 默认 ±1.5/255；URL ?ditherScale= 放大打散 banding）
-    expect(s).toContain('uniform float u_ditherScale')
-    expect(s).toContain('inDither * 1.5 / 255.0 * u_ditherScale')
   })
 
   it('debug 级联被 < 6.5 整体包裹：debug=7（>6.5）跳过所有可视化分支，走末端线性输出供 tonemap 归一化验证 HDR', () => {
