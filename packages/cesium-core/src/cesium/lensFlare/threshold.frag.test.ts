@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildThresholdFragmentShader, buildStandaloneShaderForValidation, THRESHOLD_UNIFORM_NAMES } from './threshold.frag'
+import { LEARNOGLY_DOWNSAMPLE_WEIGHTS } from './lensFlareConstants'
 
 describe('buildThresholdFragmentShader', () => {
   it('含 learnopengl 13-tap 加权（非均匀平均）', () => {
@@ -7,6 +8,14 @@ describe('buildThresholdFragmentShader', () => {
     expect(s).toContain('0.125')
     expect(s).toContain('0.0625')
     expect(s).toContain('0.03125')
+  })
+  it('I-3: GLSL 权重字面量与 LEARNOGLY_DOWNSAMPLE_WEIGHTS 常量对象一致', () => {
+    // 交叉断言：GLSL 内硬编码的权重数值必须等于 lensFlareConstants 的对象值
+    // （单源真理，防 GLSL 字面量与常量对象漂移）。
+    const s = buildThresholdFragmentShader()
+    expect(s).toContain(String(LEARNOGLY_DOWNSAMPLE_WEIGHTS.center))      // 0.125
+    expect(s).toContain(String(LEARNOGLY_DOWNSAMPLE_WEIGHTS.edgeMid))     // 0.0625
+    expect(s).toContain(String(LEARNOGLY_DOWNSAMPLE_WEIGHTS.outerCorner)) // 0.03125
   })
   it('含 luminance smoothstep 软阈值 + NaN 守护', () => {
     const s = buildThresholdFragmentShader()

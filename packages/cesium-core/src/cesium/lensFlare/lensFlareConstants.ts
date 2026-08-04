@@ -1,6 +1,8 @@
 // phase2b LensFlare 常量表（逐字 three-geospatial WebGL LensFlareEffect + spec §5 标定）。
 // bloom 级数可配置（减法阶段降 NUM_BLOOM_LEVELS）。
 
+// 文档性常量：当前 createLensFlareStage 用硬编码 DOWNSAMPLE/UPSAMPLE_SCALES 数组；
+// 减法阶段降级（如移动端砍级）时接线让它驱动 scale 数组生成。
 export const NUM_BLOOM_LEVELS = 6 // threshold(get0) + down0-4（到 textureScale 1/32），spec §3
 
 // 9 ghost offset + tint（逐字 three-geospatial lensFlareFeatures.frag，spec §1.4 表）

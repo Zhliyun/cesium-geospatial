@@ -5,6 +5,7 @@
 // framebuffer 共享冲刷，spec §5.3 / 评审 I9），须列入 uniform-name 白名单。
 import { describe, expect, it } from 'vitest'
 import { buildBloomUpsampleFragmentShader, buildStandaloneShaderForValidation, BLOOM_UPSAMPLE_UNIFORM_NAMES } from './bloomUpsample.frag'
+import { UPSAMPLE_WEIGHTS } from './lensFlareConstants'
 
 describe('buildBloomUpsampleFragmentShader', () => {
   it('含 9-tap 权重 0.0625/0.125/0.25', () => {
@@ -12,6 +13,14 @@ describe('buildBloomUpsampleFragmentShader', () => {
     expect(s).toContain('0.0625')
     expect(s).toContain('0.125')
     expect(s).toContain('0.25')
+  })
+  it('I-3: GLSL 权重字面量与 UPSAMPLE_WEIGHTS 常量对象一致', () => {
+    // 交叉断言：GLSL 内硬编码的权重数值必须等于 lensFlareConstants 的对象值
+    // （单源真理，防 GLSL 字面量与常量对象漂移）。
+    const s = buildBloomUpsampleFragmentShader()
+    expect(s).toContain(String(UPSAMPLE_WEIGHTS.center))  // 0.25
+    expect(s).toContain(String(UPSAMPLE_WEIGHTS.edge))    // 0.125
+    expect(s).toContain(String(UPSAMPLE_WEIGHTS.corner))  // 0.0625
   })
   it('含 mix( + u_upsampleRadius', () => {
     const s = buildBloomUpsampleFragmentShader()

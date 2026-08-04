@@ -28,6 +28,7 @@
 //   （实际只采 depthTexture + 计算）。声明仅为满足 Cesium 要求。
 
 import { generateSampleGrid36 } from './occlusion'
+import { DEPTH_EPSILON } from './lensFlareConstants'
 
 // 内建纹理 uniform（Cesium non-series input + 场景 depth）+ occlusion 控制 uniform。
 // 声明顺序与 OCCLUSION_UNIFORM_NAMES 一致（colorTexture/depthTexture 白名单，Cesium 内建）。
@@ -39,7 +40,7 @@ uniform vec3 u_sunDirectionWC;           // 太阳世界空间方向（单位向
 uniform vec3 u_cameraPositionWC;          // 相机世界位置（ray origin；也可用 czm_viewerPositionWC 自动注入）
 uniform float u_sunAngularRadius;         // 太阳盘角半径（rad，约 0.004675）
 uniform vec3 u_ellipsoidRadiiSquared;     // WGS84 椭球三轴半径平方 [a², b², c²]（scene.globe.ellipsoid.radiiSquared）
-#define DEPTH_EPSILON 1e-6                // log 域 epsilon（沿用 cesium-clouds-atmosphere 实测，spec §5.5/I10）
+#define DEPTH_EPSILON ${DEPTH_EPSILON.toExponential()}    // log 域 epsilon（单源：lensFlareConstants，沿用 cesium-clouds-atmosphere 实测，spec §5.5/I10）
 `
 
 // 射线-WGS84 椭球求交（spec §5.5 §2 / M9 椭球，从 T7 occlusion.ts::rayEllipsoidIntersect 移植到 GLSL）。

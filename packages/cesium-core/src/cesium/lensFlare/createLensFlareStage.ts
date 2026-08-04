@@ -24,8 +24,10 @@
 //   I10 — features/composite 的 uniform-name texture 引用全 string 字面量：non-series 兄弟 stage
 //          不在 series 链中，只有 uniform-name 显式引用才构建跨 stage 依赖。
 //
-// u_texelSize：每帧按各 stage RT 实际尺寸（1/width, 1/height）更新。T11 阶段先用占位闭包返回固定
-// Cartesian2（注释标 TODO），test 不验证其值；运行时接 RT 尺寸待 T12 / AtmosphereStage 每帧更新。
+// u_texelSize：每帧按各 stage **源 RT** 实际尺寸（1/width, 1/height）更新。
+// spec §5.2：u_texelSize 是源 texture 的 1/w,1/h（源非目标）。bloom 降分级 stage 的源是降分 RT，
+// 故 texelSize 闭包按 stage 的源 textureScale × drawingBuffer 算（Cesium PostProcessStageTextureCache
+// 用 Math.ceil(width * scale) 定 RT 尺寸）。
 
 import {
   PostProcessStage,
@@ -96,15 +98,29 @@ const UPSAMPLE_SCALES = [0.0625, 0.125, 0.25, 0.5, 1.0] // up0-4
 const UP_DOWN_LEVEL_NAMES = ['lf_down3', 'lf_down2', 'lf_down1', 'lf_down0', 'lf_threshold']
 
 /**
- * u_texelSize 占位闭包（TODO：运行时接各 stage RT 实际尺寸每帧更新，待 T12）。
+ * u_texelSize 闭包工厂：每帧按 stage **源 RT** 尺寸（scene context drawingBuffer × sourceScale）更新。
  *
- * 每个阶段的 RT 尺寸 = viewport × textureScale，故 texel size 随 scale 变化；此处返回固定占位
- * 让 stage 构造期 uniform 形状完整（string/number/function 三类 uniform 都要存在以匹配 shader 声明）。
- * 占位值不影响 T11 结构断言；实际渲染前由 AtmosphereStage 或每帧 hook 替换为真实 1/w,1/h。
+ * spec §5.2：u_texelSize 是源 texture 的 1/w,1/h（源非目标）。bloom 降分级 stage 的源是降分 RT
+ * （series 前驱或 uniform-name 引用 stage 的 textureScale）。例：down4 源是 down3@0.0625，
+ * 源 RT 尺寸 ≈ drawingBuffer × 0.0625 → texelSize ≈ 1/(120)（全分 1920 假设），若误用 1/1920
+ * 则 13-tap kernel 覆盖范围不足 1/16 → bloom blur 不足/光晕偏窄。
+ *
+ * 闭包持 module-scratch Cartesian2（避免每帧分配）；scene.context 引用在闭包内取，运行时
+ * drawingBufferWidth 随 resize 变化时自动反映。
  */
-function placeholderTexelSize(): Cartesian2 {
-  // TODO(T12): 接各 stage RT 实际尺寸（viewport × textureScale）每帧更新。
-  return new Cartesian2(1.0 / 1920, 1.0 / 1080)
+function texelSizeForSourceScale(scene: Scene, sourceScale: number): () => Cartesian2 {
+  const ctx = (scene as unknown as {
+    context: { drawingBufferWidth: number; drawingBufferHeight: number }
+  }).context
+  const scratch = new Cartesian2()
+  return () => {
+    const w = ctx.drawingBufferWidth * sourceScale
+    const h = ctx.drawingBufferHeight * sourceScale
+    // max(·,1.0) 防 RT 尺寸极小或 0 时除零（resize 期/极端 textureScale 下兜底）。
+    scratch.x = 1.0 / Math.max(w, 1.0)
+    scratch.y = 1.0 / Math.max(h, 1.0)
+    return scratch
+  }
 }
 
 /**
@@ -137,7 +153,7 @@ export function createLensFlareStage(
     name: 'lf_threshold',
     fragmentShader: buildThresholdFragmentShader(),
     uniforms: {
-      u_texelSize: placeholderTexelSize,
+      u_texelSize: texelSizeForSourceScale(scene, 1.0), // 源 = atmosphere（全分）
       u_thresholdLevel: thresholdLevel,
       u_thresholdRange: thresholdRange
     },
@@ -147,12 +163,15 @@ export function createLensFlareStage(
     pixelDatatype: postHdrDatatype
   })
 
+  // down[i] 源 = series 前驱（down[i-1] 或 threshold for down0）。
+  // sourceScale 序列：[threshold 1.0, down0 0.5, down1 0.25, down2 0.125, down3 0.0625]。
+  const downSourceScales = [1.0, ...DOWNSAMPLE_SCALES.slice(0, -1)]
   const downs = DOWNSAMPLE_SCALES.map(
     (scale, i) =>
       new PostProcessStage({
         name: `lf_down${i}`,
         fragmentShader: buildBloomDownsampleFragmentShader(),
-        uniforms: { u_texelSize: placeholderTexelSize },
+        uniforms: { u_texelSize: texelSizeForSourceScale(scene, downSourceScales[i]) },
         textureScale: scale,
         // §5.7：series 链传播用 LINEAR（双线性插值，下采样/上采样标准做法）。
         sampleMode: PostProcessStageSampleMode.LINEAR,
@@ -163,6 +182,9 @@ export function createLensFlareStage(
 
   // I9：u_downLevel = uniform-name string 字面量（非 function），强制 Cesium 依赖图把 down[对应]
   // 排在 up[i] 前，避同 scale framebuffer 共享导致 up 渲染冲刷 down 输出。
+  // up[i] 源 = series 前驱（up[i-1] 或 down4 for up0）。
+  // sourceScale 序列：[down4 0.03125, up0 0.0625, up1 0.125, up2 0.25, up3 0.5]。
+  const upSourceScales = [DOWNSAMPLE_SCALES[4], ...UPSAMPLE_SCALES.slice(0, -1)]
   const ups = UPSAMPLE_SCALES.map(
     (scale, i) =>
       new PostProcessStage({
@@ -171,7 +193,7 @@ export function createLensFlareStage(
         uniforms: {
           u_downLevel: UP_DOWN_LEVEL_NAMES[i], // string 字面量（I9）
           u_upsampleRadius: UPSAMPLE_RADIUS,
-          u_texelSize: placeholderTexelSize
+          u_texelSize: texelSizeForSourceScale(scene, upSourceScales[i])
         },
         textureScale: scale,
         sampleMode: PostProcessStageSampleMode.LINEAR, // §5.7：series 链传播
@@ -193,7 +215,7 @@ export function createLensFlareStage(
     fragmentShader: buildPreBlurFragmentShader(),
     uniforms: {
       u_thresholdTexture: 'lf_threshold', // string 字面量（I10）
-      u_texelSize: placeholderTexelSize
+      u_texelSize: texelSizeForSourceScale(scene, 1.0) // 源 = threshold（全分）
     },
     textureScale: 1.0,
     sampleMode: PostProcessStageSampleMode.NEAREST,
@@ -224,7 +246,7 @@ export function createLensFlareStage(
     uniforms: {
       u_preBlurTexture: 'lf_preBlur', // string 字面量（I10）
       u_occlusionTexture: 'lf_occlusion', // string 字面量（I10）
-      u_texelSize: placeholderTexelSize,
+      u_texelSize: texelSizeForSourceScale(scene, 1.0), // 源 = preBlur/up4（全分）
       u_ghostAmount: ghostAmount,
       u_haloAmount: haloAmount,
       u_chromaticAberration: chromaticAberration

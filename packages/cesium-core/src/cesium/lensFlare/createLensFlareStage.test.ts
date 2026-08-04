@@ -41,7 +41,10 @@ function mockScene(postHdrDatatype: PixelDatatype = PixelDatatype.HALF_FLOAT) {
       halfFloatingPointTexture: true,
       colorBufferHalfFloat: postHdrDatatype === PixelDatatype.HALF_FLOAT,
       floatingPointTexture: true,
-      colorBufferFloat: postHdrDatatype === PixelDatatype.FLOAT
+      colorBufferFloat: postHdrDatatype === PixelDatatype.FLOAT,
+      // u_texelSize 闭包读 drawingBufferWidth/Height 算源 RT 尺寸（spec §5.2）
+      drawingBufferWidth: 1920,
+      drawingBufferHeight: 1080
     },
     globe: { ellipsoid: { radiiSquared: [1, 1, 1] } },
     camera: { positionWC: [0, 0, 6400000] },
@@ -226,5 +229,41 @@ describe('createLensFlareStage', () => {
     const up0 = stagesOf(bloomComposite).find((s: any) => s.name === 'lf_up0')!
     expect(up0.uniforms.u_upsampleRadius).toBe(UPSAMPLE_RADIUS)
     expect(occlusionStage.uniforms.u_sunAngularRadius).toBe(SUN_ANGULAR_RADIUS)
+  })
+
+  it('I-1: u_texelSize 按源 RT textureScale 算（up0 源 = down4@0.03125 → 1/(1920×0.03125)）', () => {
+    // spec §5.2：u_texelSize 是源 texture 的 1/w,1/h（源非目标）。
+    // up0 的 series 前驱 = down4（textureScale 0.03125），源 RT 尺寸 = 1920×0.03125 = 60。
+    const { bloomComposite } = createLensFlareStage(mockScene(), mockState())
+    const up0 = stagesOf(bloomComposite).find((s: any) => s.name === 'lf_up0')!
+    expect(typeof up0.uniforms.u_texelSize).toBe('function')
+    const texelSize = up0.uniforms.u_texelSize()
+    // x = 1/(1920×0.03125) = 1/60，y = 1/(1080×0.03125) = 1/33.75
+    expect(texelSize.x).toBeCloseTo(1.0 / (1920 * 0.03125), 10)
+    expect(texelSize.y).toBeCloseTo(1.0 / (1080 * 0.03125), 10)
+  })
+
+  it('I-1: u_texelSize 按 stage 源 scale 分级（threshold 1.0 / down0 源 1.0 / down4 源 0.0625）', () => {
+    // 各 stage 的 u_texelSize 反映其源 RT 尺寸，不是全分 1/1920 占位。
+    const { bloomComposite, preBlurStage, featuresStage } = createLensFlareStage(
+      mockScene(),
+      mockState()
+    )
+    const stages = stagesOf(bloomComposite)
+    const threshold = stages[0]
+    const down0 = stages[1] // 源 = threshold@1.0
+    const down4 = stages.find((s: any) => s.name === 'lf_down4')! // 源 = down3@0.0625
+
+    // threshold 源 = atmosphere@1.0 → 1/1920
+    expect(threshold.uniforms.u_texelSize().x).toBeCloseTo(1.0 / 1920, 10)
+    // down0 源 = threshold@1.0 → 1/1920
+    expect(down0.uniforms.u_texelSize().x).toBeCloseTo(1.0 / 1920, 10)
+    // down4 源 = down3@0.0625 → 1/(1920×0.0625) = 1/120（远大于全分 1/1920）
+    expect(down4.uniforms.u_texelSize().x).toBeCloseTo(1.0 / (1920 * 0.0625), 10)
+    expect(down4.uniforms.u_texelSize().x).toBeGreaterThan(1.0 / 1920) // 防 placeholder 回归
+
+    // non-series 兄弟：preBlur/features 源 = 全分 threshold/up4 → 1/1920
+    expect(preBlurStage.uniforms.u_texelSize().x).toBeCloseTo(1.0 / 1920, 10)
+    expect(featuresStage.uniforms.u_texelSize().x).toBeCloseTo(1.0 / 1920, 10)
   })
 })

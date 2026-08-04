@@ -285,7 +285,7 @@ vec3 mainFeatures(vec2 uv) {
 uniform sampler2D depthTexture;
 uniform vec3 u_sunDirectionWC; uniform vec3 u_cameraPositionWC;   // czm_viewerPositionWC
 uniform float u_sunAngularRadius;
-uniform mat3 u_ellipsoidRadiiSquared;   // v2 M9：椭球非球（scene.globe.ellipsoid）
+uniform vec3 u_ellipsoidRadiiSquared;   // v2 M9：椭球非球（scene.globe.ellipsoid）
 #define DEPTH_EPSILON 1e-6   // v2 I10：log 域 epsilon（沿用 cesium-clouds-atmosphere 实测）
 // czm_view/czm_projection/czm_inverseProjection 自动注入
 ```
