@@ -15,17 +15,36 @@ const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
 ]
 
 describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds-atmosphere）', () => {
-  it('B 路径合成：originalColor·transmittance + inscatter·u_inscatterScale（方案 B 远处白雾浓）', () => {
+  it('B 路径合成：finalColor = originalColor·trans·groundDim + inscatter（无全局 scale；base+sky 在赋值点 ×scale）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale')
+    // finalColor 不再含全局 inscatter * u_inscatterScale（弧线波纹根因：全局放大含 fore depth 抖动）
+    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter;')
+    expect(s).not.toContain('inscatter * u_inscatterScale')
   })
 
-  it('u_inscatterScale uniform 声明 + 默认合成（方案 B，默认 1.0=phase1 物理，>1 远处白雾浓）', () => {
+  it('u_inscatterScale 只放大 base+sky（平滑不抖），fore ×1 不放大（修 DUAL mix depth 抖动放大弧线波纹）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
     // uniform 声明（FRAME_UNIFORMS_GLSL）
     expect(s).toContain('uniform float u_inscatterScale')
-    // finalColor 合成 inscatter × u_inscatterScale（DUAL 合成后总 inscatter，ground+sky 分支都 scale）
-    expect(s).toContain('inscatter * u_inscatterScale')
+    // ground 基线（赋值点）×scale：GetSkyRadianceToPointScaled(...) 末端带 ×u_inscatterScale
+    expect(s).toContain('transmittance\n    ) * u_inscatterScale')
+    // sky 基线（赋值点）×scale
+    expect(s).toContain('fragmentAngle, transmittance) * u_inscatterScale')
+    // DUAL mix 保留：base（已 ×scale）↔ fore（×1）。mix 第一参数是 inscatter（已 scale），第二是 foreInscatter
+    expect(s).toContain('inscatter = mix(inscatter, foreInscatter, mask)')
+    // fore 赋值不放大（×1）：foreInscatter = GetSkyRadianceToPointScaled(...) 直接收尾，无 ×scale
+    expect(s).toContain('foreTrans\n      );')
+    // 全局 scale 模式彻底移除（旧 finalColor 的 inscatter * u_inscatterScale）
+    expect(s).not.toContain('inscatter * u_inscatterScale')
+  })
+
+  it('smoothstep UB 修正：1.0 - smoothstep(CLOSE_KM, horizonKm)（edge0<edge1，无 UB）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    // 旧写法 smoothstep(horizonKm, CLOSE_KM) 中 edge0(horizonKm≈138) > edge1(CLOSE_KM=20) → GLSL UB，已移除
+    //（断言带 float mask 前缀只匹配代码语句，注释里说明性提及不算）
+    expect(s).not.toContain('float mask = smoothstep(horizonKm, CLOSE_KM')
+    // 新写法 edge0<edge1，近处 mask=1 走 fore 山体，远处 mask=0 走 base 平滑
+    expect(s).toContain('1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist)')
   })
 
   it('末端输出线性 finalColor·exposure（不再内联 ACES，由链尾 tonemap stage 收尾）', () => {

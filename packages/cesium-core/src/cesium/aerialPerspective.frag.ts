@@ -83,7 +83,7 @@ uniform float exposure;
 uniform float u_debugMode;
 uniform float u_groundDim;
 uniform float u_distanceScale;  // 散射距离缩放（方案 A，等效空气密度倍率；1.0=phase1 物理，>1 中近距散射强）
-uniform float u_inscatterScale;  // inscatter 放大（方案 B 远处白雾浓；1.0=phase1 物理，>1 远处雾浓，可超物理饱和）
+uniform float u_inscatterScale;  // inscatter 放大（方案 B 远处白雾浓；1.0=phase1 物理，>1 远处雾浓）。只放大 base+sky（平滑不抖），fore ×1 不放大（修 DUAL mix depth 抖动放大弧线波纹）
 uniform float u_ditherScale;  // input dithering 强度倍率（1.0=phase1 默认 ±1.5/255；>1 更强打散 ACES 放大暴露的 banding，但噪声增）
 `
 
@@ -306,7 +306,7 @@ ${sun ? SUN_DISK_GLSL : ''}
 function buildMainFn(o: ResolvedOptions): string {
   const skyBranch = o.sky
     ? `
-    inscatter = getSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, fragmentAngle, transmittance);
+    inscatter = getSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, fragmentAngle, transmittance) * u_inscatterScale;
 `
     : `
     finalColor = originalColor.rgb;
@@ -381,7 +381,8 @@ void main() {
   // —— DUAL inscatter：平滑基线 + depth 前景雾，mask 过渡带终点在地平线 → 分界线与地平线重合 ——
   // baseInscatter（平滑、不读 depth → 无掠射条纹）：地面→椭球面 tHitG，天空→getSkyRadiance。
   // foreInscatter（depth 真实距离 sceneDist → 山体不透明、前景雾正确）：hasScene 且 mask>0 时叠加。
-  // mask = smoothstep(horizonKm, CLOSE_KM, sceneDist)：近=1（depth）、地平线 sceneDist≈horizonKm → mask=0（基线）。
+  // mask = 1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist)：近=1（depth fore 山体）、地平线 sceneDist≈horizonKm → mask=0（base 基线）。
+  // 用 1.0-smoothstep(CLOSE_KM, horizonKm) 而非 smoothstep(horizonKm, CLOSE_KM)：后者 edge0>edge1 触发 GLSL UB。
   // horizonKm = 相机到椭球面切线距离（随高度自适应 √(camR²-bottomR²)）→ 过渡带终点在地平线，分界线与地平线
   // 重合。wide band → 渐变无硬弧。曾试 mask 用 tHitG 消除地平线轮廓残余闪动，但 tHitG>sceneDist → ground 过早
   // 全基线 → 分界线内移、闪动更明显，已回退用 sceneDist（残余小幅闪动为可接受代价）。
@@ -398,7 +399,8 @@ void main() {
   vec3 inscatter = vec3(0.0);
   vec3 finalColor;
   if (lookingAtGround && discG > 0.0) {
-    // 地面基线：椭球面 tHitG（平滑）。
+    // 地面基线：椭球面 tHitG（平滑）。×u_inscatterScale 在此放大（远处白雾浓，平滑不抖）；
+    // foreInscatter 不放大（×1，避免 depth 抖动被放大成弧线波纹）。
     vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
     inscatter = GetSkyRadianceToPointScaled(
       cameraPosition,
@@ -406,14 +408,17 @@ void main() {
       0.0,
       sunDirection,
       transmittance
-    );
+    ) * u_inscatterScale;
   } else {
     // 天空基线（sky:false 在 skyBranch 内透传 return）。
 ${skyBranch}  }
   // 近处地形按 mask 叠加 depth 前景雾 → 山体不透明。mask 用 sceneDist，地平线处 mask=0 走基线（分界线与地平线
   // 重合）。mask>0 才算 foreInscatter（远处省 LUT）。
+  // inscatter 放大语义（修弧线波纹）：base（地面/天空基线，平滑不抖）在赋值点已 ×u_inscatterScale；
+  // fore（depth 反演，视角变时逐像素抖动）×1 不放大。此处 mix(base, fore, mask) → mix(base×scale, fore×1, mask)，
+  // fore 抖动不被放大 → 弧线波纹压回；远处雾浓由 base×scale 保留。
   if (hasScene) {
-    float mask = smoothstep(horizonKm, CLOSE_KM, sceneDist);
+    float mask = 1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist);
     if (mask > 0.0) {
       vec3 scenePosKm = cameraPosition + rayDirection * sceneDist;
       vec3 foreTrans;
@@ -428,7 +433,7 @@ ${skyBranch}  }
       inscatter = mix(inscatter, foreInscatter, mask);
     }
   }
-  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale;
+  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——
