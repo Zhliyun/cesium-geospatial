@@ -39,3 +39,8 @@ export {
   GHOST_AMOUNT_DEFAULT,
   HALO_AMOUNT_DEFAULT
 } from './cesium/lensFlare/lensFlareConstants'
+// depthTemporal temporal* preset（Task 12 demo ?temporalQuality=low|high 用）
+export {
+  TEMPORAL_QUALITY_PRESETS,
+  type TemporalQualityPreset
+} from './cesium/depthTemporal/depthTemporalConstants'

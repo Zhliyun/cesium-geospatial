@@ -164,7 +164,7 @@ describe('buildAtmosphereUniforms', () => {
 })
 
 describe('validateAtmosphereOptions', () => {
-  it('默认值（B 路径全量 + 动态曝光 + lensflare 默认）', () => {
+  it('默认值（B 路径全量 + 动态曝光 + lensflare 默认 + depthTemporal temporal*）', () => {
     expect(validateAtmosphereOptions({})).toEqual({
       sun: true,
       sky: true,
@@ -182,7 +182,12 @@ describe('validateAtmosphereOptions', () => {
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
       lensFlareGhost: GHOST_AMOUNT_DEFAULT,
-      lensFlareHalo: HALO_AMOUNT_DEFAULT
+      lensFlareHalo: HALO_AMOUNT_DEFAULT,
+      // depthTemporal temporal*（Task 12）：默认 EMA 开 + LOW/HIGH_ALPHA/DEPTH_THRESHOLD_DEFAULT
+      temporalEma: true,
+      temporalLowAlpha: 0.05, // LOW_ALPHA
+      temporalHighAlpha: 0.5, // HIGH_ALPHA
+      temporalDepthThreshold: 0.1 // DEPTH_THRESHOLD_DEFAULT
     })
   })
 
@@ -586,5 +591,87 @@ describe('depthTemporal lifecycle', () => {
     const before = dtSpies.buildBlitCommand.mock.calls.length
     triggerPostRender(scene)
     expect(dtSpies.buildBlitCommand.mock.calls.length).toBe(before)
+  })
+})
+
+// —— depthTemporal options 参数化（Task 12）：temporal* options 透传 + URL 验收 ——
+// temporalEma option 控制 EMA on/off（非 stage 创建与否）：
+// - HDR + temporalEma=true（默认）→ stage 创建 + enabled=true EMA 消抖
+// - HDR + temporalEma=false（?temporalEma=0）→ stage 仍创建 + enabled=false 透传（atmosphere 读 .a=raw log-depth 仍有效）
+// - UNSIGNED_BYTE → 不创建 stage（temporalEmaEnabled=false + depthTemporalStage undefined）
+describe('depthTemporal options 参数化（Task 12）', () => {
+  it('默认 temporal* options（temporalEma=true / low=0.05 / high=0.5 / threshold=0.1）', () => {
+    const r = validateAtmosphereOptions({})
+    expect(r.temporalEma).toBe(true)
+    expect(r.temporalLowAlpha).toBe(0.05) // LOW_ALPHA
+    expect(r.temporalHighAlpha).toBe(0.5) // HIGH_ALPHA
+    expect(r.temporalDepthThreshold).toBe(0.1) // DEPTH_THRESHOLD_DEFAULT
+  })
+
+  it('temporalEma option 可覆盖（?temporalEma=0 → false；自定义 alpha/threshold 透传）', () => {
+    const r = validateAtmosphereOptions({
+      temporalEma: false,
+      temporalLowAlpha: 0.1,
+      temporalHighAlpha: 0.8,
+      temporalDepthThreshold: 0.05
+    })
+    expect(r.temporalEma).toBe(false)
+    expect(r.temporalLowAlpha).toBe(0.1)
+    expect(r.temporalHighAlpha).toBe(0.8)
+    expect(r.temporalDepthThreshold).toBe(0.05)
+  })
+
+  it('temporalEma=false（HDR）→ temporalEmaEnabled=false 但 depthTemporal stage 仍创建（enabled=false 透传）', () => {
+    // 注意（spec 前置查证 #6）：temporalEma=false 不跳过 stage 创建（HDR 时仍创建），而是 depthTemporal
+    // shader 走 enabled=false 透传路径 vec4(sceneColor, curLogDepth)，atmosphere 读 .a=raw log-depth 仍有效
+    // （Task 9 已移除 czm_readDepth，依赖 depthTemporal 打包 .a 通道；若 stage 不创建则 atmosphere 读 scene
+    // alpha 无意义）。仅 UNSIGNED_BYTE 才完全跳过 stage。temporalEmaEnabled=false 控制 lensFlare occlusion
+    // depth 源回退 scene globe depth（passthrough .r=sceneColor 非 depth，不能用）。
+    const { scene } = mockSceneWithAddSpy({ halfFloat: true })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, temporalEma: false })
+    expect(handle.temporalEmaEnabled).toBe(false)
+    expect(handle.depthTemporalStage).toBeDefined() // stage 仍创建（HDR，透传模式）
+    // shader 走 enabled=false 透传路径：无 u_historyTexture/u_temporalAlpha（EMA 路径才声明），含 curLogDepth 透传
+    const frag = (handle.depthTemporalStage as unknown as { fragmentShader: string }).fragmentShader
+    expect(frag).not.toContain('u_historyTexture')
+    expect(frag).not.toContain('u_temporalAlpha')
+    expect(frag).toContain('curLogDepth') // 透传本帧 raw log-depth 到 .a
+  })
+
+  it('temporalEma=true（默认，HDR）→ temporalEmaEnabled=true + stage enabled=true EMA shader', () => {
+    const { scene } = mockSceneWithAddSpy({ halfFloat: true })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    expect(handle.temporalEmaEnabled).toBe(true)
+    expect(handle.depthTemporalStage).toBeDefined()
+    // EMA shader 声明 u_historyTexture/u_temporalAlpha
+    const frag = (handle.depthTemporalStage as unknown as { fragmentShader: string }).fragmentShader
+    expect(frag).toContain('u_historyTexture')
+    expect(frag).toContain('u_temporalAlpha')
+  })
+
+  it('temporalDepthThreshold 透传到 depthTemporal u_depthThreshold uniform（非默认 0.1）', () => {
+    const { scene } = mockSceneWithAddSpy({ halfFloat: true })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, temporalDepthThreshold: 0.05 })
+    const uniforms = (handle.depthTemporalStage as unknown as { uniforms: Record<string, unknown> }).uniforms
+    expect(uniforms.u_depthThreshold).toBe(0.05) // 非 DEPTH_THRESHOLD_DEFAULT(0.1)
+  })
+
+  it('temporalLowAlpha/temporalHighAlpha 透传到 lifecycle computeTemporalAlpha（high preset）', () => {
+    // 自定义 alpha（high preset 0.1/0.8）→ lifecycle postRender：首帧大 motion → highAlpha(0.8)；
+    // 次帧静止 → motion=0 → lowAlpha(0.1)（非默认 0.05/0.5）
+    const { scene } = mockSceneWithDepthTemporal()
+    const handle = createAtmosphereStage(scene, stubLuts, {
+      lensFlare: false,
+      temporalLowAlpha: 0.1, // high preset lowAlpha（默认 0.05）
+      temporalHighAlpha: 0.8 // high preset highAlpha（默认 0.5）
+    })
+    setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
+    const uniforms = (handle.depthTemporalStage as unknown as { uniforms: Record<string, unknown> }).uniforms
+    // 首帧 postRender：prevPos=ZERO → 巨大 positionDelta → motion 高 → highAlpha=0.8（自定义）
+    triggerPostRender(scene)
+    expect((uniforms.u_temporalAlpha as () => number)()).toBeCloseTo(0.8, 5)
+    // 次帧 postRender：首帧已更新 prevPos==camera.positionWC（静止）→ motion=0 → lowAlpha=0.1（自定义）
+    triggerPostRender(scene)
+    expect((uniforms.u_temporalAlpha as () => number)()).toBeCloseTo(0.1, 5)
   })
 })

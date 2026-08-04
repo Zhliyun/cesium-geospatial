@@ -19,6 +19,7 @@ import {
   THRESHOLD_LEVEL_DEFAULT,
   GHOST_AMOUNT_DEFAULT,
   HALO_AMOUNT_DEFAULT,
+  TEMPORAL_QUALITY_PRESETS,
   type AtmosphereStageOptions
 } from '@cesium-geospatial/core'
 import { createSkyStage } from './SkyStage'
@@ -201,6 +202,15 @@ async function main(): Promise<void> {
       context as Parameters<typeof loadAtmosphereLUTs>[0],
       '/luts'
     )
+    // depthTemporal EMA 参数化（Task 12）：?temporalQuality=low|high 选 preset alpha，?depthThreshold=N
+    // 调阈值，?temporalEma=0 关闭 EMA（depthTemporal 走透传，回退 czm_readDepth 等效行为；HDR 时 stage 仍创建）。
+    // low（默认）=强平滑 0.05/0.5；high=弱平滑 0.1/0.8（快速操作减拖影）。
+    const temporalPreset =
+      getString('temporalQuality') === 'high'
+        ? TEMPORAL_QUALITY_PRESETS.high
+        : TEMPORAL_QUALITY_PRESETS.low
+    const temporalDepthThreshold = getNumber('depthThreshold')
+
     const options: AtmosphereStageOptions = {
       debugMode: getNumber('debug') ?? 0,
       // 动态曝光可 URL 微调（默认 day=1.2 / night=0.1 / twilight±6°，按相机当地太阳高度角自动）
@@ -222,7 +232,12 @@ async function main(): Promise<void> {
       // inscatter 放大（方案 B 远处白雾浓）：默认 25（用户验收固化），?inscatterScale=1 回退 phase1 物理量级
       ...(getNumber('inscatterScale') != null ? { inscatterScale: getNumber('inscatterScale')! } : {}),
       // dithering 强度倍率：默认 1.0=phase1；?ditherScale=N 放大 input+display dithering 打散 inscatterScale 放大 ACES 输入暴露的弧线波纹
-      ...(getNumber('ditherScale') != null ? { ditherScale: getNumber('ditherScale')! } : {})
+      ...(getNumber('ditherScale') != null ? { ditherScale: getNumber('ditherScale')! } : {}),
+      // depthTemporal EMA（Task 12）：默认 EMA 开 + low preset；?temporalEma=0 关闭，?temporalQuality=high 弱平滑
+      temporalEma: getString('temporalEma') !== '0',
+      temporalLowAlpha: temporalPreset.lowAlpha,
+      temporalHighAlpha: temporalPreset.highAlpha,
+      ...(temporalDepthThreshold != null ? { temporalDepthThreshold } : {})
     }
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =

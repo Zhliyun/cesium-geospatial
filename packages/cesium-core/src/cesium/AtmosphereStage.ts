@@ -82,6 +82,14 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   distanceScale?: number // 散射距离缩放（方案 A，1.0=phase1 物理，>1 中近距散射强，建议 1.0-3.0，超 3 需评估 half-float 灾消）
   inscatterScale?: number // inscatter 放大（方案 B 远处白雾浓，1.0=phase1 物理，>1 远处雾浓，直接 ×inscatter 可超物理饱和）
   ditherScale?: number // input+display dithering 强度倍率（1.0=phase1 默认；>1 更强打散 inscatterScale 放大 ACES 输入暴露的 banding，但噪声增）
+  // depthTemporal EMA 参数化（Task 12 URL ?temporalQuality=/?depthThreshold=/?temporalEma=）：
+  // temporalEma 默认 true（HDR 设备 EMA 消抖）；?temporalEma=0 → false（depthTemporal 走 enabled=false
+  //   透传 vec4(sceneColor, curLogDepth)，不 EMA；atmosphere 读 .a=raw log-depth 仍有效，回退 Task 9 前
+  //   czm_readDepth 等效行为）。HDR 时 stage 仍创建（透传），仅 UNSIGNED_BYTE 完全跳过 stage。
+  temporalEma?: boolean
+  temporalLowAlpha?: number // 静止强平滑 alpha（默认 LOW_ALPHA=0.05；?temporalQuality=high → 0.1 弱平滑减拖影）
+  temporalHighAlpha?: number // 移动偏 current alpha（默认 HIGH_ALPHA=0.5；?temporalQuality=high → 0.8）
+  temporalDepthThreshold?: number // log-depth 相对阈值（默认 DEPTH_THRESHOLD_DEFAULT=0.1，距离无关容差 ≈ 7% 距离变化）
 }
 
 // 校验后的完整 options。
@@ -102,6 +110,11 @@ export interface ResolvedAtmosphereStageOptions extends Required<AerialPerspecti
   distanceScale: number
   inscatterScale: number
   ditherScale: number
+  // depthTemporal temporal* resolved（Task 12）
+  temporalEma: boolean
+  temporalLowAlpha: number
+  temporalHighAlpha: number
+  temporalDepthThreshold: number
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
@@ -189,7 +202,12 @@ export function validateAtmosphereOptions(
     lensFlareHalo: options.lensFlareHalo ?? HALO_AMOUNT_DEFAULT,
     distanceScale: options.distanceScale ?? 1.0, // 默认 1.0 = phase1 行为零回归
     inscatterScale: options.inscatterScale ?? 25.0, // 用户验收远处白雾浓默认 25；URL ?inscatterScale=1 回退 phase1 物理量级
-    ditherScale: options.ditherScale ?? 1.0 // 默认 1.0 = phase1 dithering ±1.5/255 零回归
+    ditherScale: options.ditherScale ?? 1.0, // 默认 1.0 = phase1 dithering ±1.5/255 零回归
+    // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
+    temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
+    temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
+    temporalHighAlpha: options.temporalHighAlpha ?? HIGH_ALPHA,
+    temporalDepthThreshold: options.temporalDepthThreshold ?? DEPTH_THRESHOLD_DEFAULT
   }
 }
 
@@ -263,12 +281,13 @@ export function buildAtmosphereUniforms(
 export interface AtmosphereStageHandle {
   readonly atmosphereStage: PostProcessStage
   /**
-   * depthTemporal EMA stage（activeStages[0]，atmosphere 前）。UNSIGNED_BYTE 设备（无 float RT 能力）
-   * 或 disableHalfFloat 时 undefined——跳过 EMA，回退现状。Task 7 装配 + uniforms 接线 + sanity check；
-   * lifecycle（resize/postRender blit+swap/每帧 prevVP+alpha/首帧 clear）由 Task 8 接。
+   * depthTemporal EMA stage（activeStages[0]，atmosphere 前）。HDR 设备（postHdrDatatype !== UNSIGNED_BYTE）
+   * 时创建；UNSIGNED_BYTE / disableHalfFloat 时 undefined（无 float history RT，整个 stage 跳过）。
+   * temporalEma=false（?temporalEma=0）时 stage 仍创建走 enabled=false 透传（不 EMA，atmosphere 读
+   * .a=raw log-depth 仍有效）。Task 7 装配；Task 8 lifecycle；Task 12 参数化（temporalEma/alpha/threshold）。
    */
   readonly depthTemporalStage?: PostProcessStage
-  /** depthTemporal 是否启用（= postHdrDatatype !== UNSIGNED_BYTE）。false 时 depthTemporalStage undefined。 */
+  /** EMA 是否真正运行（= HDR 且 temporalEma option=true）。false 时 stage 可能仍存在（透传模式）。 */
   readonly temporalEmaEnabled: boolean
   /** phase2b LensFlare 外层 non-series composite（lensFlare=false 时 undefined）。 */
   readonly lensFlareStage?: PostProcessStageComposite
@@ -338,8 +357,17 @@ export function createAtmosphereStage(
 
   // depthTemporal EMA（Task 7）：复用 atmosphere 同套 HDR 检测。UNSIGNED_BYTE → 跳过（无 float history RT，
   // EMA 在 8-bit 量化 depth 上无意义且灾消），回退现状（仅 atmosphere → lensflare → tonomap）。
-  // 提前到 lensflare 前算：lensflare occlusion 需据 temporalEmaEnabled 决定 depthTexture 同源指向（Task 10）。
-  const temporalEmaEnabled = postHdrDatatype !== PixelDatatype.UNSIGNED_BYTE
+  //
+  // Task 12 参数化：拆分两个判定——
+  // - stageCreated：HDR 设备才创建 depthTemporal stage（UNSIGNED_BYTE 完全跳过，无 float history RT）。
+  // - temporalEmaEnabled：stage 创建且 temporalEma option=true 时 EMA 真正运行。控制 lensFlare occlusion
+  //   depth 源（temporalEmaEnabled 时同源 czm_depth_temporal smoothDepth.a；否则 scene globe depth）+ handle 标志。
+  // temporalEma=false（HDR）时 stage 仍创建走 enabled=false 透传（vec4(sceneColor, curLogDepth)），atmosphere
+  //   读 .a=raw log-depth 仍有效（Task 9 移除 czm_readDepth 依赖 depthTemporal 打包 .a；若 stage 不创建则
+  //   atmosphere 读 scene alpha 无意义）。passthrough .r=sceneColor 非 depth，故 lensFlare occlusion 此时
+  //   必须回退 scene globe depth（temporalEmaEnabled=false → undefined）。
+  const stageCreated = postHdrDatatype !== PixelDatatype.UNSIGNED_BYTE
+  const temporalEmaEnabled = stageCreated && resolved.temporalEma
 
   // phase2b LensFlare（spec §5.9）：外层 non-series composite，插在 atmosphere 与 tonomap 之间。
   // lensFlare=false → 不创建（phase2a 两 stage 行为，防回归）。
@@ -373,7 +401,7 @@ export function createAtmosphereStage(
   // VP=proj·view（proj 在前，与下方 L457-460 代码一致）；IDENTITY 是 Object.freeze 的 frozen
   // 共享常量（Core/Matrix4.js:3070），首帧 prevVP===IDENTITY 时 in-place mutate 在 strict mode fail-fast 抛错。
   let prevViewProjection = Matrix4.IDENTITY
-  let temporalAlpha = HIGH_ALPHA // 首帧偏 current（避免 history 未就绪时空值累积）
+  let temporalAlpha = resolved.temporalHighAlpha // 首帧偏 current（避免 history 未就绪时空值累积；Task 12 参数化）
   let removeSanityCheck: (() => void) | undefined
   // Task 8 lifecycle 状态：prev position/dir（运动门控 position+direction 双项）+ lifecycle listener
   // remove 函数。
@@ -382,7 +410,7 @@ export function createAtmosphereStage(
   let removeDtPreRender: (() => void) | undefined
   let removeDtPostRender: (() => void) | undefined
 
-  if (temporalEmaEnabled) {
+  if (stageCreated) {
     const context = (scene as unknown as { context: unknown }).context
     historyState = createHistoryState(
       context,
@@ -392,7 +420,9 @@ export function createAtmosphereStage(
     )
     depthTemporalStage = new PostProcessStage({
       name: 'czm_depth_temporal',
-      fragmentShader: buildDepthTemporalFragmentShader({ enabled: true }),
+      // enabled=resolved.temporalEma：true=EMA 消抖；false（?temporalEma=0）=透传 vec4(sceneColor, curLogDepth)，
+      // 不 EMA 但 atmosphere 仍读 .a=raw log-depth（Task 9 依赖）。HDR 时 stage 始终创建。
+      fragmentShader: buildDepthTemporalFragmentShader({ enabled: resolved.temporalEma }),
       pixelDatatype: postHdrDatatype, // float RT 承载 smoothDepth 精度（HALF_FLOAT/FLOAT）
       textureScale: 1.0, // 全分辨率（与 globe depth 1:1 像素对齐）
       sampleMode: PostProcessStageSampleMode.NEAREST, // 显式钉死：smoothDepth 打包进 .a，LINEAR 插值产无意义中间 depth → 污染 atmosphere sceneDist 反演（比 tonomap 只处理 color 更敏感）
@@ -401,7 +431,7 @@ export function createAtmosphereStage(
         u_historyTexture: () => (historyState ? getHistoryBridge(historyState) : null),
         u_prevViewProjection: () => prevViewProjection,
         u_temporalAlpha: () => temporalAlpha,
-        u_depthThreshold: DEPTH_THRESHOLD_DEFAULT, // 静态值（log-depth 相对阈值 0.1 ≈ 7% 距离变化容差）
+        u_depthThreshold: resolved.temporalDepthThreshold, // Task 12 参数化（默认 DEPTH_THRESHOLD_DEFAULT；?depthThreshold= 覆盖）
         u_debugMode: resolved.debugMode // 与 atmosphere 同源 debugMode（URL ?debug=8 触发 depthTemporal raw depth 输出）
       }
     })
@@ -475,8 +505,8 @@ export function createAtmosphereStage(
         maxDelta: cameraHeight * MAX_DELTA_K, // 高度归一化（1Mm→10km）
         positionDelta,
         directionDelta,
-        lowAlpha: LOW_ALPHA,
-        highAlpha: HIGH_ALPHA
+        lowAlpha: resolved.temporalLowAlpha, // Task 12 参数化（默认 LOW_ALPHA；?temporalQuality=high → 0.1）
+        highAlpha: resolved.temporalHighAlpha // Task 12 参数化（默认 HIGH_ALPHA；?temporalQuality=high → 0.8）
       })
       prevPositionWC = camera.positionWC.clone()
       prevDir = camera.directionWC.clone()
