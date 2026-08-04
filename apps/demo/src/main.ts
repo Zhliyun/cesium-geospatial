@@ -194,7 +194,9 @@ async function main(): Promise<void> {
       ...(getNumber('exposureDay') != null ? { exposureDay: getNumber('exposureDay')! } : {}),
       ...(getNumber('exposureNight') != null ? { exposureNight: getNumber('exposureNight')! } : {}),
       // 地面反射衰减（默认 0.5 压地面过曝；URL ?groundDim=N 微调，1.0=不衰减）
-      ...(getNumber('groundDim') != null ? { groundDim: getNumber('groundDim')! } : {})
+      ...(getNumber('groundDim') != null ? { groundDim: getNumber('groundDim')! } : {}),
+      // URL ?hdr=0 强制 RGBA8 兜底（跳过 HalfFloat 检测，用于在 HalfFloat 设备上对比验证兜底路径）
+      ...(getString('hdr') === '0' ? { disableHalfFloat: true } : {})
     }
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =

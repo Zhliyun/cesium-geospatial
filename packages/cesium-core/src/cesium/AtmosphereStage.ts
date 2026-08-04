@@ -47,6 +47,7 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   exposure?: number // 手动曝光（仅 exposureFollowTimeline=false 时生效）
   groundDim?: number // 地面反射衰减（finalColor=originalColor·trans·groundDim+inscatter，分离 exposure 压地面过曝，默认 0.5）
   debugMode?: number // u_debugMode
+  disableHalfFloat?: boolean // URL ?hdr=0 强制 UNSIGNED_BYTE 兜底调试（跳过 HalfFloat 能力检测）
 }
 
 // 校验后的完整 options。
@@ -242,7 +243,11 @@ export function createAtmosphereStage(
 
   // phase2a HDR 管线：一次性检测 atmosphere stage 中间 RT 可用的最高 HDR 像素类型。
   // HALF_FLOAT 优先（精度够 + 性能好），FLOAT 次选，UNSIGNED_BYTE 兜底。
-  const postHdrDatatype = resolvePostHdrDatatype(scene)
+  // options.disableHalfFloat=true 时跳过检测直接 UNSIGNED_BYTE（URL ?hdr=0 调试用：
+  // 在 HalfFloat 设备上对比验证兜底路径——线性 >1 段被 clip，tonemap debug=7 false-color 显示暗区）。
+  const postHdrDatatype = options.disableHalfFloat
+    ? PixelDatatype.UNSIGNED_BYTE
+    : resolvePostHdrDatatype(scene)
 
   // atmosphere stage：aerialPerspective fragment（Task 2 末端线性输出 finalColor·exposure）。
   // pixelDatatype=HalfFloat 带兜底让中间 RT 承载线性 >1 段，供链尾 tonemap ACES 压缩。
