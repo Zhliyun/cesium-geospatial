@@ -42,11 +42,31 @@ describe('buildTonemapFragmentShader（链尾 ToneMapping stage）', () => {
     expect(s).toContain('uniform sampler2D colorTexture')
     expect(s).toContain('uniform float u_debugMode')
   })
+
+  it('ACES 常数 + dithering 系数钉死（与 phase1 tonemapDisplay 一字不差）', () => {
+    const s = buildTonemapFragmentShader()
+    expect(s).toContain('const float a = 2.51;')
+    expect(s).toContain('const float b = 0.03;')
+    expect(s).toContain('const float c = 2.43;')
+    expect(s).toContain('const float d = 0.59;')
+    expect(s).toContain('const float e = 0.14;')
+    expect(s).toContain('52.9829189') // interleavedGradientNoise 系数
+    expect(s).toContain('vec2(0.06711056, 0.00583715)') // IGN 系数
+    expect(s).toContain('vec2(7.11, 5.17)') // display dithering offset
+  })
 })
 
 describe('TONEMAP_UNIFORM_NAMES', () => {
   it('仅 u_debugMode（colorTexture 是 Cesium 内建白名单）', () => {
     expect(TONEMAP_UNIFORM_NAMES).toEqual(['u_debugMode'])
+  })
+
+  it('TONEMAP_UNIFORM_NAMES 与 shader 声明的 uniform 一致（colorTexture 白名单）', () => {
+    const s = buildTonemapFragmentShader()
+    const declared = [...s.matchAll(/uniform\s+\w+\s+(\w+)\s*;/g)].map(m => m[1])
+    const whitelist = new Set(['colorTexture']) // Cesium 内建
+    const expected = declared.filter(n => !whitelist.has(n))
+    expect(TONEMAP_UNIFORM_NAMES).toEqual(expected)
   })
 })
 

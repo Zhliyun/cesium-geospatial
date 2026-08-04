@@ -13,6 +13,7 @@
 
 import {
   PostProcessStage,
+  PostProcessStageSampleMode,
   Cartesian3,
   Matrix3,
   Simon1994PlanetaryPositions,
@@ -260,12 +261,13 @@ export function createAtmosphereStage(
     })
   }
   // tonemap stage：链尾 ACES + gamma 1/2.2 + display triangular dithering → RGBA8 display。
-  // sampleMode 默认 NEAREST（Cesium 默认，勿改）——保护 atmosphere 的 input dithering 经 HDR RT 中转
-  // 逐像素直通；改 LINEAR 会插值抹掉 dither 噪声 → 水波纹回归。默认 RGBA8 兜底（display ready）。
+  // sampleMode 显式 NEAREST——保护 atmosphere 的 input dithering 经 HalfFloat RT 中转逐像素直通；
+  // 若上游默认值变更或改 LINEAR，会插值抹掉 dither 噪声 → 水波纹回归。默认 RGBA8 兜底（display ready）。
   function buildTonemapStage(): PostProcessStage {
     return new PostProcessStage({
       fragmentShader: buildTonemapFragmentShader(),
-      uniforms: { u_debugMode: resolved.debugMode } // 与 atmosphere 同源；setMode rebuild 同步
+      uniforms: { u_debugMode: resolved.debugMode }, // 与 atmosphere 同源；setMode rebuild 同步
+      sampleMode: PostProcessStageSampleMode.NEAREST // 显式钉死（防上游默认变更；保护 input dithering 经 RT 中转）
     })
   }
 
