@@ -172,7 +172,7 @@ export function validateAtmosphereOptions(
     lensFlareGhost: options.lensFlareGhost ?? GHOST_AMOUNT_DEFAULT,
     lensFlareHalo: options.lensFlareHalo ?? HALO_AMOUNT_DEFAULT,
     distanceScale: options.distanceScale ?? 1.0, // 默认 1.0 = phase1 行为零回归
-    inscatterScale: options.inscatterScale ?? 1.0 // 默认 1.0 = phase1 行为零回归（inscatter×1=inscatter）
+    inscatterScale: options.inscatterScale ?? 25.0 // 用户验收远处白雾浓默认 25；URL ?inscatterScale=1 回退 phase1 物理量级
   }
 }
 
