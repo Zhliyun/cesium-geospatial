@@ -60,4 +60,19 @@ declare module 'cesium' {
 
   // eslint-disable-next-line @typescript-eslint/no-empty-interface
   export interface Context {}
+
+  // DrawCommand（@cesium/engine Renderer 内部类，公开 .d.ts 缺失）。
+  // createViewportQuadCommand 返回此类型；depthTemporal blit / Task 8 lifecycle 用。
+  // 字段对应 DrawCommand 构造 opts + execute(context, options)。
+  export interface DrawCommand {
+    vertexArray?: unknown
+    primitiveType?: number
+    renderState?: unknown
+    shaderProgram?: unknown
+    uniformMap?: { [uniformName: string]: () => unknown }
+    framebuffer?: unknown
+    pass?: number
+    owner?: unknown
+    execute(context: Context, options?: { framebuffer?: unknown }): void
+  }
 }

@@ -6,6 +6,7 @@ import {
   swapHistory,
   getWriteTexture,
   sanityCheckOutputTexture,
+  buildBlitCommand,
 } from './historyBlit'
 
 // mock Cesium Texture（最小，匹配实际 Texture 构造签名：接收 opts 含 context/width/height/pixelFormat/pixelDatatype/sampler）
@@ -78,5 +79,45 @@ describe('historyBlit', () => {
   it('sanityCheckOutputTexture: undefined → false（启动 graceful degrade 触发）', () => {
     expect(sanityCheckOutputTexture(undefined)).toBe(false)
     expect(sanityCheckOutputTexture({} as any)).toBe(true)
+  })
+})
+
+// mock Context：仅 createViewportQuadCommand（fragmentShaderSource, overrides）→ 假 DrawCommand。
+// 不污染上面 vi.mock('cesium')（Task 3 的 Texture mock），单独内建最小 context 对象。
+function createMockContext(): any {
+  return {
+    createViewportQuadCommand: (fragmentShaderSource: string, overrides: any) => ({
+      // DrawCommand 形态：uniformMap 透传、shaderProgram.fragmentShaderSource 保留 shader 串。
+      // 注意：DrawCommand 本体无 shaderSource 属性（有 shaderProgram），故测试不断言 cmd.shaderSource。
+      uniformMap: overrides?.uniformMap,
+      shaderProgram: { fragmentShaderSource },
+      // 以下字段 Task 8 lifecycle 才设/用，本 task 只构造 cmd。
+      framebuffer: undefined,
+      execute: () => {},
+    }),
+  }
+}
+
+describe('buildBlitCommand', () => {
+  it('构造 createViewportQuadCommand：uniformMap.colorTexture 返回 src bridge + cmd defined', () => {
+    const ctx = createMockContext()
+    const src = { _texture: { id: 99 }, _target: 0x0de1 } as any // bridge 对象（Cesium createUniform 兼容）
+    const cmd = buildBlitCommand(ctx, src) as any
+    expect(cmd).toBeDefined()
+    // DrawCommand.uniformMap.colorTexture 是函数，调用返回 src bridge
+    expect(typeof cmd.uniformMap.colorTexture).toBe('function')
+    expect(cmd.uniformMap.colorTexture()).toBe(src)
+  })
+
+  it('两次调用 buildBlitCommand 各自捕获自己的 srcTexture（闭包隔离）', () => {
+    // 防止「uniformMap 共享同一 src」回归——每个 cmd 必须绑定自己的 srcTexture。
+    const ctx = createMockContext()
+    const srcA = { _texture: { id: 1 }, _target: 0x0de1 } as any
+    const srcB = { _texture: { id: 2 }, _target: 0x0de1 } as any
+    const cmdA = buildBlitCommand(ctx, srcA) as any
+    const cmdB = buildBlitCommand(ctx, srcB) as any
+    expect(cmdA.uniformMap.colorTexture()).toBe(srcA)
+    expect(cmdB.uniformMap.colorTexture()).toBe(srcB)
+    expect(cmdA.uniformMap.colorTexture()).not.toBe(srcB)
   })
 })

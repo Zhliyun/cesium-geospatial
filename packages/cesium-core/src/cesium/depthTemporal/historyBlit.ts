@@ -17,6 +17,7 @@ import {
   TextureWrap,
   defined,
 } from 'cesium'
+import type { Context, DrawCommand } from 'cesium'
 
 export interface HistoryState {
   textures: Texture[]
@@ -86,4 +87,50 @@ export function getHistoryBridge(state: HistoryState): { _texture: unknown; _tar
 // adapter：outputTexture getter 判空（评审 minor，PostProcessStage.outputTexture 可返 undefined）
 export function sanityCheckOutputTexture(tex: unknown): boolean {
   return defined(tex)
+}
+
+// blit shader：透传 vec4（rgb=scene color, a=smoothDepth）到 history framebuffer。
+// raw DrawCommand（不经 PostProcessStage），用 Cesium createViewportQuadCommand 管理状态。
+//
+// #version 查证结论：Cesium ShaderSource 预处理（Renderer/ShaderSource.js:300）在 WebGL2 上下文
+// 自动注入 `#version 300 es`；fragment shader 自动注入 precision（同文件 :233-242）；使用 out_FragColor
+// 但未声明时自动注入 `layout(location = 0) out vec4 out_FragColor;`（:281-291）。
+// 故此处不写 #version / precision / out 声明，与 @cesium/engine 内置 PassThrough.glsl
+// （createViewportQuadCommand 的既有用例）形态完全一致。
+const BLIT_SHADER = `uniform sampler2D colorTexture;
+in vec2 v_textureCoordinates;
+void main() {
+  out_FragColor = texture(colorTexture, v_textureCoordinates);
+}
+`
+
+// 构造透传 blit DrawCommand：把 srcTexture（scene color + smoothDepth 打包 RGBA）透传到 history framebuffer。
+//
+// Cesium Context.createViewportQuadCommand（@cesium/engine Source/Renderer/Context.js:1619）：
+//   createViewportQuadCommand(fragmentShaderSource, overrides) → DrawCommand
+//   自带 viewport quad vertexArray（ViewportQuadVS.glsl）+ TRIANGLES + ShaderProgram.fromCache +
+//   传入的 uniformMap。framebuffer 可在 overrides 设或后续 cmd.framebuffer = ... 后设。
+//
+// 本函数只构造 cmd（uniformMap.colorTexture 闭包绑定 srcTexture）。framebuffer 由调用方
+// （Task 8 lifecycle）后设并 execute：cmd.framebuffer = historyFBO; cmd.execute(context)。
+//
+// srcTexture: unknown —— depthTemporal.outputTexture（Task 8 决定是 Texture 还是 bridge 对象，
+// 类型待定）。Cesium createUniform.js 读 _target / _texture 把 Cesium.Texture 包成 raw GL sampler
+// 兼容对象（与 UniformSampler.set() 一致），故 bridge 与 Texture 均可。
+export function buildBlitCommand(context: Context, srcTexture: unknown): DrawCommand {
+  const cmd = (
+    context as unknown as {
+      createViewportQuadCommand: (
+        fragmentShaderSource: string,
+        overrides: {
+          uniformMap: { colorTexture: () => unknown }
+        },
+      ) => DrawCommand
+    }
+  ).createViewportQuadCommand(BLIT_SHADER, {
+    uniformMap: {
+      colorTexture: () => srcTexture,
+    },
+  })
+  return cmd
 }
