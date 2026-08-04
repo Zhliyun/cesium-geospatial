@@ -51,7 +51,8 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'u_debugMode',
   'u_groundDim',
   'cosSunAngularRadius',
-  'u_distanceScale'
+  'u_distanceScale',
+  'u_inscatterScale'
 ]
 
 // Cesium PostProcessStage 内建纹理 uniform——必须由 shader 显式声明（Cesium 仅提供 uniform 值，
@@ -81,6 +82,7 @@ uniform float exposure;
 uniform float u_debugMode;
 uniform float u_groundDim;
 uniform float u_distanceScale;  // 散射距离缩放（方案 A，等效空气密度倍率；1.0=phase1 物理，>1 中近距散射强）
+uniform float u_inscatterScale;  // inscatter 放大（方案 B 远处白雾浓；1.0=phase1 物理，>1 远处雾浓，可超物理饱和）
 `
 
 // [SKY && SUN] cos(SUN_ANGULAR_RADIUS)，SUN 日盘角半径阈值。
@@ -424,7 +426,7 @@ ${skyBranch}  }
       inscatter = mix(inscatter, foreInscatter, mask);
     }
   }
-  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter;
+  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale;
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——

@@ -15,9 +15,17 @@ const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
 ]
 
 describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds-atmosphere）', () => {
-  it('B 路径合成：originalColor·transmittance + inscatter', () => {
+  it('B 路径合成：originalColor·transmittance + inscatter·u_inscatterScale（方案 B 远处白雾浓）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter')
+    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale')
+  })
+
+  it('u_inscatterScale uniform 声明 + 默认合成（方案 B，默认 1.0=phase1 物理，>1 远处白雾浓）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    // uniform 声明（FRAME_UNIFORMS_GLSL）
+    expect(s).toContain('uniform float u_inscatterScale')
+    // finalColor 合成 inscatter × u_inscatterScale（DUAL 合成后总 inscatter，ground+sky 分支都 scale）
+    expect(s).toContain('inscatter * u_inscatterScale')
   })
 
   it('末端输出线性 finalColor·exposure（不再内联 ACES，由链尾 tonemap stage 收尾）', () => {

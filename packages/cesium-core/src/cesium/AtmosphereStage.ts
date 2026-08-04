@@ -66,6 +66,7 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   lensFlareGhost?: number // ghost 总强度（默认 GHOST_AMOUNT_DEFAULT）
   lensFlareHalo?: number // halo 总强度（默认 HALO_AMOUNT_DEFAULT）
   distanceScale?: number // 散射距离缩放（方案 A，1.0=phase1 物理，>1 中近距散射强，建议 1.0-3.0，超 3 需评估 half-float 灾消）
+  inscatterScale?: number // inscatter 放大（方案 B 远处白雾浓，1.0=phase1 物理，>1 远处雾浓，直接 ×inscatter 可超物理饱和）
 }
 
 // 校验后的完整 options。
@@ -84,6 +85,7 @@ export interface ResolvedAtmosphereStageOptions extends Required<AerialPerspecti
   lensFlareGhost: number
   lensFlareHalo: number
   distanceScale: number
+  inscatterScale: number
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
@@ -169,7 +171,8 @@ export function validateAtmosphereOptions(
     lensFlareThreshold: options.lensFlareThreshold ?? THRESHOLD_LEVEL_DEFAULT,
     lensFlareGhost: options.lensFlareGhost ?? GHOST_AMOUNT_DEFAULT,
     lensFlareHalo: options.lensFlareHalo ?? HALO_AMOUNT_DEFAULT,
-    distanceScale: options.distanceScale ?? 1.0 // 默认 1.0 = phase1 行为零回归
+    distanceScale: options.distanceScale ?? 1.0, // 默认 1.0 = phase1 行为零回归
+    inscatterScale: options.inscatterScale ?? 1.0 // 默认 1.0 = phase1 行为零回归（inscatter×1=inscatter）
   }
 }
 
@@ -233,6 +236,7 @@ export function buildAtmosphereUniforms(
     u_debugMode: options.debugMode,
     u_groundDim: options.groundDim,
     u_distanceScale: options.distanceScale,
+    u_inscatterScale: options.inscatterScale,
     cosSunAngularRadius: Math.cos(SUN_ANGULAR_RADIUS)
   }
 }
