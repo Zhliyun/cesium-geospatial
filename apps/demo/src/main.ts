@@ -207,7 +207,11 @@ async function main(): Promise<void> {
       lensFlareIntensity: getNumber('lfIntensity') ?? INTENSITY_DEFAULT,
       lensFlareThreshold: getNumber('lfThreshold') ?? THRESHOLD_LEVEL_DEFAULT,
       lensFlareGhost: getNumber('lfGhost') ?? GHOST_AMOUNT_DEFAULT,
-      lensFlareHalo: getNumber('lfHalo') ?? HALO_AMOUNT_DEFAULT
+      lensFlareHalo: getNumber('lfHalo') ?? HALO_AMOUNT_DEFAULT,
+      // 散射距离缩放（方案 A，等效空气密度倍率）：默认 1.0=phase1 物理，?distanceScale=N 中近距散射增强
+      ...(getNumber('distanceScale') != null ? { distanceScale: getNumber('distanceScale')! } : {}),
+      // inscatter 放大（方案 B 远处白雾浓）：默认 25（用户验收固化），?inscatterScale=1 回退 phase1 物理量级
+      ...(getNumber('inscatterScale') != null ? { inscatterScale: getNumber('inscatterScale')! } : {})
     }
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =

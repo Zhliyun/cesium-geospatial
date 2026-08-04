@@ -15,9 +15,17 @@ const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
 ]
 
 describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds-atmosphere）', () => {
-  it('B 路径合成：originalColor·transmittance + inscatter', () => {
+  it('B 路径合成：originalColor·transmittance + inscatter·u_inscatterScale（方案 B 远处白雾浓）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter')
+    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale')
+  })
+
+  it('u_inscatterScale uniform 声明 + 默认合成（方案 B，默认 1.0=phase1 物理，>1 远处白雾浓）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    // uniform 声明（FRAME_UNIFORMS_GLSL）
+    expect(s).toContain('uniform float u_inscatterScale')
+    // finalColor 合成 inscatter × u_inscatterScale（DUAL 合成后总 inscatter，ground+sky 分支都 scale）
+    expect(s).toContain('inscatter * u_inscatterScale')
   })
 
   it('末端输出线性 finalColor·exposure（不再内联 ACES，由链尾 tonemap stage 收尾）', () => {
@@ -90,6 +98,24 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     const s = buildAerialPerspectiveFragmentShader({})
     expect(s).toContain('czm_windowToEyeCoordinates')
     expect(s).toContain('reconstructRay(')
+  })
+
+  it('u_distanceScale 散射距离缩放 wrapper（方案 A）：默认含 GetSkyRadianceToPointScaled + uniform 声明 + d 缩放', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    // wrapper 函数已注入
+    expect(s).toContain('GetSkyRadianceToPointScaled')
+    // uniform 声明（FRAME_UNIFORMS_GLSL）
+    expect(s).toContain('uniform float u_distanceScale')
+    // wrapper 内 d = length(point - camera) * u_distanceScale（散射距离缩放，等效空气密度倍率）
+    expect(s).toContain('length(point - camera) * u_distanceScale')
+    // 地面基线 + foreInscatter 都走 wrapper（不再直调原 GetSkyRadianceToPoint）
+    expect(s).toContain('GetSkyRadianceToPointScaled(')
+    // 天空基线 getSkyRadiance 不缩放（距离到大气顶物理正确，不消费 distanceScale）
+    expect(s).toContain('getSkyRadiance(')
+    // 原始 GetSkyRadianceToPoint 直调在 main 内已替换为 wrapper（注释/定义除外：wrapper 定义是 Scaled 后缀）
+    // main 内 main() 体不应再有未带 Scaled 的 GetSkyRadianceToPoint( 调用
+    const mainBody = s.slice(s.indexOf('void main()'))
+    expect(mainBody).not.toContain('= GetSkyRadianceToPoint(')
   })
 })
 

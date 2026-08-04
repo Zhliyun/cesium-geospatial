@@ -122,6 +122,8 @@ describe('validateAtmosphereOptions', () => {
       exposure: 1.5,
       groundDim: 0.5,
       debugMode: 0,
+      distanceScale: 1.0,
+      inscatterScale: 25.0,
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
