@@ -340,6 +340,8 @@ export function createAtmosphereStage(
   // pixelDatatype=HalfFloat 带兜底让中间 RT 承载线性 >1 段，供链尾 tonemap ACES 压缩。
   function buildAtmosphereStage(): PostProcessStage {
     return new PostProcessStage({
+      // 语义名：demo ?profile=1 逐 stage GPU 计时 JSON 输出键用（否则显示位置名 stageN）。
+      name: 'atmosphere',
       // Bug3 暂时禁用（hdrDepthTemporal: false）：EMA reproject 错误（专家3 C3，raw worldPos 抖 → prevUV 抖 →
       // history 采错 → smoothLogDepth 错乱 → debug=5 地球切割 + 水波纹未消）。?temporalEma=0 验证：切割消失，
       // 水波纹仍在（=波纹非时序抖，EMA 整个 temporal 路线无效）。回退 raw depth（UNSIGNED_BYTE 变体 +
@@ -355,6 +357,7 @@ export function createAtmosphereStage(
   // 若上游默认值变更或改 LINEAR，会插值抹掉 dither 噪声 → 水波纹回归。默认 RGBA8 兜底（display ready）。
   function buildTonemapStage(): PostProcessStage {
     return new PostProcessStage({
+      name: 'tonemap', // 语义名：demo ?profile=1 计时输出键用
       fragmentShader: buildTonemapFragmentShader(),
       uniforms: { u_debugMode: resolved.debugMode, u_ditherScale: resolved.ditherScale }, // 与 atmosphere 同源；setMode rebuild 同步
       sampleMode: PostProcessStageSampleMode.NEAREST // 显式钉死（防上游默认变更；保护 input dithering 经 RT 中转）

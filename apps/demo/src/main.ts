@@ -266,12 +266,26 @@ async function main(): Promise<void> {
         }
         const stages = scene.postProcessStages
         const wrapped: Array<{ name: string }> = []
+        // 评审 Critical：PostProcessStageComposite 没有 execute 方法（集合内部对 composite 递归逐子
+        // stage 调 execute），直接 st.execute.bind 会在 lensflare composite 上抛 TypeError。
+        // 有 execute → 包之；否则有 stages → 递归包子 stage（lensflare 内嵌套 bloomComposite 也是
+        // composite，递归到底）。子 stage 顺序执行互不嵌套，不违反 TIME_ELAPSED 单活跃 query 约束，
+        // 且得到逐子 stage 计时（lf_threshold/lf_down*/lf_up*/lf_preBlur/lf_occlusion/lf_features/
+        // lf_composite）——Task 7 需要的粒度。
+        const wrapStage = (st: { name?: string; execute?: unknown; stages?: unknown[] }): void => {
+          if (typeof st.execute === 'function') {
+            const name = st.name ?? 'unnamed'
+            const orig = (st.execute as (...a: unknown[]) => void).bind(st)
+            ;(st as { execute: unknown }).execute = timer.wrap(name, orig as (...a: unknown[]) => void)
+            wrapped.push({ name })
+          } else if (Array.isArray(st.stages)) {
+            for (const sub of st.stages) {
+              wrapStage(sub as { name?: string; execute?: unknown; stages?: unknown[] })
+            }
+          }
+        }
         for (let i = 0; i < stages.length; i++) {
-          const st = stages.get(i) as unknown as { name?: string; execute: (...a: unknown[]) => void }
-          const name = st.name ?? `stage${i}`
-          const orig = st.execute.bind(st)
-          st.execute = timer.wrap(name, orig as (...a: unknown[]) => void) as typeof st.execute
-          wrapped.push({ name })
+          wrapStage(stages.get(i) as unknown as { name?: string; execute?: unknown; stages?: unknown[] })
         }
         // blit 计时归入 depthTemporal（评审 M7）
         atmosphereHandle.setBlitTimerHook(fn => {

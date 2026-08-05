@@ -84,12 +84,15 @@ export class StageGpuTimer {
     this.activeQuery = null
   }
 
-  /** 包装一个可执行函数为 begin→fn→end。 */
+  /** 包装一个可执行函数为 begin→fn→end。try/finally 保证 fn throw 时 end 仍执行（activeQuery 不卡住）。 */
   wrap<T extends unknown[]>(name: string, fn: (...args: T) => void): (...args: T) => void {
     return (...args: T) => {
       this.begin(name)
-      fn(...args)
-      this.end(name)
+      try {
+        fn(...args)
+      } finally {
+        this.end(name)
+      }
     }
   }
 
