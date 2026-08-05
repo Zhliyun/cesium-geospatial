@@ -413,13 +413,9 @@ void main() {
   // —— DUAL inscatter：平滑基线 + depth 前景雾，mask 过渡带终点在地平线 → 分界线与地平线重合 ——
   // baseInscatter（平滑、不读 depth → 无掠射条纹）：地面→椭球面 tHitG，天空→getSkyRadiance。
   // foreInscatter（depth 真实距离 sceneDist → 山体不透明、前景雾正确）：hasScene 且 mask>0 时叠加。
-  // mask = smoothstep(horizonKm, CLOSE_KM, sceneDist)：近=1（depth）、地平线 sceneDist≈horizonKm → mask=0（基线）。
-  // horizonKm = 相机到椭球面切线距离（随高度自适应 √(camR²-bottomR²)）→ 过渡带终点在地平线，分界线与地平线
-  // 重合。wide band → 渐变无硬弧。曾试 mask 用 tHitG 消除地平线轮廓残余闪动，但 tHitG>sceneDist → ground 过早
-  // 全基线 → 分界线内移、闪动更明显，已回退用 sceneDist（残余小幅闪动为可接受代价）。
+  // Bug5：mask 改用正向窄过渡 smoothstep(CLOSE_KM*2, CLOSE_KM, sceneDist)（原 horizonKm 反向已弃，详见 Bug5 注释）。
   const float CLOSE_KM = 20.0;
-  float horizonKm = sqrt(max(0.0, camR * camR - bottomR * bottomR));
-  // 椭球面交点 tHitG（ground 基线距离 + mask 距离用）。
+  // 椭球面交点 tHitG（ground 基线距离用）。
   float tHitG = -1.0;
   if (discG > 0.0) {
     float sG = sqrt(discG);
@@ -471,13 +467,6 @@ ${skyBranch}  }
   //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
   // 归一化验证 HDR 承载 >1（spec §5.2/§6.3）。曾因降序级联无统一上限，debug=7 被 >4.5 分支截断输出
   // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。
-  // 临时诊断（Bug5 等高线阶梯）：debug=9 sceneDist 归一化可视化。R=sceneDist/200km，G=fore mask，B=hasScene。
-  // 定位阶梯是 sceneDist 量化（同心圆环 R 分层）还是 mask/hasScene 边界（G/B 翻转）。
-  if (u_debugMode > 8.5) {
-    float maskDbg = hasScene ? smoothstep(horizonKm, CLOSE_KM, sceneDist) : 0.0;
-    out_FragColor = vec4(sceneDist / 200000.0, maskDbg, hasScene ? 1.0 : 0.0, 1.0);
-    return;
-  }
   if (u_debugMode < 6.5) {
     if (u_debugMode > 5.5) {
       out_FragColor = originalColor;
