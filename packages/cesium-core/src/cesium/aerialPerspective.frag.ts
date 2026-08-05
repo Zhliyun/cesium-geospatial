@@ -73,7 +73,7 @@ uniform sampler2D irradiance_texture;
 `
 
 // 每帧 uniform（命名对齐源仓库）。altitudeCorrection 单位米（shader 内 *METER_TO_LENGTH_UNIT 转 km）。
-// u_debugMode：0=正常 1=log(1+finalColor) 2=太阳方向 3=相机 r 量级 5=smoothDepth（log-depth EMA）/r 6=透传 inputColor 7=线性输出（HDR 链验证，由 tonemap 归一化）。
+// u_debugMode：0=正常 1=log(1+finalColor) 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor 7=线性输出（HDR 链验证，由 tonemap 归一化）。
 // u_groundDim：地面反射衰减（分离 exposure——exposure 管 inscatter/天空，groundDim 单独压地面过曝）。
 const FRAME_UNIFORMS_GLSL = `
 uniform vec3 sunDirection;
@@ -307,8 +307,8 @@ function buildMainFn(o: ResolvedOptions): string {
     inscatter = getSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, fragmentAngle, transmittance);
 `
     : `
-    finalColor = originalColor;
-    out_FragColor = vec4(finalColor * exposure, 1.0);  // 线性，链尾 tonemap 收尾
+    finalColor = originalColor.rgb;
+    out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性，链尾 tonemap 收尾
     return;
 `
 
@@ -316,16 +316,15 @@ function buildMainFn(o: ResolvedOptions): string {
 in vec2 v_textureCoordinates;
 
 void main() {
-  // Task 9：originalColor 读 .rgb（vec3）；colorTexture.a 是 depthTemporal 输出的 smoothDepth
-  //（raw log-depth EMA 后），供下方 sceneDist 反演用。不再 .rgba（alpha 不再是 scene color）。
-  vec3 originalColor = texture(colorTexture, v_textureCoordinates).rgb;
+  vec4 originalColor = texture(colorTexture, v_textureCoordinates);
   // input dithering：8-bit originalColor 是 ACES banding 的源头（ACES 中间调放大 2-3 倍 → 远处渐变
   // 「水波纹」）。在源头加 triangular 噪声 ±0.5 LSB，经 ACES+gamma 映射到 display 自然打散阶梯
   //（比纯 display 空间 dithering 更高效——display dithering 只盖 output 量化，盖不住被 ACES 放大的
   // input 阶梯）。
   float inDither = interleavedGradientNoise(gl_FragCoord.xy)
     + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
-  originalColor += inDither * 1.5 / 255.0;
+  originalColor.rgb += inDither * 1.5 / 255.0;
+  float depth = czm_readDepth(depthTexture, v_textureCoordinates);
 
   // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
   // 都用全量 altitudeCorrection，保证在同一密切球局部系（Bruneton 模型前提）。
@@ -337,29 +336,26 @@ void main() {
   float topR = ATMOSPHERE.top_radius;
   float camR = length(cameraPosition);
 
-  // —— smoothDepth 反演：为近处地形（含地平线上方山峰）提供真实 sceneDist，算前景雾、保持山体不透明。
-  // **不参与 sky/ground 主分类**——分类用 lookingAtGround（平滑），避免 depthTexture 不抗锯齿在掠射地平线
-  // 处逐像素硬翻转的条纹。hasScene/sceneDist 只在 foreInscatter（近处 mask>0）被消费；远处/掠射 sceneDist
-  // 大 → mask=0 不读它 → 无条纹。Task 9：smoothDepth 来自 depthTemporal stage（colorTexture.a，
-  // raw log-depth EMA 后），替代旧的单点 depth 读取——EMA 抑制亚像素 flicker，2-arg
-  // czm_windowToEyeCoordinates 走 LOG_DEPTH 分支直接反演 log-depth（精度优于 4-arg + reverseLogDepth 两步）。
-  float smoothDepth = texture(colorTexture, v_textureCoordinates).a;
+  // —— depth 反演：为近处地形（含地平线上方山峰）提供真实 sceneDist，算前景雾、保持山体不透明。**不参与
+  // sky/ground 主分类**——分类用 lookingAtGround（平滑），避免 depthTexture 不抗锯齿在掠射地平线处逐像素
+  // 硬翻转的条纹。hasScene/sceneDist 只在 foreInscatter（近处 mask>0）被消费；远处/掠射 sceneDist 大
+  // → mask=0 不读它 → 无条纹。
   bool hasScene = false;
   float sceneDist = 0.0;
-  if (smoothDepth < 1.0 - 1e-4) {  // 远平面/未加载 depth≈1 排除
-    // 2-arg czm_windowToEyeCoordinates（LOG_DEPTH 分支，接收 log-depth，返回 .xyz 真眼坐标，禁 /=w）。
-    vec4 eyePos = czm_windowToEyeCoordinates(vec2(gl_FragCoord.xy), smoothDepth);
-    if (eyePos.z < -1e-4) {
-      vec4 worldPos4 = czm_inverseView * vec4(eyePos.xyz, 1.0);
-      // atmosphere 这里用 altitudeCorrection/METER_TO_LENGTH_UNIT（Bruneton 密切球 km 系，
-      // sceneDist 喂 GetSkyRadianceToPoint）——与 depthTemporal reproject（纯 ECEF 米）不同！
-      vec3 sceneWorldPosKm = worldPos4.xyz * METER_TO_LENGTH_UNIT
-        + altitudeCorrection * METER_TO_LENGTH_UNIT;
-      float sceneR = length(sceneWorldPosKm);
-      // 反演点在大气层内（容 5km 反演误差）= 真实地形；far plane 反演点 r 巨大被排除。
-      if (sceneR < topR + 5.0 && sceneR > bottomR - 5.0) {
-        hasScene = true;
-        sceneDist = length(sceneWorldPosKm - cameraPosition);
+  if (depth < 1.0) {
+    vec4 eyePos = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depth, 1.0));
+    if (abs(eyePos.w) > 1e-6) {
+      eyePos /= eyePos.w;
+      if (eyePos.z < -1e-4) {
+        vec4 worldPos4 = czm_inverseView * eyePos;
+        vec3 sceneWorldPosKm = worldPos4.xyz * METER_TO_LENGTH_UNIT
+          + altitudeCorrection * METER_TO_LENGTH_UNIT;
+        float sceneR = length(sceneWorldPosKm);
+        // 反演点在大气层内（容 5km 反演误差）= 真实地形；far plane 反演点 r 巨大被排除。
+        if (sceneR < topR + 5.0 && sceneR > bottomR - 5.0) {
+          hasScene = true;
+          sceneDist = length(sceneWorldPosKm - cameraPosition);
+        }
       }
     }
   }
@@ -383,8 +379,7 @@ void main() {
   // —— DUAL inscatter：平滑基线 + depth 前景雾，mask 过渡带终点在地平线 → 分界线与地平线重合 ——
   // baseInscatter（平滑、不读 depth → 无掠射条纹）：地面→椭球面 tHitG，天空→getSkyRadiance。
   // foreInscatter（depth 真实距离 sceneDist → 山体不透明、前景雾正确）：hasScene 且 mask>0 时叠加。
-  // mask = 1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist)：近 sceneDist<CLOSE_KM → mask=1（depth 前景雾）、
-  // 地平线 sceneDist≈horizonKm → mask=0（基线）。edge0=CLOSE_KM < edge1=horizonKm（无 GLSL UB）。
+  // mask = smoothstep(horizonKm, CLOSE_KM, sceneDist)：近=1（depth）、地平线 sceneDist≈horizonKm → mask=0（基线）。
   // horizonKm = 相机到椭球面切线距离（随高度自适应 √(camR²-bottomR²)）→ 过渡带终点在地平线，分界线与地平线
   // 重合。wide band → 渐变无硬弧。曾试 mask 用 tHitG 消除地平线轮廓残余闪动，但 tHitG>sceneDist → ground 过早
   // 全基线 → 分界线内移、闪动更明显，已回退用 sceneDist（残余小幅闪动为可接受代价）。
@@ -416,7 +411,7 @@ ${skyBranch}  }
   // 近处地形按 mask 叠加 depth 前景雾 → 山体不透明。mask 用 sceneDist，地平线处 mask=0 走基线（分界线与地平线
   // 重合）。mask>0 才算 foreInscatter（远处省 LUT）。
   if (hasScene) {
-    float mask = 1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist);
+    float mask = smoothstep(horizonKm, CLOSE_KM, sceneDist);
     if (mask > 0.0) {
       vec3 scenePosKm = cameraPosition + rayDirection * sceneDist;
       vec3 foreTrans;
@@ -431,9 +426,9 @@ ${skyBranch}  }
       inscatter = mix(inscatter, foreInscatter, mask);
     }
   }
-  finalColor = originalColor * transmittance * u_groundDim + inscatter * u_inscatterScale;
+  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale;
 
-  // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=smoothDepth/r 6=透传 inputColor；
+  // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——
   // 整个级联被 if (u_debugMode < 6.5) 包裹：debug=7（>6.5）跳过所有可视化分支，直接落到末端线性输出
   //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
@@ -441,15 +436,11 @@ ${skyBranch}  }
   // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。
   if (u_debugMode < 6.5) {
     if (u_debugMode > 5.5) {
-      out_FragColor = vec4(originalColor, 1.0);
+      out_FragColor = originalColor;
       return;
     }
     if (u_debugMode > 4.5) {
-      // Task 9：depth 变量已移除，debug=5 改可视化 smoothDepth（depthTemporal EMA 后的 raw log-depth）。
-      // **值分布从 Task 9 前 window-depth [0,1] linear 变为 log-depth（远密集近稀疏），画面外观与 Task 9 前不可直接对比**：
-      // 远处地形 log-depth 仍接近 1（与 window-depth 远处接近 1 相似），近处 log-depth 向 0 散开但分布密度不同
-      // （log-depth 近处拉伸、远处压缩），故近处比 Task 9 前 window-depth 更亮、远处梯度更陡。
-      out_FragColor = vec4(smoothDepth, 0.0, length(cameraPosition) / 6420.0, 1.0);
+      out_FragColor = vec4(depth, 0.0, length(cameraPosition) / 6420.0, 1.0);
       return;
     }
     if (u_debugMode > 2.5) {
@@ -468,7 +459,7 @@ ${skyBranch}  }
     }
   }
 
-  out_FragColor = vec4(finalColor * exposure, 1.0);  // 线性 HDR，由链尾 tonemap stage 收尾
+  out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性 HDR，由链尾 tonemap stage 收尾
 }
 `
 }
@@ -486,10 +477,6 @@ export function buildAerialPerspectiveFragmentShader(
   }
 
   const defines: string[] = ['#define GROUND'] // runtime RayIntersectsGround 用
-  // Task 9：LOG_DEPTH 让 2-arg czm_windowToEyeCoordinates(vec2, float) 走 LOG_DEPTH 分支
-  //（接收 raw log-depth，返回 .xyz 真眼坐标，.w=1/depthFromCamera 非透视 w）。
-  // 4-arg czm_windowToEyeCoordinates(vec4)（reconstructRay 用）不经 LOG_DEPTH 分支，行为不变。
-  defines.push('#define LOG_DEPTH')
   if (o.sun) defines.push('#define SUN')
   if (o.sky) defines.push('#define SKY')
 
@@ -519,14 +506,13 @@ export function buildAerialPerspectiveFragmentShader(
 
 // 供 Task 8 glslang 独立校验：补 #version 300 es + precision + Cesium 自动注入符号的桩。
 // colorTexture/depthTexture 在主体 POST_PROCESS_TEXTURES_GLSL 声明；此处补 czm_* automatic uniform
-// 桩 + czm_windowToEyeCoordinates 函数桩（4-arg reconstructRay 用 + 2-arg sceneDist LOG_DEPTH 用）
-// + out_FragColor 桩。Task 9 移除 czm_readDepth 桩（atmosphere 改读 colorTexture.a smoothDepth）。
+// 桩 + czm_readDepth/czm_windowToEyeCoordinates 函数桩 + out_FragColor 桩。
 const VALIDATION_STUBS_GLSL = `
 uniform mat4 czm_inverseView;
 uniform mat4 czm_inverseProjection;
 uniform vec3 czm_viewerPositionWC;
-vec4 czm_windowToEyeCoordinates(vec4 p) { return p; }                      // 4-arg（reconstructRay 用）
-vec4 czm_windowToEyeCoordinates(vec2 xy, float d) { return vec4(xy, -1.0, 1.0); }  // 2-arg LOG_DEPTH（sceneDist 用）
+vec4 czm_windowToEyeCoordinates(vec4 p) { return p; }
+float czm_readDepth(sampler2D t, vec2 uv) { return 0.5; }
 out vec4 out_FragColor;
 `
 

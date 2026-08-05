@@ -5,7 +5,6 @@ import {
   buildStandaloneShaderForValidation,
   type AerialPerspectiveFragOptions
 } from './aerialPerspective.frag'
-import { compileFragment } from './glslangUtil'
 
 // B 路径宏组合（sun/sky 开关）
 const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
@@ -18,7 +17,7 @@ const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
 describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds-atmosphere）', () => {
   it('B 路径合成：originalColor·transmittance + inscatter·u_inscatterScale（方案 B 远处白雾浓）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('originalColor * transmittance * u_groundDim + inscatter * u_inscatterScale')
+    expect(s).toContain('originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale')
   })
 
   it('u_inscatterScale uniform 声明 + 默认合成（方案 B，默认 1.0=phase1 物理，>1 远处白雾浓）', () => {
@@ -31,15 +30,15 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
 
   it('末端输出线性 finalColor·exposure（不再内联 ACES，由链尾 tonemap stage 收尾）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
-    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, 1.0)')
+    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, originalColor.a)')
     expect(s).not.toContain('tonemapDisplay(')
     expect(s).not.toContain('ACESFilmic(')
   })
 
   it('sky=false 分支也线性输出（否则 tonemapDisplay 移除后编译失败）', () => {
     const s = buildAerialPerspectiveFragmentShader({ sky: false })
-    expect(s).toContain('finalColor = originalColor;')
-    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, 1.0)')
+    expect(s).toContain('finalColor = originalColor.rgb')
+    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, originalColor.a)')
     expect(s).not.toContain('tonemapDisplay(')
   })
 
@@ -56,7 +55,7 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     // debug=6 分支不再单独带 < 6.5 上限（已被外层包裹，单分支上限是旧方案 A 残留）
     expect(s).not.toContain('u_debugMode > 5.5 && u_debugMode < 6.5')
     // 末端线性输出存在（debug=7 落点：finalColor*exposure，>1 原样写 HalfFloat）
-    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, 1.0)')
+    expect(s).toContain('out_FragColor = vec4(finalColor * exposure, originalColor.a)')
   })
 
   it('不含 A 路径残留（法线/lighting/几何误差校正/反伽马）', () => {
@@ -90,8 +89,7 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).toContain('muLook')
     // depth 反演出 hasScene/sceneDist，仅山峰分支（!lookingAtGround）消费；地平线分类不读 depth
     expect(s).toContain('hasScene')
-    // Task 9：depth 来自 depthTemporal smoothDepth（colorTexture.a），不再单点 czm_readDepth
-    expect(s).not.toContain('czm_readDepth(')
+    expect(s).toContain('czm_readDepth(')
     // 亮度判定已弃（暗山体/森林/低 LOD 误判天空曾导致截断）：sceneLum 不再参与天空/地面判定
     expect(s).not.toContain('sceneLum')
   })
@@ -135,7 +133,7 @@ describe('宏组合生成（B 路径 sun/sky）', () => {
     expect(s).not.toMatch(/^#define SKY$/m)
     expect(s).not.toContain('getSkyRadiance(')
     expect(s).not.toContain('cosSunAngularRadius')
-    expect(s).toContain('finalColor = originalColor;')
+    expect(s).toContain('finalColor = originalColor.rgb')
   })
 
   it('sun:false → 无 SUN 宏与 cosSunAngularRadius', () => {
@@ -182,58 +180,14 @@ describe('buildStandaloneShaderForValidation（T8 glslang 用）', () => {
     expect(buildStandaloneShaderForValidation({}).startsWith('#version 300 es')).toBe(true)
   })
 
-  it('补 czm_* 桩 + colorTexture/depthTexture + out_FragColor + 2-arg czm_windowToEyeCoordinates 桩（Task 9 移除 czm_readDepth 桩）', () => {
+  it('补 czm_* 桩 + colorTexture/depthTexture + out_FragColor + czm_readDepth/czm_windowToEyeCoordinates 桩', () => {
     const s = buildStandaloneShaderForValidation({})
     expect(s).toContain('uniform mat4 czm_inverseView;')
     expect(s).toContain('uniform vec3 czm_viewerPositionWC;')
     expect(s).toContain('uniform sampler2D colorTexture;')
     expect(s).toContain('uniform sampler2D depthTexture;')
     expect(s).toContain('out vec4 out_FragColor;')
-    // Task 9：移除 czm_readDepth（atmosphere 改读 colorTexture.a smoothDepth）
-    expect(s).not.toContain('czm_readDepth')
-    // 4-arg（reconstructRay 用）+ 2-arg（sceneDist 用 LOG_DEPTH 分支）双桩共存
-    expect(s).toContain('czm_windowToEyeCoordinates(vec4')
-    expect(s).toContain('czm_windowToEyeCoordinates(vec2')
-  })
-})
-
-describe('depthTemporal 集成（Task 9）', () => {
-  const s = buildAerialPerspectiveFragmentShader({})
-
-  it('originalColor 读 colorTexture.rgb（不再 .rgba，alpha 是 smoothDepth）', () => {
-    expect(s).toContain('texture(colorTexture, v_textureCoordinates).rgb')
-    expect(s).not.toMatch(/vec4 originalColor = texture\(colorTexture/)
-  })
-
-  it('sceneDist 用 smoothDepth（colorTexture.a，raw log-depth）+ 2-arg czm_windowToEyeCoordinates', () => {
-    expect(s).toContain('#define LOG_DEPTH')
-    expect(s).toMatch(/smoothDepth\s*=\s*texture\(colorTexture.*\)\.a/)
-    expect(s).toMatch(/czm_windowToEyeCoordinates\(vec2\(gl_FragCoord\.xy\),\s*smoothDepth\)/)
-  })
-
-  it('禁 czm_readDepth（depthTemporal 已提供 log-depth）+ 禁 eyePos /= eyePos.w（2-arg LOG_DEPTH 不除 w）', () => {
-    expect(s).not.toContain('czm_readDepth')
-    // 2-arg LOG_DEPTH 返回 .xyz 真眼坐标，禁 4-arg + /= w
-    expect(s).not.toMatch(/eyePos\s*\/=\s*eyePos\.w/)
-  })
-
-  it('smoothstep UB 修正（mask：1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist)，edge0<edge1）', () => {
-    expect(s).not.toContain('smoothstep(horizonKm, CLOSE_KM')
-    expect(s).toContain('1.0 - smoothstep(CLOSE_KM, horizonKm, sceneDist)')
-  })
-
-  it('debug=5 显示 smoothDepth（colorTexture.a，EMA 后 log-depth）+ header 注释规范（Task 11 补 Task 9 M1/M4）', () => {
-    const s = buildAerialPerspectiveFragmentShader({})
-    // debug=5 输出 smoothDepth（Task 9 已临时改，本 task 规范）
-    expect(s).toMatch(/debugMode.*5[\s\S]*out_FragColor\s*=\s*vec4\(.*smoothDepth/)
-    // header 注释规范（5=smoothDepth，非旧 5=depth/r）
-    expect(s).toContain('5=smoothDepth')
-    expect(s).not.toContain('5=depth/r')
-  })
-
-  it('glslang 编译通过（2-arg czm_windowToEyeCoordinates 桩）', () => {
-    const standalone = buildStandaloneShaderForValidation()
-    const result = compileFragment(standalone)
-    expect(result.ok).toBe(true)
+    expect(s).toContain('czm_readDepth')
+    expect(s).toContain('czm_windowToEyeCoordinates')
   })
 })
