@@ -210,7 +210,7 @@ describe('Bug3：DEPTH_TEMPORAL_EMA 双变体（HDR 读 depthTemporal .a 消水�
       // depth 来源双分支
       expect(s).toContain('#ifdef DEPTH_TEMPORAL_EMA')
       expect(s).toContain('float logDepth = originalColor.a;') // HDR：depthTemporal EMA smoothLogDepth
-      expect(s).toContain('float logDepth = texture(depthTexture, v_textureCoordinates).r;') // UNSIGNED_BYTE：raw
+      expect(s).toContain('float tapC = texture(depthTexture, v_textureCoordinates).r;') // UNSIGNED_BYTE：5-tap raw（Bug4）
       // 末端 .a 双分支（专家1 M1：HDR .a=1.0 不透传 smoothLogDepth）
       expect(s).toContain('vec4(finalColor * exposure, 1.0)')
       expect(s).toContain('vec4(finalColor * exposure, originalColor.a)')

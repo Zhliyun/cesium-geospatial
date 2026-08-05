@@ -330,15 +330,28 @@ void main() {
   float inDither = interleavedGradientNoise(gl_FragCoord.xy)
     + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
   originalColor.rgb += inDither * 1.5 / 255.0;
-  // depth 反演（Bug1+Bug3）：czm_reverseLogDepthWindow 显式反演 log-depth → 线性 window depth。
-  // Bug1：PostProcessStage 无 LOG_DEPTH define（czm_readDepth 返回 raw logDepth → 4-arg 反投影错），显式反演修复。
-  // Bug3：DEPTH_TEMPORAL_EMA（depthTemporal stage 装配/HDR）读 colorTexture.a = EMA smoothLogDepth（消水波纹）；
-  //   否则读 texture(depthTexture).r = raw globe logDepth（UNSIGNED_BYTE 兜底，无 EMA）。
-  // near/far 用 czm_currentFrustum（多视锥分段，对齐 depthReconstruction.ts）。
+  // depth 反演（Bug1）：czm_reverseLogDepthWindow 显式反演 log-depth → 线性 window depth（PostProcessStage
+  // 无 LOG_DEPTH define，czm_readDepth 返回 raw logDepth → 4-arg 反投影错）。near/far 用 czm_currentFrustum。
+  // Bug4：5-tap 邻域平均（log-depth 域 ≈ 几何平均距离）抗 depth 高频抖 → 消波纹（sceneDist 抖放大 inscatter
+  //   等高线）。空间平滑替代 temporal EMA（Bug3 EMA reproject 错误，专家3 C3 验证失败已回退）。排除 far
+  //   plane（logDepth≥1）tap 防地形/天空边缘污染 sceneDist。DEPTH_TEMPORAL_EMA（HDR EMA）路径已平滑无需 5-tap。
 #ifdef DEPTH_TEMPORAL_EMA
-  float logDepth = originalColor.a;  // depthTemporal[0] 输出 vec4(sceneColor.rgb, smoothLogDepth)
+  float logDepth = originalColor.a;  // depthTemporal[0] 输出 vec4(sceneColor.rgb, smoothLogDepth)（已平滑）
 #else
-  float logDepth = texture(depthTexture, v_textureCoordinates).r;  // raw globe logDepth
+  vec2 depthTexel = 1.0 / vec2(textureSize(depthTexture, 0));
+  float tapC = texture(depthTexture, v_textureCoordinates).r;
+  float tapR = texture(depthTexture, v_textureCoordinates + vec2(depthTexel.x, 0.0)).r;
+  float tapL = texture(depthTexture, v_textureCoordinates - vec2(depthTexel.x, 0.0)).r;
+  float tapU = texture(depthTexture, v_textureCoordinates + vec2(0.0, depthTexel.y)).r;
+  float tapD = texture(depthTexture, v_textureCoordinates - vec2(0.0, depthTexel.y)).r;
+  float tapSum = 0.0;
+  float tapCount = 0.0;
+  if (tapC < 1.0) { tapSum += tapC; tapCount += 1.0; }
+  if (tapR < 1.0) { tapSum += tapR; tapCount += 1.0; }
+  if (tapL < 1.0) { tapSum += tapL; tapCount += 1.0; }
+  if (tapU < 1.0) { tapSum += tapU; tapCount += 1.0; }
+  if (tapD < 1.0) { tapSum += tapD; tapCount += 1.0; }
+  float logDepth = tapCount > 0.5 ? tapSum / tapCount : 1.0;  // 全 far plane → 1.0（sky，hasScene=false）
 #endif
   float depth = czm_reverseLogDepthWindow(logDepth, czm_currentFrustum.x, czm_currentFrustum.y);
 
