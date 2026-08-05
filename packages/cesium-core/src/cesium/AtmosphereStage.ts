@@ -57,8 +57,8 @@ import {
   buildHistoryFBO,
   type HistoryState
 } from './depthTemporal/historyBlit'
-import { computeTemporalAlpha } from './depthTemporal/temporalAlpha'
-import { DEPTH_THRESHOLD_DEFAULT, HIGH_ALPHA, LOW_ALPHA, MAX_DELTA_K } from './depthTemporal/depthTemporalConstants'
+import { computeTemporalAlpha, computeMaxDelta } from './depthTemporal/temporalAlpha'
+import { DEPTH_THRESHOLD_DEFAULT, HIGH_ALPHA, LOW_ALPHA } from './depthTemporal/depthTemporalConstants'
 
 // B 路径 options：天空/日盘宏开关 + 动态曝光参数。
 export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
@@ -500,9 +500,11 @@ export function createAtmosphereStage(
       const positionDelta = Cartesian3.distance(camera.positionWC, prevPositionWC)
       const directionDelta = 1 - Math.abs(Cartesian3.dot(camera.directionWC, prevDir))
       const cameraHeight = Cartesian3.magnitude(camera.positionWC)
+      // Bug2：maxDelta 归一化用离地高度（computeMaxDelta），非地心距（详见 temporalAlpha.ts computeMaxDelta）。
+      // ellipsoid.maximumRadius = 赤道半径（保守下限）；computeMaxDelta 内部 max(alt, MIN) 防地表/极区负值。
       temporalAlpha = computeTemporalAlpha({
         cameraHeight,
-        maxDelta: cameraHeight * MAX_DELTA_K, // 高度归一化（1Mm→10km）
+        maxDelta: computeMaxDelta(cameraHeight, ellipsoid.maximumRadius),
         positionDelta,
         directionDelta,
         lowAlpha: resolved.temporalLowAlpha, // Task 12 参数化（默认 LOW_ALPHA；?temporalQuality=high → 0.1）
