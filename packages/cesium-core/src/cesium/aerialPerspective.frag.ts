@@ -28,6 +28,7 @@
 import { glslIndex } from '../glslIndex'
 import { resolveIncludes } from '../resolveIncludes'
 import { buildAtmospherePrefix } from './cesiumCore'
+import { LOG_DEPTH_GLSL } from './logDepth'
 
 // B 路径 options：无 lighting/法线/几何误差校正（A 路径残留已弃）。
 export interface AerialPerspectiveFragOptions {
@@ -324,7 +325,15 @@ void main() {
   float inDither = interleavedGradientNoise(gl_FragCoord.xy)
     + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
   originalColor.rgb += inDither * 1.5 / 255.0;
-  float depth = czm_readDepth(depthTexture, v_textureCoordinates);
+  // depth 反演：logDepth.ts czm_reverseLogDepthWindow 显式反演 log-depth → 线性 window depth。
+  // PostProcessStage 不注入 LOG_DEPTH define（Cesium 仅给引用 czm_vertexLogDepth 的 shader 注入 LOG_DEPTH
+  // package），故 czm_readDepth → czm_reverseLogDepth 走「无 LOG_DEPTH」分支返回 raw logDepth → 4-arg
+  // czm_windowToEyeCoordinates 把 raw logDepth 当线性 window NDC → 反投影到近平面（camera 低 sceneDist
+  // 5km 被反演成 ~1m）→ fore inscatter d≈0 → 走 groundDim 兜底（地表清晰但无大气透视，即「camera 低正常」假象）。
+  // 显式反演修复（Bug1，详见 docs/superpowers/specs/2026-08-05-eye-space-ema-design.md 评审 M1）。
+  // near/far 用 czm_currentFrustum（多视锥分段，对齐 depthReconstruction.ts）。
+  float rawLogDepth = texture(depthTexture, v_textureCoordinates).r;
+  float depth = czm_reverseLogDepthWindow(rawLogDepth, czm_currentFrustum.x, czm_currentFrustum.y);
 
   // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
   // 都用全量 altitudeCorrection，保证在同一密切球局部系（Bruneton 模型前提）。
@@ -483,7 +492,8 @@ export function buildAerialPerspectiveFragmentShader(
   const uniforms: string[] = [POST_PROCESS_TEXTURES_GLSL, LUT_UNIFORMS_GLSL, FRAME_UNIFORMS_GLSL]
   if (o.sky && o.sun) uniforms.push(COS_SUN_ANGULAR_RADIUS_UNIFORM_GLSL)
 
-  const functions: string[] = [HELPERS_GLSL]
+  // LOG_DEPTH_GLSL：czm_reverseLogDepthWindow（main depth 反演用）+ 配套反演辅助（logDepth.ts）。
+  const functions: string[] = [HELPERS_GLSL, LOG_DEPTH_GLSL]
   if (o.sky) functions.push(buildSkyRadianceFn(o.sun))
 
   const body = resolveIncludes(
@@ -511,6 +521,7 @@ const VALIDATION_STUBS_GLSL = `
 uniform mat4 czm_inverseView;
 uniform mat4 czm_inverseProjection;
 uniform vec3 czm_viewerPositionWC;
+uniform vec2 czm_currentFrustum;  // near(.x)/far(.y)，czm_reverseLogDepthWindow 用
 vec4 czm_windowToEyeCoordinates(vec4 p) { return p; }
 float czm_readDepth(sampler2D t, vec2 uv) { return 0.5; }
 out vec4 out_FragColor;

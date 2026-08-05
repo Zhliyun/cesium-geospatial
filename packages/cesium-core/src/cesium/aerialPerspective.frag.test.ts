@@ -68,7 +68,6 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).not.toContain('correctGeometricError(')
     expect(s).not.toContain('ellipsoidRadii')
     expect(s).not.toContain('applyTransmittanceInscatter(')
-    expect(s).not.toContain('czm_reverseLogDepthWindow')
     expect(s).not.toContain('geometricErrorCorrectionAmount')
     expect(s).not.toMatch(/^#define SUN_LIGHT$/m)
     expect(s).not.toMatch(/^#define SKY_LIGHT$/m)
@@ -87,9 +86,11 @@ describe('buildAerialPerspectiveFragmentShader（B 路径，对齐 cesium-clouds
     expect(s).toContain('RayIntersectsGround(')
     expect(s).toContain('lookingAtGround')
     expect(s).toContain('muLook')
-    // depth 反演出 hasScene/sceneDist，仅山峰分支（!lookingAtGround）消费；地平线分类不读 depth
+    // depth 反演出 hasScene/sceneDist，仅山峰分支（!lookingAtGround）消费；地平线分类不读 depth。
+    // Bug1：用 czm_reverseLogDepthWindow 显式反演 log-depth（PostProcessStage 无 LOG_DEPTH define，
+    // czm_readDepth 返回 raw logDepth 致 4-arg 反投影错）。
     expect(s).toContain('hasScene')
-    expect(s).toContain('czm_readDepth(')
+    expect(s).toContain('czm_reverseLogDepthWindow')
     // 亮度判定已弃（暗山体/森林/低 LOD 误判天空曾导致截断）：sceneLum 不再参与天空/地面判定
     expect(s).not.toContain('sceneLum')
   })
