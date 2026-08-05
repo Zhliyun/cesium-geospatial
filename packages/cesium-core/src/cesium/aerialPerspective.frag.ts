@@ -437,10 +437,13 @@ void main() {
   } else {
     // 天空基线（sky:false 在 skyBranch 内透传 return）。
 ${skyBranch}  }
-  // 近处地形按 mask 叠加 depth 前景雾 → 山体不透明。mask 用 sceneDist，地平线处 mask=0 走基线（分界线与地平线
-  // 重合）。mask>0 才算 foreInscatter（远处省 LUT）。
+  // 近处地形按 mask 叠加 depth 前景雾 → 山体不透明。mask>0 才算 foreInscatter（远处省 LUT）。
+  // Bug5：mask 改正向窄过渡 smoothstep(CLOSE_KM, CLOSE_KM*2, sceneDist)——原 smoothstep(horizonKm, CLOSE_KM)
+  // 在 camera 高（horizonKm=905km > CLOSE_KM=20km）反向 + 过渡带 885km 太宽 → fore/base inscatter 在
+  // sceneDist 同心圆缓慢变化 → 圆圈内外大气散射阶梯（等高线）。正向窄过渡（20~40km）让 fore 快速衰减到
+  // base 基线，圆圈消失。近处 sceneDist<CLOSE_KM mask=1（山体不透明）；远处 mask→0 走基线。
   if (hasScene) {
-    float mask = smoothstep(horizonKm, CLOSE_KM, sceneDist);
+    float mask = smoothstep(CLOSE_KM * 2.0, CLOSE_KM, sceneDist);  // 近=1 远=0，过渡带 20km
     if (mask > 0.0) {
       vec3 scenePosKm = cameraPosition + rayDirection * sceneDist;
       vec3 foreTrans;
@@ -463,6 +466,13 @@ ${skyBranch}  }
   //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
   // 归一化验证 HDR 承载 >1（spec §5.2/§6.3）。曾因降序级联无统一上限，debug=7 被 >4.5 分支截断输出
   // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。
+  // 临时诊断（Bug5 等高线阶梯）：debug=9 sceneDist 归一化可视化。R=sceneDist/200km，G=fore mask，B=hasScene。
+  // 定位阶梯是 sceneDist 量化（同心圆环 R 分层）还是 mask/hasScene 边界（G/B 翻转）。
+  if (u_debugMode > 8.5) {
+    float maskDbg = hasScene ? smoothstep(horizonKm, CLOSE_KM, sceneDist) : 0.0;
+    out_FragColor = vec4(sceneDist / 200000.0, maskDbg, hasScene ? 1.0 : 0.0, 1.0);
+    return;
+  }
   if (u_debugMode < 6.5) {
     if (u_debugMode > 5.5) {
       out_FragColor = originalColor;
