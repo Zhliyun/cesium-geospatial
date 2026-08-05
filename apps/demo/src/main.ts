@@ -15,6 +15,7 @@ import {
 import {
   loadAtmosphereLUTs,
   createAtmosphereStage,
+  StageGpuTimer,
   INTENSITY_DEFAULT,
   THRESHOLD_LEVEL_DEFAULT,
   GHOST_AMOUNT_DEFAULT,
@@ -251,7 +252,44 @@ async function main(): Promise<void> {
     if (skipAtmosphere) {
       scene.logarithmicDepthBuffer = false
     } else {
-      createAtmosphereStage(scene, luts, options)
+      const atmosphereHandle = createAtmosphereStage(scene, luts, options)
+
+      // 性能 profiling（Phase 0）：?profile=1 逐 stage GPU 计时（EXT_disjoint_timer_query_webgl2）。
+      // 评审 M2：lensflare 取外层 composite（TIME_ELAPSED 不可嵌套，同帧一层粒度）；
+      // 评审 M7：depthTemporal 的每帧 postRender blit 在 stage.execute 之外，单独包 query 归入 depthTemporal。
+      // StageGpuTimer 无 tickFrame（已删）；read 就绪门是轮询 QUERY_RESULT_AVAILABLE（非阻塞）。
+      if (getString('profile') === '1') {
+        const gl = (scene as unknown as { context: { _gl: WebGL2RenderingContext } }).context._gl
+        const timer = new StageGpuTimer(gl)
+        if (!timer.supported) {
+          console.warn('[profile] EXT_disjoint_timer_query_webgl2 不可用，fallback toggle-diff（需 --disable-gpu-vsync）')
+        }
+        const stages = scene.postProcessStages
+        const wrapped: Array<{ name: string }> = []
+        for (let i = 0; i < stages.length; i++) {
+          const st = stages.get(i) as unknown as { name?: string; execute: (...a: unknown[]) => void }
+          const name = st.name ?? `stage${i}`
+          const orig = st.execute.bind(st)
+          st.execute = timer.wrap(name, orig as (...a: unknown[]) => void) as typeof st.execute
+          wrapped.push({ name })
+        }
+        // blit 计时归入 depthTemporal（评审 M7）
+        atmosphereHandle.setBlitTimerHook(fn => {
+          timer.begin('depthTemporal_blit')
+          fn()
+          timer.end('depthTemporal_blit')
+        })
+        let frame = 0
+        scene.postRender.addEventListener(() => {
+          frame++
+          if (frame % 60 === 0) {
+            const snap: Record<string, number | null> = {}
+            for (const { name } of wrapped) snap[name] = timer.read(name)
+            snap['depthTemporal_blit'] = timer.read('depthTemporal_blit')
+            console.log('[profile]', JSON.stringify(snap))
+          }
+        })
+      }
     }
 
     // ion 影像+地形（失败 fallback，不阻断——无 token/网络/资产无权时 console.warn 裸 globe）。

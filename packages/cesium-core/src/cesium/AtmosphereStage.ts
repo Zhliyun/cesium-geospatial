@@ -294,6 +294,8 @@ export interface AtmosphereStageHandle {
   readonly tonemapStage: PostProcessStage
   readonly postHdrDatatype: PixelDatatype
   setMode(newOptions: AtmosphereStageOptions): void
+  /** 注入 depthTemporal postRender blit 的计时 hook（Phase 0 profiling，demo ?profile=1 用）。 */
+  setBlitTimerHook(hook: ((fn: () => void) => void) | undefined): void
   destroy(): void
 }
 
@@ -413,6 +415,9 @@ export function createAtmosphereStage(
   let prevDir = Cartesian3.ZERO.clone()
   let removeDtPreRender: (() => void) | undefined
   let removeDtPostRender: (() => void) | undefined
+  // Phase 0 profiling（demo ?profile=1）：外部注入的 blit 计时 hook。默认 undefined 时 doBlit 直跑，
+  // 行为与接线前完全一致；stageCreated=false 时 postRender 提前 return，hook 不会被触达（安全）。
+  let blitTimerHook: ((fn: () => void) => void) | undefined
 
   if (stageCreated) {
     const context = (scene as unknown as { context: unknown }).context
@@ -489,7 +494,11 @@ export function createAtmosphereStage(
       const writeTex = getWriteTexture(historyState)
       const blitCmd = buildBlitCommand(context as Parameters<typeof buildBlitCommand>[0], src)
       blitCmd.framebuffer = buildHistoryFBO(context as Parameters<typeof buildHistoryFBO>[0], writeTex)
-      blitCmd.execute(context as Parameters<typeof blitCmd.execute>[0])
+      // Phase 0 profiling：blit 在 stage.execute 之外（postRender），评审 M7 要求单独包 query 归入
+      // depthTemporal。有 hook 走 hook 包装计时，无 hook 直跑（默认，行为不变）。
+      const doBlit = () => blitCmd.execute(context as Parameters<typeof blitCmd.execute>[0])
+      if (blitTimerHook) blitTimerHook(doBlit)
+      else doBlit()
 
       // 更新下帧 uniforms（prevVP / temporalAlpha）——camera 是本帧渲染完毕时的位姿。
       const camera = scene.camera
@@ -594,6 +603,9 @@ export function createAtmosphereStage(
     },
     get postHdrDatatype() {
       return postHdrDatatype
+    },
+    setBlitTimerHook(hook) {
+      blitTimerHook = hook
     },
     setMode(newOptions: AtmosphereStageOptions) {
       // setMode/destroy 全仓库 0 调用属 dead code（demo 切 mode 靠页面重载）。
