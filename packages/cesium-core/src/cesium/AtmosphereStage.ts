@@ -338,8 +338,11 @@ export function createAtmosphereStage(
   // pixelDatatype=HalfFloat 带兜底让中间 RT 承载线性 >1 段，供链尾 tonemap ACES 压缩。
   function buildAtmosphereStage(): PostProcessStage {
     return new PostProcessStage({
-      // Bug3：hdrDepthTemporal=stageCreated（depthTemporal 装配/HDR）→ atmosphere 读 colorTexture.a EMA smoothLogDepth（消水波纹）。
-      fragmentShader: buildAerialPerspectiveFragmentShader({ ...resolved, hdrDepthTemporal: stageCreated }),
+      // Bug3 暂时禁用（hdrDepthTemporal: false）：EMA reproject 错误（专家3 C3，raw worldPos 抖 → prevUV 抖 →
+      // history 采错 → smoothLogDepth 错乱 → debug=5 地球切割 + 水波纹未消）。?temporalEma=0 验证：切割消失，
+      // 水波纹仍在（=波纹非时序抖，EMA 整个 temporal 路线无效）。回退 raw depth（UNSIGNED_BYTE 变体 +
+      // Bug1 czm_reverseLogDepthWindow 反演）。待查波纹真根因（sceneDist 等值线 inscatter 量化阶梯）。
+      fragmentShader: buildAerialPerspectiveFragmentShader({ ...resolved, hdrDepthTemporal: false }),
       uniforms: buildAtmosphereUniforms(luts, resolved, state),
       pixelFormat: PixelFormat.RGBA,
       pixelDatatype: postHdrDatatype
