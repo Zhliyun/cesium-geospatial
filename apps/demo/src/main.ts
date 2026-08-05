@@ -268,24 +268,33 @@ async function main(): Promise<void> {
         const wrapped: Array<{ name: string }> = []
         // 评审 Critical：PostProcessStageComposite 没有 execute 方法（集合内部对 composite 递归逐子
         // stage 调 execute），直接 st.execute.bind 会在 lensflare composite 上抛 TypeError。
-        // 有 execute → 包之；否则有 stages → 递归包子 stage（lensflare 内嵌套 bloomComposite 也是
-        // composite，递归到底）。子 stage 顺序执行互不嵌套，不违反 TIME_ELAPSED 单活跃 query 约束，
+        // 有 execute → 包之；否则按 composite 公开 API（length + get(i)，子 stage 在私有 _stages，
+        // 无 stages 属性）递归包子 stage——lensflare 内嵌套 bloomComposite 也是 composite，递归到底。
+        // 子 stage 顺序执行互不嵌套，不违反 TIME_ELAPSED 单活跃 query 约束，
         // 且得到逐子 stage 计时（lf_threshold/lf_down*/lf_up*/lf_preBlur/lf_occlusion/lf_features/
-        // lf_composite）——Task 7 需要的粒度。
-        const wrapStage = (st: { name?: string; execute?: unknown; stages?: unknown[] }): void => {
+        // lf_composite）——Task 7 需要的粒度。两分支都不匹配时 warn 兜底（防未来再静默跳过）。
+        type WrappableStage = {
+          name?: string
+          execute?: unknown
+          get?: (i: number) => unknown
+          length?: number
+        }
+        const wrapStage = (st: WrappableStage): void => {
           if (typeof st.execute === 'function') {
             const name = st.name ?? 'unnamed'
             const orig = (st.execute as (...a: unknown[]) => void).bind(st)
             ;(st as { execute: unknown }).execute = timer.wrap(name, orig as (...a: unknown[]) => void)
             wrapped.push({ name })
-          } else if (Array.isArray(st.stages)) {
-            for (const sub of st.stages) {
-              wrapStage(sub as { name?: string; execute?: unknown; stages?: unknown[] })
+          } else if (typeof st.get === 'function' && typeof st.length === 'number') {
+            for (let j = 0; j < st.length; j++) {
+              wrapStage(st.get(j) as WrappableStage)
             }
+          } else {
+            console.warn('[profile] 无法 wrap stage', st.name)
           }
         }
         for (let i = 0; i < stages.length; i++) {
-          wrapStage(stages.get(i) as unknown as { name?: string; execute?: unknown; stages?: unknown[] })
+          wrapStage(stages.get(i) as unknown as WrappableStage)
         }
         // blit 计时归入 depthTemporal（评审 M7）
         atmosphereHandle.setBlitTimerHook(fn => {
