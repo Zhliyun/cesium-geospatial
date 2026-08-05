@@ -187,7 +187,9 @@ describe('validateAtmosphereOptions', () => {
       temporalEma: true,
       temporalLowAlpha: 0.05, // LOW_ALPHA
       temporalHighAlpha: 0.5, // HIGH_ALPHA
-      temporalDepthThreshold: 0.1 // DEPTH_THRESHOLD_DEFAULT
+      temporalDepthThreshold: 0.1, // DEPTH_THRESHOLD_DEFAULT
+      // depthTemporal stage 创建开关（Phase 1.1）：默认 true（HDR 设备创建）
+      depthTemporal: true
     })
   })
 
@@ -415,6 +417,15 @@ describe('createAtmosphereStage — depthTemporal 装配', () => {
     expect(typeof uniforms.u_temporalAlpha).toBe('function')
     // u_temporalAlpha 初始 = HIGH_ALPHA（0.5，首帧偏 current）
     expect((uniforms.u_temporalAlpha as () => number)()).toBe(0.5)
+  })
+
+  it('depthTemporal=false → 不创建 stage + 不注册 blit listener（Phase 1.1，?depthTemporal=0）', () => {
+    const { scene, addSpy } = mockSceneWithAddSpy({ halfFloat: true })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: false })
+    expect(handle.depthTemporalStage).toBeUndefined()
+    expect(handle.temporalEmaEnabled).toBe(false)
+    const added = addSpy.mock.calls.map((c: unknown[]) => c[0])
+    expect(added.some((s) => (s as { name?: string })?.name?.match?.(/depth_temporal/i))).toBe(false)
   })
 })
 

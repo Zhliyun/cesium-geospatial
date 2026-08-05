@@ -90,6 +90,11 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   temporalLowAlpha?: number // 静止强平滑 alpha（默认 LOW_ALPHA=0.05；?temporalQuality=high → 0.1 弱平滑减拖影）
   temporalHighAlpha?: number // 移动偏 current alpha（默认 HIGH_ALPHA=0.5；?temporalQuality=high → 0.8）
   temporalDepthThreshold?: number // log-depth 相对阈值（默认 DEPTH_THRESHOLD_DEFAULT=0.1，距离无关容差 ≈ 7% 距离变化）
+  // depthTemporal stage 创建开关（Phase 1.1，URL ?depthTemporal=0）：默认 true（HDR 设备创建，
+  // lensflare occlusion 用 smoothDepth）。false → 不创建 stage + 不注册 blit listener（省 1 全屏
+  // HalfFloat pass + 1 全屏 copy + 3 张全分辨率 HF RT）；atmosphere 不消费 .a（hdrDepthTemporal:false）、
+  // occlusion 回退 scene globe depth（temporalEmaEnabled=false），跳过安全。评审 M1/M7。
+  depthTemporal?: boolean
 }
 
 // 校验后的完整 options（hdrDepthTemporal 排除：runtime 基于 stageCreated 决定，非用户 option；buildAtmosphereStage 时注入）。
@@ -115,6 +120,8 @@ export interface ResolvedAtmosphereStageOptions extends Required<Omit<AerialPers
   temporalLowAlpha: number
   temporalHighAlpha: number
   temporalDepthThreshold: number
+  // depthTemporal stage 创建开关 resolved（Phase 1.1）
+  depthTemporal: boolean
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
@@ -207,7 +214,8 @@ export function validateAtmosphereOptions(
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
     temporalHighAlpha: options.temporalHighAlpha ?? HIGH_ALPHA,
-    temporalDepthThreshold: options.temporalDepthThreshold ?? DEPTH_THRESHOLD_DEFAULT
+    temporalDepthThreshold: options.temporalDepthThreshold ?? DEPTH_THRESHOLD_DEFAULT,
+    depthTemporal: options.depthTemporal !== false // 默认 true（!== false 让 undefined 也 true；仅显式 false 跳过 stage）
   }
 }
 
@@ -375,7 +383,7 @@ export function createAtmosphereStage(
   //   读 .a=raw log-depth 仍有效（Task 9 移除 czm_readDepth 依赖 depthTemporal 打包 .a；若 stage 不创建则
   //   atmosphere 读 scene alpha 无意义）。passthrough .r=sceneColor 非 depth，故 lensFlare occlusion 此时
   //   必须回退 scene globe depth（temporalEmaEnabled=false → undefined）。
-  const stageCreated = postHdrDatatype !== PixelDatatype.UNSIGNED_BYTE
+  const stageCreated = postHdrDatatype !== PixelDatatype.UNSIGNED_BYTE && resolved.depthTemporal
   const temporalEmaEnabled = stageCreated && resolved.temporalEma
 
   // phase2b LensFlare（spec §5.9）：外层 non-series composite，插在 atmosphere 与 tonomap 之间。

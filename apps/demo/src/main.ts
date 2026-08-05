@@ -248,7 +248,9 @@ async function main(): Promise<void> {
       temporalEma: getString('temporalEma') !== '0',
       temporalLowAlpha: temporalPreset.lowAlpha,
       temporalHighAlpha: temporalPreset.highAlpha,
-      ...(temporalDepthThreshold != null ? { temporalDepthThreshold } : {})
+      ...(temporalDepthThreshold != null ? { temporalDepthThreshold } : {}),
+      // depthTemporal stage 创建开关（Phase 1.1）：?depthTemporal=0 不创建 stage（省 1 全屏 pass+blit）
+      depthTemporal: getString('depthTemporal') !== '0'
     }
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =
