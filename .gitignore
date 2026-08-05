@@ -8,3 +8,6 @@ dist/
 .env
 .env.local
 .env.*.local
+
+# perf harness 临时截图（out/ 是每次 --check/--save-ref 的运行产物；ref/ 基线参考要入库，勿忽略）
+scripts/perf/out/

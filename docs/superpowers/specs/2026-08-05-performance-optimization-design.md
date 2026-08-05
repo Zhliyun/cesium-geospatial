@@ -81,6 +81,8 @@ rAF 锁 60/120Hz。链总开销 < 帧预算时，关掉任何单 stage FPS 差�
 - 每 Phase 优化后与基线做 **PSNR/SSIM + 最大像素差**（可用 `debug=1` log finalColor 放大暗部差异）。
 - demo 的 camera URL 参数化 + 停稳 `#camera=` 自动更新，使 harness 可纯脚本化（headless 截图）。
 
+**落地（Phase 0.4/0.5 基建，2026-08-06）**：harness 在 `scripts/perf/`——`baseline.md`（结构化基线表 + 场景清单）+ `capture.ts`（Playwright headless 截图 + SSIM/maxΔ 门禁，CLI `--save-ref`/`--check`/`--profile`，退出码 0/1）。已 headless（SwiftShader）跑通并采 7 场景 ref，`--check` 自洽验证通过（退出码契约正确）。三个决策相关发现（详见 baseline.md「采集发现」）：①截图 URL 必须**固定 `time`**（否则太阳方向随 wall-clock 变，ref/out 永不匹配）；②纯天空视角 `tilesLoaded` 可能不 settle（脚本已容错）；③**nadir 低空垂直俯视 headless 有 LOD 加载非确定性**（两次 capture 收敛不同瓦片 LOD → tint 差超阈），故视觉门禁以 4 Bug 视角为准，nadir/sky-only 仅作性能分离场景。**待办**：真实 GPU 的环境信息 + `?profile=1` GPU ms 基线 + 同后端 ref 重采，由 controller/用户在真实浏览器回填 `baseline.md`（headless SwiftShader 的 ms 无意义）。
+
 ---
 
 ## Phase 1：低成本优化（预期收益 > 风险，零/低视觉回归）
