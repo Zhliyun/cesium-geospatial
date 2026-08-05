@@ -92,8 +92,8 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   temporalDepthThreshold?: number // log-depth 相对阈值（默认 DEPTH_THRESHOLD_DEFAULT=0.1，距离无关容差 ≈ 7% 距离变化）
 }
 
-// 校验后的完整 options。
-export interface ResolvedAtmosphereStageOptions extends Required<AerialPerspectiveFragOptions> {
+// 校验后的完整 options（hdrDepthTemporal 排除：runtime 基于 stageCreated 决定，非用户 option；buildAtmosphereStage 时注入）。
+export interface ResolvedAtmosphereStageOptions extends Required<Omit<AerialPerspectiveFragOptions, 'hdrDepthTemporal'>> {
   exposureFollowTimeline: boolean
   exposureDay: number
   exposureNight: number
@@ -338,7 +338,8 @@ export function createAtmosphereStage(
   // pixelDatatype=HalfFloat 带兜底让中间 RT 承载线性 >1 段，供链尾 tonemap ACES 压缩。
   function buildAtmosphereStage(): PostProcessStage {
     return new PostProcessStage({
-      fragmentShader: buildAerialPerspectiveFragmentShader(resolved),
+      // Bug3：hdrDepthTemporal=stageCreated（depthTemporal 装配/HDR）→ atmosphere 读 colorTexture.a EMA smoothLogDepth（消水波纹）。
+      fragmentShader: buildAerialPerspectiveFragmentShader({ ...resolved, hdrDepthTemporal: stageCreated }),
       uniforms: buildAtmosphereUniforms(luts, resolved, state),
       pixelFormat: PixelFormat.RGBA,
       pixelDatatype: postHdrDatatype

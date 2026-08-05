@@ -192,3 +192,30 @@ describe('buildStandaloneShaderForValidation（T8 glslang 用）', () => {
     expect(s).toContain('czm_windowToEyeCoordinates')
   })
 })
+
+describe('Bug3：DEPTH_TEMPORAL_EMA 双变体（HDR 读 depthTemporal .a 消水波纹 / UNSIGNED_BYTE 读 raw depth）', () => {
+  it('HDR 变体（hdrDepthTemporal=true）含 #define DEPTH_TEMPORAL_EMA', () => {
+    const s = buildAerialPerspectiveFragmentShader({ hdrDepthTemporal: true })
+    expect(s).toMatch(/^#define DEPTH_TEMPORAL_EMA$/m)
+  })
+
+  it('UNSIGNED_BYTE 变体（默认）无 #define DEPTH_TEMPORAL_EMA', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    expect(s).not.toMatch(/^#define DEPTH_TEMPORAL_EMA$/m)
+  })
+
+  it('两变体都含 #ifdef DEPTH_TEMPORAL_EMA 双分支（depth 来源 originalColor.a / texture(depthTexture).r）+ 末端 .a 双分支', () => {
+    for (const hdr of [true, false] as const) {
+      const s = buildAerialPerspectiveFragmentShader({ hdrDepthTemporal: hdr })
+      // depth 来源双分支
+      expect(s).toContain('#ifdef DEPTH_TEMPORAL_EMA')
+      expect(s).toContain('float logDepth = originalColor.a;') // HDR：depthTemporal EMA smoothLogDepth
+      expect(s).toContain('float logDepth = texture(depthTexture, v_textureCoordinates).r;') // UNSIGNED_BYTE：raw
+      // 末端 .a 双分支（专家1 M1：HDR .a=1.0 不透传 smoothLogDepth）
+      expect(s).toContain('vec4(finalColor * exposure, 1.0)')
+      expect(s).toContain('vec4(finalColor * exposure, originalColor.a)')
+      // 两变体都用 czm_reverseLogDepthWindow 反演（Bug1）
+      expect(s).toContain('czm_reverseLogDepthWindow(logDepth, czm_currentFrustum.x, czm_currentFrustum.y)')
+    }
+  })
+})

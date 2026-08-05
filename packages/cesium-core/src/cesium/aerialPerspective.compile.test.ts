@@ -52,6 +52,23 @@ describe('GLSL 编译验证（glslangValidator，全合法宏组合）', () => {
     })
   }
 
+  it('编译通过：HDR 变体（hdrDepthTemporal=true，DEPTH_TEMPORAL_EMA 读 depthTemporal .a 消水波纹，Bug3）', () => {
+    const src = buildStandaloneShaderForValidation({ hdrDepthTemporal: true })
+    expect(src.startsWith('#version 300 es')).toBe(true)
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(
+        `glslangValidator 编译失败（HDR 变体）:\n${output}\n` +
+          `---- shader 前 40 行 ----\n${src
+            .split('\n')
+            .slice(0, 40)
+            .map((l, i) => `${i + 1}: ${l}`)
+            .join('\n')}`
+      )
+    }
+    expect(ok).toBe(true)
+  })
+
   it('glslangValidator 真的会抓编译错误（防回归：测试本身不能哑过）', () => {
     // 注入未声明标识符，验证 glslang 非哑过——若这个测试失败说明编译器没在干活。
     const broken = `#version 300 es

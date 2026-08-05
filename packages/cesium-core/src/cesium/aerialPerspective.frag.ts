@@ -34,6 +34,7 @@ import { LOG_DEPTH_GLSL } from './logDepth'
 export interface AerialPerspectiveFragOptions {
   sun?: boolean // SUN：天空分支日盘（默认 true）
   sky?: boolean // SKY：天空分支存在性（默认 true；false 时远平面直通 inputColor）
+  hdrDepthTemporal?: boolean // Bug3：depthTemporal stage 装配（HDR）→ 读 colorTexture.a EMA smoothLogDepth（消水波纹）；否则读 raw globe depth
 }
 
 type ResolvedOptions = Required<AerialPerspectiveFragOptions>
@@ -309,7 +310,11 @@ function buildMainFn(o: ResolvedOptions): string {
 `
     : `
     finalColor = originalColor.rgb;
-    out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性，链尾 tonemap 收尾
+#ifdef DEPTH_TEMPORAL_EMA
+    out_FragColor = vec4(finalColor * exposure, 1.0);  // Bug3：HDR .a=smoothLogDepth 不透传（专家1 M1）
+#else
+    out_FragColor = vec4(finalColor * exposure, originalColor.a);  // UNSIGNED_BYTE main 行为
+#endif
     return;
 `
 
@@ -325,15 +330,17 @@ void main() {
   float inDither = interleavedGradientNoise(gl_FragCoord.xy)
     + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
   originalColor.rgb += inDither * 1.5 / 255.0;
-  // depth 反演：logDepth.ts czm_reverseLogDepthWindow 显式反演 log-depth → 线性 window depth。
-  // PostProcessStage 不注入 LOG_DEPTH define（Cesium 仅给引用 czm_vertexLogDepth 的 shader 注入 LOG_DEPTH
-  // package），故 czm_readDepth → czm_reverseLogDepth 走「无 LOG_DEPTH」分支返回 raw logDepth → 4-arg
-  // czm_windowToEyeCoordinates 把 raw logDepth 当线性 window NDC → 反投影到近平面（camera 低 sceneDist
-  // 5km 被反演成 ~1m）→ fore inscatter d≈0 → 走 groundDim 兜底（地表清晰但无大气透视，即「camera 低正常」假象）。
-  // 显式反演修复（Bug1，详见 docs/superpowers/specs/2026-08-05-eye-space-ema-design.md 评审 M1）。
+  // depth 反演（Bug1+Bug3）：czm_reverseLogDepthWindow 显式反演 log-depth → 线性 window depth。
+  // Bug1：PostProcessStage 无 LOG_DEPTH define（czm_readDepth 返回 raw logDepth → 4-arg 反投影错），显式反演修复。
+  // Bug3：DEPTH_TEMPORAL_EMA（depthTemporal stage 装配/HDR）读 colorTexture.a = EMA smoothLogDepth（消水波纹）；
+  //   否则读 texture(depthTexture).r = raw globe logDepth（UNSIGNED_BYTE 兜底，无 EMA）。
   // near/far 用 czm_currentFrustum（多视锥分段，对齐 depthReconstruction.ts）。
-  float rawLogDepth = texture(depthTexture, v_textureCoordinates).r;
-  float depth = czm_reverseLogDepthWindow(rawLogDepth, czm_currentFrustum.x, czm_currentFrustum.y);
+#ifdef DEPTH_TEMPORAL_EMA
+  float logDepth = originalColor.a;  // depthTemporal[0] 输出 vec4(sceneColor.rgb, smoothLogDepth)
+#else
+  float logDepth = texture(depthTexture, v_textureCoordinates).r;  // raw globe logDepth
+#endif
+  float depth = czm_reverseLogDepthWindow(logDepth, czm_currentFrustum.x, czm_currentFrustum.y);
 
   // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
   // 都用全量 altitudeCorrection，保证在同一密切球局部系（Bruneton 模型前提）。
@@ -468,7 +475,12 @@ ${skyBranch}  }
     }
   }
 
-  out_FragColor = vec4(finalColor * exposure, originalColor.a);  // 线性 HDR，由链尾 tonemap stage 收尾
+#ifdef DEPTH_TEMPORAL_EMA
+  out_FragColor = vec4(finalColor * exposure, 1.0);  // Bug3：HDR .a=smoothLogDepth 不透传（专家1 M1：display alpha）
+#else
+  out_FragColor = vec4(finalColor * exposure, originalColor.a);  // UNSIGNED_BYTE main 行为
+#endif
+  // 线性 HDR，由链尾 tonemap stage 收尾
 }
 `
 }
@@ -482,12 +494,14 @@ export function buildAerialPerspectiveFragmentShader(
   const o: ResolvedOptions = {
     sun: true,
     sky: true,
+    hdrDepthTemporal: false,
     ...options
   }
 
   const defines: string[] = ['#define GROUND'] // runtime RayIntersectsGround 用
   if (o.sun) defines.push('#define SUN')
   if (o.sky) defines.push('#define SKY')
+  if (o.hdrDepthTemporal) defines.push('#define DEPTH_TEMPORAL_EMA') // Bug3：HDR 读 depthTemporal .a
 
   const uniforms: string[] = [POST_PROCESS_TEXTURES_GLSL, LUT_UNIFORMS_GLSL, FRAME_UNIFORMS_GLSL]
   if (o.sky && o.sun) uniforms.push(COS_SUN_ANGULAR_RADIUS_UNIFORM_GLSL)
