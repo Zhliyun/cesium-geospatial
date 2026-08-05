@@ -44,3 +44,5 @@ export {
   TEMPORAL_QUALITY_PRESETS,
   type TemporalQualityPreset
 } from './cesium/depthTemporal/depthTemporalConstants'
+// 性能 Phase 0：逐 stage GPU 计时（EXT_disjoint_timer_query_webgl2）
+export { StageGpuTimer } from './cesium/profile/stageGpuTimer'
