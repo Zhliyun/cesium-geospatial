@@ -333,13 +333,16 @@ void main() {
   // depth 反演（Bug1）：czm_reverseLogDepthWindow 显式反演 log-depth → 线性 window depth（PostProcessStage
   // 无 LOG_DEPTH define，czm_readDepth 返回 raw logDepth → 4-arg 反投影错）。near/far 用 czm_currentFrustum。
   // Bug4：5-tap 邻域平均（log-depth 域 ≈ 几何平均距离）抗 depth 高频抖 → 消波纹（sceneDist 抖放大 inscatter
-  //   等高线）。空间平滑替代 temporal EMA（Bug3 EMA reproject 错误，专家3 C3 验证失败已回退）。排除 far
-  //   plane（logDepth≥1）tap 防地形/天空边缘污染 sceneDist。DEPTH_TEMPORAL_EMA（HDR EMA）路径已平滑无需 5-tap。
+  //   等高线）。空间平滑替代 temporal EMA（Bug3 EMA reproject 错误，专家3 C3 验证失败已回退）。
+  // Bug6：hasScene 判定用中心 tap（tapC）非 5-tap 平均 logDepth——5-tap far-plane 排除（tap<1.0）使地形边缘
+  //   像素的平均 logDepth 从 far-plane 邻居混入降到 <0.5 → 错误过 depth<1.0 → 反演 → hasScene 翻转 → 地平线
+  //   地形描边（debug=9 B 蓝边确认）。分离：hasScene 用 tapC（中心像素真实地形判定），sceneDist 用 5-tap 平均。
 #ifdef DEPTH_TEMPORAL_EMA
   float logDepth = originalColor.a;  // depthTemporal[0] 输出 vec4(sceneColor.rgb, smoothLogDepth)（已平滑）
+  float tapC = originalColor.a;  // Bug6：中心 tap 与平均一致（EMA 路径无 5-tap）
 #else
   vec2 depthTexel = 1.0 / vec2(textureSize(depthTexture, 0));
-  float tapC = texture(depthTexture, v_textureCoordinates).r;
+  float tapC = texture(depthTexture, v_textureCoordinates).r;  // 中心 tap：hasScene 判定用（Bug6）
   float tapR = texture(depthTexture, v_textureCoordinates + vec2(depthTexel.x, 0.0)).r;
   float tapL = texture(depthTexture, v_textureCoordinates - vec2(depthTexel.x, 0.0)).r;
   float tapU = texture(depthTexture, v_textureCoordinates + vec2(0.0, depthTexel.y)).r;
@@ -351,9 +354,11 @@ void main() {
   if (tapL < 1.0) { tapSum += tapL; tapCount += 1.0; }
   if (tapU < 1.0) { tapSum += tapU; tapCount += 1.0; }
   if (tapD < 1.0) { tapSum += tapD; tapCount += 1.0; }
-  float logDepth = tapCount > 0.5 ? tapSum / tapCount : 1.0;  // 全 far plane → 1.0（sky，hasScene=false）
+  float logDepth = tapCount > 0.5 ? tapSum / tapCount : 1.0;  // 5-tap 平均：sceneDist 距离用
 #endif
   float depth = czm_reverseLogDepthWindow(logDepth, czm_currentFrustum.x, czm_currentFrustum.y);
+  // Bug6：hasSceneDepth 用 tapC（中心像素，真实地形判定）；depth 用 5-tap 平均（sceneDist 距离平滑）。
+  float hasSceneDepth = czm_reverseLogDepthWindow(tapC, czm_currentFrustum.x, czm_currentFrustum.y);
 
   // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
   // 都用全量 altitudeCorrection，保证在同一密切球局部系（Bruneton 模型前提）。
@@ -371,8 +376,8 @@ void main() {
   // → mask=0 不读它 → 无条纹。
   bool hasScene = false;
   float sceneDist = 0.0;
-  if (depth < 1.0) {
-    vec4 eyePos = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depth, 1.0));
+  if (hasSceneDepth < 1.0) {  // Bug6：中心 tap 判定（防 5-tap far-plane 排除翻转边缘 hasScene）
+    vec4 eyePos = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depth, 1.0));  // sceneDist 用 5-tap 平均 depth
     if (abs(eyePos.w) > 1e-6) {
       eyePos /= eyePos.w;
       if (eyePos.z < -1e-4) {
