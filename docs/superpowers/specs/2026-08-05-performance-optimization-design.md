@@ -21,7 +21,7 @@ Bug1-6 修复后功能完整，但引入性能开销（5-tap depth + fore/base �
 
 ### Phase 0：量化基线（必须先做，无 profile 不优化）
 
-1. **建立 GPU 计时**：demo 加 `EXT_disjoint_timer_query_webgl2` 或 `scene.debugShowFramesPerSecond`，或 Chrome DevTools Performance/Rendering 面板 GPU 帧分解。目标：atmosphere/tonemap/lensflare/depthTemporal 各 stage 的 GPU 时间（ms）。
+1. **建立 GPU 计时**：✅ FPS 基线工具已就位（`scene.debugShowFramesPerSecond`，main.ts 默认开启，`?fps=0` 关闭，2026-08-05）。各 stage GPU 细分计时用 Chrome DevTools Performance/Rendering 面板 GPU 帧分解，或 `EXT_disjoint_timer_query_webgl2`。目标：atmosphere/tonemap/lensflare/depthTemporal 各 stage 的 GPU 时间（ms）。
 2. **量化场景**：
    - camera 低（5km，fore inscatter 密集）：`camera=139.2399,34.8752,5000,8.7,-21.1`
    - camera 高掠射（64km，LUT 采样多）：`camera=139.2399,34.8752,64309,8.7,-21.1`

@@ -97,6 +97,12 @@ async function main(): Promise<void> {
   })
   const scene = viewer.scene
 
+  // FPS 显示（性能优化 Phase 0 基线工具）：默认开启，画面左下角实时帧率（ms/帧）。
+  // 覆盖所有 mode（大气/sky/depth 通用）。URL ?fps=0 关闭。
+  // 注意：只给整体帧率；各 PostProcessStage（atmosphere/tonemap/lensflare/depthTemporal）
+  // 的 GPU 细分计时需 Chrome DevTools Performance 面板或 EXT_disjoint_timer_query_webgl2。
+  scene.debugShowFramesPerSecond = getString('fps') !== '0'
+
   // 通用：隐藏 Cesium 自带天空盒/大气/日/月（atmosphere 模式由后处理接管；
   // sky/depth 分支延续 Phase 0 行为）
   if (scene.skyBox != null) scene.skyBox.show = false
