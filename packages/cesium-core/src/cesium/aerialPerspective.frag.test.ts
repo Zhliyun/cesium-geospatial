@@ -219,3 +219,16 @@ describe('Bug3：DEPTH_TEMPORAL_EMA 双变体（HDR 读 depthTemporal .a 消水�
     }
   })
 })
+
+describe('tapC 早退（Phase 1.0，评审遗漏 1，零视觉风险）', () => {
+  it('非 EMA 分支 tapC>=1.0 时跳过 4 邻域 depth fetch（天空区零开销）', () => {
+    const s = buildAerialPerspectiveFragmentShader({ hdrDepthTemporal: false })
+    // 4 邻域 tap 的「声明」（float tapX = texture）在 if (tapC < 1.0) 块内（早退）——天空/未渲染像素不 fetch
+    expect(s).toMatch(
+      /if \(tapC < 1\.0\) \{[\s\S]*?float tapR = texture[\s\S]*?float tapL = texture[\s\S]*?float tapU = texture[\s\S]*?float tapD = texture/
+    )
+    // tapC 提到 if 外（hasSceneDepth 用，Bug6 不变）；logDepth 默认 far-plane 1.0
+    expect(s).toContain('float tapC = texture(depthTexture, v_textureCoordinates).r;')
+    expect(s).toContain('float logDepth = 1.0;')
+  })
+})

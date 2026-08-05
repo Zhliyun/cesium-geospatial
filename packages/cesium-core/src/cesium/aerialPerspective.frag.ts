@@ -343,18 +343,20 @@ void main() {
 #else
   vec2 depthTexel = 1.0 / vec2(textureSize(depthTexture, 0));
   float tapC = texture(depthTexture, v_textureCoordinates).r;  // 中心 tap：hasScene 判定用（Bug6）
-  float tapR = texture(depthTexture, v_textureCoordinates + vec2(depthTexel.x, 0.0)).r;
-  float tapL = texture(depthTexture, v_textureCoordinates - vec2(depthTexel.x, 0.0)).r;
-  float tapU = texture(depthTexture, v_textureCoordinates + vec2(0.0, depthTexel.y)).r;
-  float tapD = texture(depthTexture, v_textureCoordinates - vec2(0.0, depthTexel.y)).r;
-  float tapSum = 0.0;
-  float tapCount = 0.0;
-  if (tapC < 1.0) { tapSum += tapC; tapCount += 1.0; }
-  if (tapR < 1.0) { tapSum += tapR; tapCount += 1.0; }
-  if (tapL < 1.0) { tapSum += tapL; tapCount += 1.0; }
-  if (tapU < 1.0) { tapSum += tapU; tapCount += 1.0; }
-  if (tapD < 1.0) { tapSum += tapD; tapCount += 1.0; }
-  float logDepth = tapCount > 0.5 ? tapSum / tapCount : 1.0;  // 5-tap 平均：sceneDist 距离用
+  float logDepth = 1.0;  // 默认 far-plane（tapC>=1.0 时跳过 4 邻域，省天空区 80% depth 采样，Phase 1.0）
+  if (tapC < 1.0) {  // tapC 早退：仅地面像素才 5-tap 平均（天空/未渲染 4 邻域 fetch 对输出零影响）
+    float tapR = texture(depthTexture, v_textureCoordinates + vec2(depthTexel.x, 0.0)).r;
+    float tapL = texture(depthTexture, v_textureCoordinates - vec2(depthTexel.x, 0.0)).r;
+    float tapU = texture(depthTexture, v_textureCoordinates + vec2(0.0, depthTexel.y)).r;
+    float tapD = texture(depthTexture, v_textureCoordinates - vec2(0.0, depthTexel.y)).r;
+    float tapSum = tapC;  // tapC<1.0 必计入
+    float tapCount = 1.0;
+    if (tapR < 1.0) { tapSum += tapR; tapCount += 1.0; }
+    if (tapL < 1.0) { tapSum += tapL; tapCount += 1.0; }
+    if (tapU < 1.0) { tapSum += tapU; tapCount += 1.0; }
+    if (tapD < 1.0) { tapSum += tapD; tapCount += 1.0; }
+    logDepth = tapSum / tapCount;  // 5-tap 平均：sceneDist 距离用（tapCount>=1.0 必 >0.5，三元简化为除法）
+  }
 #endif
   float depth = czm_reverseLogDepthWindow(logDepth, czm_currentFrustum.x, czm_currentFrustum.y);
   // Bug6：hasSceneDepth 用 tapC（中心像素，真实地形判定）；depth 用 5-tap 平均（sceneDist 距离平滑）。
