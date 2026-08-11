@@ -53,6 +53,21 @@
 - **重点**：Bug4 垂直波纹 / Bug5 圆圈阶梯 / Bug6 地平线描边 / camera 低大气 不回归。
 - **诊断放大**：如需放大暗部差异对照，可在 URL 加 `&debug=1`（log finalColor）单独采集对照组。
 
+### 视觉门禁方法论（Phase 1 实践修正，2026-08-06）
+
+`maxΔ≤2/255` 硬阈值适用于「**零影响优化**」（如 Task 4 tapC 早退对 ground 像素零影响、Task 5 depthTemporal 默认 true 零影响）——这类优化理论上输出逐位不变，任何 delta 都是 bug，硬阈值正确。
+
+对「**预期改变渲染的优化**」（如 Task 6 掠射 tap 切换、Task 7 lensflare 压缩），硬阈值会误报——优化本体必然改变部分像素。这类优化的门禁改为：
+
+- **无结构 artifact**：无条纹/分界线/描边/方向性偏置（SSIM≥0.999 佐证无结构破坏）。
+- **弥散 LSB 差异可接受**：优化足迹区允许 ≤3/255 弥散差异（非 Bug 敏感区的预期 footprint）。
+- **ref 随优化更新**：每个 Phase 后 regenerate ref 为新基线，下 Phase 对比新基线（优化是预期行为，非回归）。
+- **Bug 敏感区零容忍**：Bug4/5/6 复现视角是回归硬约束区，即使「预期改变优化」也必须 maxΔ≤2/255（Task 6 实测 bug5 圆圈阶梯 maxΔ=43 是地球边缘 inscatter 敏感区 tap 切换回归，必须修——收窄 muLook 过渡带到极掠射避免）。
+
+**Task 6 bug6-horizon 实例**（用户决策 A 接受）：低空掠射 muLook≈0.075（极掠射），tap 切换 footprint 弥散 ≤3 LSB、SSIM=0.99994、非 Bug 敏感结构，接受 + regen ref。
+
+**Task 6 bug5-circle 教训**：高空俯视（1002km）地球边缘 muLook≈0.5，原过渡带 (0.3,0.6) 误降 tap → 圆圈阶梯 inscatter 回归（maxΔ=43）。修复：过渡带收窄到 (0.15,0.3)，仅极掠射（|muLook|<0.3）降 tap，地球边缘（0.4-0.5）保留 5-tap。教训：muLook 单一维度门控需兼顾 inscatter 敏感性，过渡带要避开地球边缘过渡带。
+
 ## 采集状态
 
 > 本模板建立时（2026-08-06）的回填进度。**headless（SwiftShader）已跑通**；真实 GPU 数据待 controller/用户采集回写。

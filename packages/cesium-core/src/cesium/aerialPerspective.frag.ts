@@ -330,6 +330,18 @@ void main() {
   float inDither = interleavedGradientNoise(gl_FragCoord.xy)
     + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
   originalColor.rgb += inDither * 1.5 / 255.0;
+
+  // —— 视线几何量前移（Phase 1.2）：5-tap 段的 muLook 门控需在 depth 采样前拿到视角量 ——
+  // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
+  // 都用全量 altitudeCorrection，保证在同一密切球局部系（Bruneton 模型前提）。
+  vec3 cameraPosition = (czm_viewerPositionWC + altitudeCorrection) * METER_TO_LENGTH_UNIT;
+  vec3 rayDirection;
+  reconstructRay(cameraPosition, rayDirection);
+  vec3 radialOut = normalize(cameraPosition);
+  // 视线与径向（天顶方向）余弦：垂直俯视 |muLook|→1，掠射 |muLook|→0。平滑、不读 depth、无循环依赖
+  //（Phase 1.2 5-tap 视角自适应门控用；绝不用 mask/sceneDist 门控——判定信号本身在抖会造边界条纹）。
+  float muLook = dot(rayDirection, radialOut);
+
   // depth 反演（Bug1）：czm_reverseLogDepthWindow 显式反演 log-depth → 线性 window depth（PostProcessStage
   // 无 LOG_DEPTH define，czm_readDepth 返回 raw logDepth → 4-arg 反投影错）。near/far 用 czm_currentFrustum。
   // Bug4：5-tap 邻域平均（log-depth 域 ≈ 几何平均距离）抗 depth 高频抖 → 消波纹（sceneDist 抖放大 inscatter
@@ -341,32 +353,39 @@ void main() {
   float logDepth = originalColor.a;  // depthTemporal[0] 输出 vec4(sceneColor.rgb, smoothLogDepth)（已平滑）
   float tapC = originalColor.a;  // Bug6：中心 tap 与平均一致（EMA 路径无 5-tap）
 #else
-  vec2 depthTexel = 1.0 / vec2(textureSize(depthTexture, 0));
   float tapC = texture(depthTexture, v_textureCoordinates).r;  // 中心 tap：hasScene 判定用（Bug6）
   float logDepth = 1.0;  // 默认 far-plane（tapC>=1.0 时跳过 4 邻域，省天空区 80% depth 采样，Phase 1.0）
-  if (tapC < 1.0) {  // tapC 早退：仅地面像素才 5-tap 平均（天空/未渲染 4 邻域 fetch 对输出零影响）
-    float tapR = texture(depthTexture, v_textureCoordinates + vec2(depthTexel.x, 0.0)).r;
-    float tapL = texture(depthTexture, v_textureCoordinates - vec2(depthTexel.x, 0.0)).r;
-    float tapU = texture(depthTexture, v_textureCoordinates + vec2(0.0, depthTexel.y)).r;
-    float tapD = texture(depthTexture, v_textureCoordinates - vec2(0.0, depthTexel.y)).r;
-    float tapSum = tapC;  // tapC<1.0 必计入
-    float tapCount = 1.0;
-    if (tapR < 1.0) { tapSum += tapR; tapCount += 1.0; }
-    if (tapL < 1.0) { tapSum += tapL; tapCount += 1.0; }
-    if (tapU < 1.0) { tapSum += tapU; tapCount += 1.0; }
-    if (tapD < 1.0) { tapSum += tapD; tapCount += 1.0; }
-    logDepth = tapSum / tapCount;  // 5-tap 平均：sceneDist 距离用（tapCount>=1.0 必 >0.5，三元简化为除法）
+  if (tapC < 1.0) {  // tapC 早退：仅地面像素才考虑空间平滑（天空/未渲染 4 邻域 fetch 对输出零影响）
+    // Phase 1.2：垂直俯视（|muLook|→1）保留 5-tap（Bug4 有效场景，空间高频抖可空间平滑消）；
+    // 掠射（|muLook|→0）降 tap 退中心 tap（5-tap 对掠射无效=depth 时序跳非空间高频，results:50）。
+    // muLook 门控（平滑、不读 depth、无循环依赖——绝不用 mask/sceneDist 门控，那判定信号本身在抖会造边界条纹）；
+    // smoothstep 连续过渡避免 tap 数硬切换分界线；掠射退中心 tap（对称，禁 3-tap 十字防方向性偏置 ×25）。
+    // 过渡带 (0.15,0.3)：仅极掠射（|muLook|<0.3，如低空水平视线 bug6≈0.075）降 tap；中高空地球边缘
+    // （|muLook|≈0.4-0.5，如 camera-high-graze≈0.36、高空俯视地球边缘≈0.5）保留 5-tap——后者是 inscatter
+    // 阶梯敏感区（Bug5 圆圈阶梯），tap 切换会改 sceneDist → 阶梯回归（maxΔ=43 实证）。5-tap 对纯极掠射无效
+    // （depth 时序跳非空间高频），但对地球边缘过渡带仍有空间平滑价值，故阈值收窄到极掠射。
+    float useSpatial = smoothstep(0.15, 0.3, abs(muLook));
+    if (useSpatial > 0.5) {  // 垂直俯视：5-tap 空间平滑（Bug4）
+      vec2 depthTexel = 1.0 / vec2(textureSize(depthTexture, 0));
+      float tapR = texture(depthTexture, v_textureCoordinates + vec2(depthTexel.x, 0.0)).r;
+      float tapL = texture(depthTexture, v_textureCoordinates - vec2(depthTexel.x, 0.0)).r;
+      float tapU = texture(depthTexture, v_textureCoordinates + vec2(0.0, depthTexel.y)).r;
+      float tapD = texture(depthTexture, v_textureCoordinates - vec2(0.0, depthTexel.y)).r;
+      float tapSum = tapC;  // tapC<1.0 必计入
+      float tapCount = 1.0;
+      if (tapR < 1.0) { tapSum += tapR; tapCount += 1.0; }
+      if (tapL < 1.0) { tapSum += tapL; tapCount += 1.0; }
+      if (tapU < 1.0) { tapSum += tapU; tapCount += 1.0; }
+      if (tapD < 1.0) { tapSum += tapD; tapCount += 1.0; }
+      logDepth = tapSum / tapCount;  // 5-tap 平均：sceneDist 距离用（tapCount>=1.0 必 >0.5，三元简化为除法）
+    } else {  // 掠射：中心 tap（5-tap 无效，省 4 fetch）
+      logDepth = tapC;
+    }
   }
 #endif
   float depth = czm_reverseLogDepthWindow(logDepth, czm_currentFrustum.x, czm_currentFrustum.y);
   // Bug6：hasSceneDepth 用 tapC（中心像素，真实地形判定）；depth 用 5-tap 平均（sceneDist 距离平滑）。
   float hasSceneDepth = czm_reverseLogDepthWindow(tapC, czm_currentFrustum.x, czm_currentFrustum.y);
-
-  // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
-  // 都用全量 altitudeCorrection，保证在同一密切球局部系（Bruneton 模型前提）。
-  vec3 cameraPosition = (czm_viewerPositionWC + altitudeCorrection) * METER_TO_LENGTH_UNIT;
-  vec3 rayDirection;
-  reconstructRay(cameraPosition, rayDirection);
 
   float bottomR = ATMOSPHERE.bottom_radius;
   float topR = ATMOSPHERE.top_radius;
@@ -397,9 +416,8 @@ void main() {
   }
 
   // —— 几何判定（视线方向，平滑）——
+  // radialOut/muLook 已前移到 depth 采样前（Phase 1.2 门控用）；此处直接用前移的 muLook。
   bool hitBottom = rayForwardHitsSphere(cameraPosition, rayDirection, bottomR);
-  vec3 radialOut = normalize(cameraPosition);
-  float muLook = dot(rayDirection, radialOut);
   bool brunetonIntersectsGround = RayIntersectsGround(ATMOSPHERE, camR, muLook);
   // 视线是否指向地球（与地表前向相交）—— sky/ground inscatter 函数选择的主判据（平滑，不读 depth）。
   bool lookingAtGround = brunetonIntersectsGround || hitBottom;

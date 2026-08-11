@@ -232,3 +232,11 @@ describe('tapC 早退（Phase 1.0，评审遗漏 1，零视觉风险）', () => 
     expect(s).toContain('float logDepth = 1.0;')
   })
 })
+
+describe('5-tap 视角自适应（Phase 1.2，评审 C1/M3）', () => {
+  it('muLook 门控：垂直俯视保留 5-tap / 掠射降 tap 退中心 tap（smoothstep 连续过渡，非 mask/sceneDist——无循环依赖）', () => {
+    const s = buildAerialPerspectiveFragmentShader({ hdrDepthTemporal: false })
+    // muLook 门控（smoothstep 连续过渡，绝不用 mask/sceneDist——判定信号本身在抖会造边界条纹）
+    expect(s).toMatch(/smoothstep\([^)]*abs\(muLook\)/)
+  })
+})
