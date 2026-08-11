@@ -54,7 +54,9 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'u_groundDim',
   'cosSunAngularRadius',
   'u_distanceScale',
-  'u_inscatterScale'
+  'u_inscatterScale',
+  'u_limbGlowIntensity',
+  'u_limbGlowDecayKm'
 ]
 
 // Cesium PostProcessStage 内建纹理 uniform——必须由 shader 显式声明（Cesium 仅提供 uniform 值，
@@ -85,6 +87,8 @@ uniform float u_debugMode;
 uniform float u_groundDim;
 uniform float u_distanceScale;  // 散射距离缩放（方案 A，等效空气密度倍率；1.0=phase1 物理，>1 中近距散射强）
 uniform float u_inscatterScale;  // inscatter 放大（方案 B 远处白雾浓；1.0=phase1 物理，>1 远处雾浓，可超物理饱和）
+uniform float u_limbGlowIntensity;  // limb outer glow 强度（太空视角大气边缘向外扩散辉光；0=关，~0.3-0.8 标定）
+uniform float u_limbGlowDecayKm;  // limb glow 向外指数衰减距离（km；~20-40 控制扩散范围）
 `
 
 // [SKY && SUN] cos(SUN_ANGULAR_RADIUS)，SUN 日盘角半径阈值。
@@ -479,6 +483,24 @@ ${skyBranch}  }
       inscatter = mix(inscatter, foreInscatter, mask);
     }
   }
+
+  // —— limb soft fade（用户需求：limb 边缘蓝白 inscatter 缓慢渐隐到黑太空，消除硬切边缘）。
+  // 根因：Bruneton GetSkyRadiance 在视线错过大气顶层(topR)时 return 0，但视线与 topR 相切(limb)时
+  // inscatter = LUT(topR, 切线) 非零（切线路径穿过大气整层）→ limb 内侧非零硬切到外侧 0，明显边缘。
+  // 修复：内侧 inscatter 在 over→0 时 smoothstep fade 到 0（蓝白过渡平滑收尾到黑太空）。
+  // 几何：b=|cross(camera,ray)|=视线到地心最近距离(impact parameter, km)；over=b-topR。
+  // over<=-decay: inscatter 不变（满）；over∈[-decay,0]: 平滑 fade 到 0；over>0: 本就 0（太空）。
+  // 首版用外侧 additive glow 形成独立亮带（双边缘更差），改为内侧 fade 无额外带——本质是让 limb 处
+  // 原本硬切到 0 的非零 inscatter 提前平滑渐隐（"缓慢减弱"），代价 limb 处稍暗（物理 limb 辉光由内侧已含）。
+  if (u_limbGlowIntensity > 0.0) {
+    float limbB = length(cross(cameraPosition, rayDirection));  // impact parameter (km)
+    float limbOver = limbB - topR;
+    // 1 - smoothstep(-decay, 0, over)：over<=-decay→1（内侧远处 inscatter 不变，保留大气）；
+    // over∈[-decay,0]→1..0（limb 附近渐隐）；over>=0→0（与外侧黑太空连续，无硬切边缘）。
+    float limbFade = 1.0 - smoothstep(-u_limbGlowDecayKm, 0.0, limbOver);
+    inscatter *= limbFade;
+  }
+
   finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale;
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；

@@ -178,6 +178,9 @@ describe('validateAtmosphereOptions', () => {
       distanceScale: 1.0,
       inscatterScale: 25.0,
       ditherScale: 1.0,
+      // limb outer glow（太空视角大气边缘扩散辉光）：默认 intensity 1.0（线性域独立加 finalColor）/ decay 30km
+      limbGlowIntensity: 1.0,
+      limbGlowDecayKm: 30.0,
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,

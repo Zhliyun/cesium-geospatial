@@ -82,6 +82,10 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   distanceScale?: number // 散射距离缩放（方案 A，1.0=phase1 物理，>1 中近距散射强，建议 1.0-3.0，超 3 需评估 half-float 灾消）
   inscatterScale?: number // inscatter 放大（方案 B 远处白雾浓，1.0=phase1 物理，>1 远处雾浓，直接 ×inscatter 可超物理饱和）
   ditherScale?: number // input+display dithering 强度倍率（1.0=phase1 默认；>1 更强打散 inscatterScale 放大 ACES 输入暴露的 banding，但噪声增）
+  // limb outer glow（太空视角大气边缘向外扩散辉光）：消除 Bruneton GetSkyRadiance 在 topR 硬切的 limb 圆弧。
+  // limbGlowIntensity 默认 0.3（?limbGlow=N 调强度，0=关）；limbGlowDecayKm 默认 30（?limbDecay=N 调扩散范围 km）。
+  limbGlowIntensity?: number
+  limbGlowDecayKm?: number
   // depthTemporal EMA 参数化（Task 12 URL ?temporalQuality=/?depthThreshold=/?temporalEma=）：
   // temporalEma 默认 true（HDR 设备 EMA 消抖）；?temporalEma=0 → false（depthTemporal 走 enabled=false
   //   透传 vec4(sceneColor, curLogDepth)，不 EMA；atmosphere 读 .a=raw log-depth 仍有效，回退 Task 9 前
@@ -115,6 +119,9 @@ export interface ResolvedAtmosphereStageOptions extends Required<Omit<AerialPers
   distanceScale: number
   inscatterScale: number
   ditherScale: number
+  // limb outer glow resolved（太空视角大气边缘扩散辉光）
+  limbGlowIntensity: number
+  limbGlowDecayKm: number
   // depthTemporal temporal* resolved（Task 12）
   temporalEma: boolean
   temporalLowAlpha: number
@@ -210,6 +217,9 @@ export function validateAtmosphereOptions(
     distanceScale: options.distanceScale ?? 1.0, // 默认 1.0 = phase1 行为零回归
     inscatterScale: options.inscatterScale ?? 25.0, // 用户验收远处白雾浓默认 25；URL ?inscatterScale=1 回退 phase1 物理量级
     ditherScale: options.ditherScale ?? 1.0, // 默认 1.0 = phase1 dithering ±1.5/255 零回归
+    // limb outer glow 默认（太空视角大气边缘扩散辉光）：intensity 1.0 线性域（独立加 finalColor，不 ×inscatterScale）、decay 30km 扩散范围，URL ?limbGlow/?limbDecay 调
+    limbGlowIntensity: options.limbGlowIntensity ?? 1.0,
+    limbGlowDecayKm: options.limbGlowDecayKm ?? 30.0,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
@@ -280,6 +290,8 @@ export function buildAtmosphereUniforms(
     u_groundDim: options.groundDim,
     u_distanceScale: options.distanceScale,
     u_inscatterScale: options.inscatterScale,
+    u_limbGlowIntensity: options.limbGlowIntensity,
+    u_limbGlowDecayKm: options.limbGlowDecayKm,
     // u_ditherScale 不传：aerialPerspective.frag 回退到 363e441（input dithering 用固定 1.5/255，无 uniform）。
     // display dithering 的 u_ditherScale 仍在 tonomapStage 消费（?ditherScale= 仍有效）。
     cosSunAngularRadius: Math.cos(SUN_ANGULAR_RADIUS)
