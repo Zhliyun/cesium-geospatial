@@ -86,7 +86,10 @@ void main() {
   ghosts *= u_ghostAmount;
   // halo（采 preBlur + cubicRingMask + 色散 R/G/B 偏移）：沿 hdir 偏移到光环位置，R/G/B 三通道
   // 分别按 -1/0/+1 倍色散量偏移采样，制造镜头色散伪光斑。
-  vec2 hdir = normalize((uv - 0.5) / aspect) * aspect;
+  // normalize guard：uv=0.5（屏幕中心）时 direction=0，normalize(0)=NaN → halo=NaN 全屏传播（白点）。
+  // 中心 cubicRingMask(0)=0 本就不贡献 halo，故 direction≈0 时 hdir=vec2(0) 防 NaN。
+  vec2 dir = (uv - 0.5) / aspect;
+  vec2 hdir = dot(dir, dir) > 1e-10 ? normalize(dir) * aspect : vec2(0.0);
   vec2 hsuv = fract(1.0 - uv + hdir * ${HALO_DISPLACEMENT});
   vec3 hoffset = vec3(u_texelSize.x * u_chromaticAberration) * vec3(-1.0, 0.0, 1.0);
   vec3 halo;

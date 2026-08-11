@@ -23,6 +23,7 @@ const UNIFORMS_GLSL = `
 uniform sampler2D colorTexture;        // atmosphere（non-series input，preBlur 不采样，Cesium 要求声明）
 uniform sampler2D u_thresholdTexture;  // lf_threshold（uniform-name string 引用，强制依赖）
 uniform vec2 u_texelSize;              // lf_threshold 的 1/w, 1/h（源=threshold 输出）
+uniform float u_blurRadius;            // 软化核偏移倍数（1.0=默认 8 邻域 1 texel box；>1 更糊更大模糊半径，ghost 模糊效果）
 `
 
 const MAIN_GLSL = `
@@ -30,7 +31,7 @@ in vec2 v_textureCoordinates;
 
 void main() {
   vec2 uv = v_textureCoordinates;
-  vec2 ts = u_texelSize;
+  vec2 ts = u_texelSize * u_blurRadius;  // 8 邻域偏移（× blurRadius 控模糊半径）
   // Kawase-like 8 邻域软化（box 近似 KawaseBlurPass SMALL 单 pass，软化 ghost/halo 输入）：
   //   center(0,0)
   vec3 c = texture(u_thresholdTexture, uv).rgb;
@@ -50,7 +51,7 @@ void main() {
 
 // 供 non-series 接线一致性测试：preBlur stage 声明的 uniform（colorTexture 是 Cesium 内建白名单）。
 // u_thresholdTexture 是 uniform-name string 引用，须列入以构建强制依赖（保证 lf_threshold 先执行）。
-export const PREBLUR_UNIFORM_NAMES: string[] = ['u_thresholdTexture', 'u_texelSize']
+export const PREBLUR_UNIFORM_NAMES: string[] = ['u_thresholdTexture', 'u_texelSize', 'u_blurRadius']
 
 // 组装 PostProcessStage 用 fragment shader（供 Cesium 运行时；colorTexture/v_textureCoordinates
 // 由 Cesium 注入值，shader 显式声明；out_FragColor 由 Cesium 注入声明）。

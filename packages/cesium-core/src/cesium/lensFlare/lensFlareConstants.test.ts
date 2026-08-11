@@ -38,7 +38,7 @@ describe('lensFlareConstants', () => {
   it('默认参数起点（spec §5.8，实测非缩放）', () => {
     expect(THRESHOLD_LEVEL_DEFAULT).toBe(3.0)
     expect(THRESHOLD_RANGE_DEFAULT).toBe(1.0)
-    expect(INTENSITY_DEFAULT).toBe(0.01)
+    expect(INTENSITY_DEFAULT).toBe(0.001) // 0.01→0.005→0.001：用户验收逐步更透明
     expect(GHOST_AMOUNT_DEFAULT).toBe(0.05)
     expect(HALO_AMOUNT_DEFAULT).toBe(0.05)
   })

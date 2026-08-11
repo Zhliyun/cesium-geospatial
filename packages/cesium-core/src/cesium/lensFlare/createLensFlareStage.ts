@@ -72,6 +72,8 @@ export interface LensFlareOptions {
   haloAmount?: number
   /** halo 色散偏移强度（texel 倍数，spec §5.4）。 */
   chromaticAberration?: number
+  /** preBlur 软化核偏移倍数（ghost/halo 模糊半径，1.0=默认 9-tap box；>1 更糊更大半径）。 */
+  preBlurRadius?: number
 }
 
 /** LensFlare stage 树句柄：持所有 stage/composite 引用，便于运行时控制与销毁。 */
@@ -150,6 +152,7 @@ export function createLensFlareStage(
   const ghostAmount = options.ghostAmount ?? GHOST_AMOUNT_DEFAULT
   const haloAmount = options.haloAmount ?? HALO_AMOUNT_DEFAULT
   const chromaticAberration = options.chromaticAberration ?? CHROMATIC_ABERRATION
+  const preBlurRadius = options.preBlurRadius ?? 1.0
 
   // ellipsoid.radiiSquared：occlusion ray-ellipsoid 椭球遮挡用。
   // create 时捕获一次——Ellipsoid 在 app 生命周期内固定，radiiSquared Cartesian3 不变。
@@ -223,7 +226,8 @@ export function createLensFlareStage(
     fragmentShader: buildPreBlurFragmentShader(),
     uniforms: {
       u_thresholdTexture: 'lf_threshold', // string 字面量（I10）
-      u_texelSize: texelSizeForSourceScale(scene, 1.0) // 源 = threshold（全分）
+      u_texelSize: texelSizeForSourceScale(scene, 1.0), // 源 = threshold（全分）
+      u_blurRadius: preBlurRadius
     },
     textureScale: 1.0,
     sampleMode: PostProcessStageSampleMode.NEAREST,

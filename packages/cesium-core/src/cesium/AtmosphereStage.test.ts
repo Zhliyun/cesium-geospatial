@@ -186,6 +186,7 @@ describe('validateAtmosphereOptions', () => {
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
       lensFlareGhost: GHOST_AMOUNT_DEFAULT,
       lensFlareHalo: HALO_AMOUNT_DEFAULT,
+      lensFlarePreBlur: 3.0, // preBlur 软化核偏移倍数（ghost/halo 模糊半径），默认 3.0（用户验收加大模糊）
       // depthTemporal temporal*（Task 12）：默认 EMA 开 + LOW/HIGH_ALPHA/DEPTH_THRESHOLD_DEFAULT
       temporalEma: true,
       temporalLowAlpha: 0.05, // LOW_ALPHA

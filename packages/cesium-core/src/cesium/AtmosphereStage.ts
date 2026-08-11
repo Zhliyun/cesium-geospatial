@@ -79,6 +79,7 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   lensFlareThreshold?: number // 阈值电平（默认 THRESHOLD_LEVEL_DEFAULT）
   lensFlareGhost?: number // ghost 总强度（默认 GHOST_AMOUNT_DEFAULT）
   lensFlareHalo?: number // halo 总强度（默认 HALO_AMOUNT_DEFAULT）
+  lensFlarePreBlur?: number // preBlur 软化核偏移倍数（ghost/halo 模糊半径，默认 1.0；>1 更糊，?lfPreBlur=N 调）
   distanceScale?: number // 散射距离缩放（方案 A，1.0=phase1 物理，>1 中近距散射强，建议 1.0-3.0，超 3 需评估 half-float 灾消）
   inscatterScale?: number // inscatter 放大（方案 B 远处白雾浓，1.0=phase1 物理，>1 远处雾浓，直接 ×inscatter 可超物理饱和）
   ditherScale?: number // input+display dithering 强度倍率（1.0=phase1 默认；>1 更强打散 inscatterScale 放大 ACES 输入暴露的 banding，但噪声增）
@@ -116,6 +117,7 @@ export interface ResolvedAtmosphereStageOptions extends Required<Omit<AerialPers
   lensFlareThreshold: number
   lensFlareGhost: number
   lensFlareHalo: number
+  lensFlarePreBlur: number
   distanceScale: number
   inscatterScale: number
   ditherScale: number
@@ -214,6 +216,7 @@ export function validateAtmosphereOptions(
     lensFlareThreshold: options.lensFlareThreshold ?? THRESHOLD_LEVEL_DEFAULT,
     lensFlareGhost: options.lensFlareGhost ?? GHOST_AMOUNT_DEFAULT,
     lensFlareHalo: options.lensFlareHalo ?? HALO_AMOUNT_DEFAULT,
+    lensFlarePreBlur: options.lensFlarePreBlur ?? 3.0, // 默认 3.0（用户验收：ghost 模糊效果与半径加大）
     distanceScale: options.distanceScale ?? 1.0, // 默认 1.0 = phase1 行为零回归
     inscatterScale: options.inscatterScale ?? 25.0, // 用户验收远处白雾浓默认 25；URL ?inscatterScale=1 回退 phase1 物理量级
     ditherScale: options.ditherScale ?? 1.0, // 默认 1.0 = phase1 dithering ±1.5/255 零回归
@@ -413,7 +416,8 @@ export function createAtmosphereStage(
         intensity: resolved.lensFlareIntensity,
         thresholdLevel: resolved.lensFlareThreshold,
         ghostAmount: resolved.lensFlareGhost,
-        haloAmount: resolved.lensFlareHalo
+        haloAmount: resolved.lensFlareHalo,
+        preBlurRadius: resolved.lensFlarePreBlur
       },
       temporalEmaEnabled ? 'czm_depth_temporal' : undefined
     )

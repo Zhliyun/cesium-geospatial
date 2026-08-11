@@ -6,7 +6,9 @@
 export const NUM_BLOOM_LEVELS = 6 // threshold(get0) + down0-4（到 textureScale 1/32），spec §3
 
 // 9 ghost offset + tint（逐字 three-geospatial lensFlareFeatures.frag，spec §1.4 表）
-export const GHOST_OFFSETS: number[] = [-5.0, -1.5, -0.4, -0.2, -0.1, 0.7, 1.0, 2.5, 10.0]
+// GHOST_OFFSETS[6]：原 1.0 致 suv=1-uv+(uv-0.5)×1.0=0.5 全屏恒定（数学奇点）——所有像素采屏幕中心，
+// 正对太阳时全盘叠加太阳 HDR → 全盘白。改 0.9 消除奇点（suv 随 uv 变化，ghost 回到正常反射位置）。
+export const GHOST_OFFSETS: number[] = [-5.0, -1.5, -0.4, -0.2, -0.1, 0.7, 0.9, 2.5, 10.0]
 export const GHOST_TINTS: [number, number, number][] = [
   [0.8, 0.8, 1.0], [1.0, 0.8, 0.4], [0.9, 1.0, 0.8], [1.0, 0.8, 0.4], [0.9, 0.7, 0.7],
   [0.5, 1.0, 0.4], [0.5, 0.5, 0.5], [1.0, 1.0, 0.6], [0.5, 0.8, 1.0]
@@ -29,6 +31,6 @@ export const UPSAMPLE_WEIGHTS = { center: 0.25, edge: 0.125, corner: 0.0625 }
 
 export const THRESHOLD_LEVEL_DEFAULT = 3.0
 export const THRESHOLD_RANGE_DEFAULT = 1.0
-export const INTENSITY_DEFAULT = 0.01
+export const INTENSITY_DEFAULT = 0.001 // ghost/bloom 总强度（用户验收：0.01→0.005→0.001 逐步更透明）
 export const GHOST_AMOUNT_DEFAULT = 0.05
 export const HALO_AMOUNT_DEFAULT = 0.05
