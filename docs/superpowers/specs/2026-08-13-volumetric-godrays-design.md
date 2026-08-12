@@ -113,7 +113,7 @@
 ### 3.4 像素类型与采样（r1 important 修订）
 
 - `gr_shadowLength`：`pixelDatatype: postHdrDatatype`（HalfFloat），`pixelFormat: RGBA`（PostProcessStage 要求 RGBA；vec2 存 `.rg`，`.ba` 填 0），`textureScale: 0.5`（半分辨率）。
-- `gr_passthrough`：`pixelDatatype: postHdrDatatype`，`textureScale: 1.0`（全分辨率，1:1 透传保 atmosphere .a depth 精度）。
+- `gr_passthrough`：`pixelDatatype: postHdrDatatype`，`textureScale: 1.0`（全分辨率，1:1 透传场景色；r2 minor：atmosphere 不读 .a——hdrDepthTemporal:false 读自己 depthTexture.r，gr_passthrough 透传仅为 composite output=场景色 + 满足 RGBA 格式要求）。
 - **上采样 sampleMode（r1 important 修订）**：r0 称"gr_shadowLength 设 sampleMode:LINEAR → atmosphere 读无方块"是**错的**。Cesium `sampleMode` 只作用于 stage 的**输入** colorTexture（`PostProcessStage.js:949-954`），output 纹理 sampler 永远 NEAREST（`FramebufferManager.js:171/195/225`）。atmosphere 读 `gr_shadowLength` output 走 **NEAREST**。
   - 方案 A（推荐初版）：接受 NEAREST，god rays 低频，0.5× 半分 2×2 方块在 ACES+groundDim 后视觉可接受（lensflare occlusion 0.0625→features NEAREST 已生产验证 `features.frag.ts:102`）。T7 验收见方块走方案 B。
   - 方案 B：atmosphere shader 内对 `u_shadowLengthTexture` 手动 4-tap 双线性（textureSize + 0.5/texel 中心偏移，4 次 texture() 加权）绕过 sampler 限制。
@@ -138,12 +138,13 @@ march pass（`gr_shadowLength`）**始终 enabled**（`gr_wrapper` 始终执行�
 vec3 rayDir;
 reconstructRay(czm_viewerPositionWC, rayDir);
 
-// 2. camera/单位（r1 C3 修订：必须与 atmosphere 完全同框架，km 域 + altitudeCorrection）
-vec3 altitudeCorrection = u_altitudeCorrection;  // state.altitudeCorrection，km
-vec3 cameraWC = (czm_viewerPositionWC + altitudeCorrection) * METER_TO_LENGTH_UNIT;  // km 域
-float topR = u_atmosphereTopRadius;  // km（统一用 uniform，不引 ATMOSPHERE const，保持 shader 独立）
+// 2. camera/单位（r2 修订：altitudeCorrection 米域，与 atmosphere 完全同框架；shader 内 *METER_TO_LENGTH_UNIT 转 km）
+vec3 altitudeCorrection = u_altitudeCorrection;  // state.altitudeCorrection，米域（altitudeCorrection.ts:46 返回米，同 aerialPerspective.frag:79/341）
+vec3 cameraWC = (czm_viewerPositionWC + altitudeCorrection) * METER_TO_LENGTH_UNIT;  // km 域（Bruneton 局部坐标系，密切球中心为原点）
+float topR = u_atmosphereTopRadius;  // km
 float rmu = dot(cameraWC, rayDir);
-float pointDist = max(-rmu - sqrt(rmu*rmu - dot(cameraWC,cameraWC) + topR*topR), 0.0);  // camera→大气顶层
+// r2 minor：SafeSqrt（掠射判别式微负防 NaN，同 runtime.glsl:149 / aerialPerspective.frag:171）
+float pointDist = max(-rmu - SafeSqrt(rmu*rmu - dot(cameraWC,cameraWC) + topR*topR), 0.0);  // camera→大气顶层
 
 // 3. 主 march + first moment 累加（透视增长步长，jitter 起始）
 float totalShadowLength = 0.0;
@@ -152,15 +153,15 @@ float t = u_godRaysMainStep0 * jitterHash();
 float step = u_godRaysMainStep0;
 for (int i = 0; i < GOD_RAYS_MAIN_STEPS; ++i) {  // N=16
   if (t > pointDist) break;
-  vec3 P = cameraWC + rayDir * t;  // km 域
-  bool lit = sunRayMarchLit(P);  // §4.3
+  float centerDist = t + step * 0.5;           // 段中心（r2 Imp-1：与 totalShadowLength/firstShadowMoment 同 step）
+  vec3 P = cameraWC + rayDir * centerDist;     // km 域，采样在段中心
+  bool lit = sunRayMarchLit(P);                // §4.3
   if (!lit) {
-    float centerDist = t + step * 0.5;
     totalShadowLength += step;
-    firstShadowMoment += step * centerDist;  // first moment（阴影段长 × 段中心距）
+    firstShadowMoment += step * centerDist;    // first moment（阴影段长 × 段中心距）
   }
-  step *= u_godRaysMainStepGrowth;  // 透视增长（1.3），覆盖 ~109km 被 pointDist 截断
-  t += step;
+  t += step;                                    // r2 Imp-1：先用当前 step 推进（段首尾相接），再增长
+  step *= u_godRaysMainStepGrowth;             // 透视增长（1.3），连续覆盖 ~107km 被 pointDist 截断
 }
 
 // 4. first moment → distanceToFirstShadow（three-geospatial EpipolarShadowLengthNode:582-595）
@@ -171,7 +172,8 @@ if (totalShadowLength > 1e-6) {
     0.0, max(pointDist - totalShadowLength, 0.0));
   if (distanceToFirstShadow < 1.0 / 1000.0) distanceToFirstShadow = 0.0;  // <1m→阴影从 camera 起（Branch 2 语义，但默认走 Branch 3）
 }
-out_FragColor = vec4(totalShadowLength * u_godRaysIntensity, distanceToFirstShadow, 0.0, 1.0);  // .rg=vec2，km，HalfFloat
+// r2 Imp-2：intensity<1 缓解过暗（缺 higher-order LUT 时 Branch 3 扣总散射，阴影段过黑，见 §7.7）
+out_FragColor = vec4(totalShadowLength * u_godRaysIntensity, distanceToFirstShadow, 0.0, 1.0);  // .rg=vec2 km，HalfFloat
 ```
 
 **步长（r1 minor 修订）**：主 march step0=0.5km × growth=1.3^16 ≈ **109km**（r0 误写 50km），被 `pointDist`（大气顶层）截断。近处 step0=0.5km 对山脊（几 km 宽）可能偏粗，T1 标定可调 step0=0.2km。
@@ -182,9 +184,10 @@ out_FragColor = vec4(totalShadowLength * u_godRaysIntensity, distanceToFirstShad
 bool sunRayMarchLit(vec3 P_km) {
   for (int j = 0; j < GOD_RAYS_SUN_STEPS; ++j) {  // M=8
     float s = u_godRaysSunStep0 * pow(u_godRaysSunStepGrowth, float(j));  // km
-    vec3 Q_km = P_km + sunDirectionWC * s;  // km 域（sunDirectionWC 是单位向量，世界系）
-    // Q 投影到屏幕：czm_viewProjection 期望 ECEF 米，km→米转回（r1 C3）
-    vec4 QClip = czm_viewProjection * vec4(Q_km * (1.0 / METER_TO_LENGTH_UNIT), 1.0);
+    vec3 Q_km = P_km + sunDirectionWC * s;  // km 域（sunDirectionWC 是 ECEF 单位向量；altitudeCorrection 平移不改方向）
+    // r2 Crit-1：Q 投影须转回真实 ECEF 米（减 altitudeCorrection 密切球偏移），czm_viewProjection 期望 ECEF 米
+    vec3 Q_realECEF_m = Q_km / METER_TO_LENGTH_UNIT - u_altitudeCorrection;
+    vec4 QClip = czm_viewProjection * vec4(Q_realECEF_m, 1.0);
     if (QClip.w <= 0.0) break;                      // Q 在 camera 后方 → fallback（保持当前 lit）
     vec3 QNdc = QClip.xyz / QClip.w;
     if (any(lessThan(QNdc.xy, vec2(-1.0))) || any(greaterThan(QNdc.xy, vec2(1.0)))) break;  // 出屏幕
@@ -195,14 +198,15 @@ bool sunRayMarchLit(vec3 P_km) {
     vec4 QEyePos = czm_windowToEyeCoordinates(vec4(QUv * czm_viewport.zw, winDepth, 1.0));
     if (abs(QEyePos.w) > 1e-6) QEyePos /= QEyePos.w;
     float sceneEyeZ = QEyePos.z;
-    float QEyeZ = (czm_view * vec4(Q_km * (1.0 / METER_TO_LENGTH_UNIT), 1.0)).z;
-    if (QEyeZ < sceneEyeZ - u_godRaysDepthBias) return false;  // Q 比 scene 远 → P 被挡阳光 → shadow
+    float QEyeZ = (czm_view * vec4(Q_realECEF_m, 1.0)).z;  // r2 Crit-1：与 sceneEyeZ 同 ECEF 米系
+    // r2 Imp-5：bias 标 km，eye-space z 是米，须 /METER_TO_LENGTH_UNIT 转换（默认 0.01km→10m）
+    if (QEyeZ < sceneEyeZ - u_godRaysDepthBias / METER_TO_LENGTH_UNIT) return false;  // Q 比 scene 远 → P 被挡阳光 → shadow
   }
   return true;
 }
 ```
 
-**depth 反演链（r1 C2 关键）**：复刻 `aerialPerspective.frag.ts:349-356,390` 已验证的链：raw log-depth → `czm_reverseLogDepthWindow(near,far)` → window-depth → 4-arg `czm_windowToEyeCoordinates(vec4(windowXY, winDepth, 1.0))` → eye-space z（经透视除法）。shader 须带 LOG_DEPTH defines（cesiumCore 注入），glslang 桩补 `czm_reverseLogDepthWindow`/`czm_currentFrustum`/`czm_viewport`（aerialPerspective VALIDATION_STUBS 已有先例）。
+**depth 反演链（r1 C2 关键 + r2 Imp-6）**：复刻 `aerialPerspective.frag.ts:349-356,390` 已验证的链：raw log-depth → `czm_reverseLogDepthWindow(near,far)` → window-depth → 4-arg `czm_windowToEyeCoordinates(vec4(windowXY, winDepth, 1.0))` → eye-space z（经透视除法）。**r2 Imp-6 重要**：`czm_reverseLogDepthWindow` **不是 Cesium 自动注入**，是项目自定义函数（`logDepth.ts` 的 `LOG_DEPTH_GLSL`），march shader builder **必须手动 concat LOG_DEPTH_GLSL**（同 `aerialPerspective.frag.ts:569 functions.push(LOG_DEPTH_GLSL)`），否则编译失败（undefined function）。glslang 校验用真实 LOG_DEPTH_GLSL 定义（非桩）。`czm_currentFrustum`/`czm_viewport`/`czm_view`/`czm_viewProjection`/`czm_viewerPositionWC` 是自动注入（compile 桩补）。
 
 **screen-space 固有限制（§7.2/§7.4）**：Q 出屏幕/camera 后方 `break`（fallback 保持当前 lit，保守不产假阴影）。低太阳角主用例 Q 出屏幕概率高（§7.4 plausible_concern），T7 必须实测。
 
@@ -229,61 +233,65 @@ inscatter = getSkyRadianceShadowed(cameraPosition, rayDirection, shadowLengthVec
 ```glsl
 vec3 getSkyRadianceShadowed(vec3 camera, vec3 rayDir, vec2 shadowLengthVec2,
                             vec3 sunDir, float fragmentAngle, out vec3 transmittance) {
-  // —— 复用 GetSkyRadiance 前段：camera 在大气壳层处理、r/mu/mu_s/nu、transmittance ——
-  // （省略：同 runtime.glsl GetSkyRadiance L148-178 + aerialPerspective getSkyRadiance L296-303 前段）
-  float r = length(camera); float mu = dot(camera, rayDir)/r;
-  float mu_s = dot(camera, sunDir)/r; float nu = dot(rayDir, sunDir);
-  // ... ray_r_mu_intersects_ground / horizon eps / transmittance = GetTransmittanceToTopAtmosphereBoundary ...
+  // —— 复用 GetSkyRadiance 前段：r/mu/mu_s/nu、transmittance ——
+  float r = length(camera); float rmu = dot(camera, rayDir);
+  float mu = rmu/r; float mu_s = dot(camera, sunDir)/r; float nu = dot(rayDir, sunDir);
+  // ray_r_mu_intersects_ground / horizon eps / transmittance = GetTransmittanceToTopAtmosphereBoundary ...
 
-  float x = shadowLengthVec2.x;  // totalShadowLength
+  // —— r2 Crit-2：camera 在大气壳层外（太空视角）移顶层时，vec2 必须同步 distanceToFirstShadow ——
+  // 标量 GetSkyRadiance 移顶层不调 shadow_length；vec2 三分支必须，照搬 three-geospatial runtime.ts:189-197
+  float x = shadowLengthVec2.x;   // totalShadowLength（intensity 缩放后）
+  float A = shadowLengthVec2.y;   // distanceToFirstShadow（march 在原 camera 坐标系算）
+  float distanceToTop = -rmu - SafeSqrt(rmu*rmu - r*r + ATMOSPHERE.top_radius*ATMOSPHERE.top_radius);
+  if (distanceToTop > 0.0) {      // camera 在大气外，移到顶层
+    camera += rayDir * distanceToTop;
+    r = ATMOSPHERE.top_radius;  rmu += distanceToTop;  mu = rmu/r;
+    A = max(A - distanceToTop, 0.0);   // r2 Crit-2：A 同步前移
+  }
+  // r2 minor：B 钳到 pointDist 防 intensity>1 越大气顶层
+  float pointDist = max(-rmu - SafeSqrt(rmu*rmu - r*r + ATMOSPHERE.top_radius*ATMOSPHERE.top_radius), 0.0);
+  float B = min(A + x, pointDist);
+
   // —— Branch 1：无阴影 ——
   if (x <= 0.0) {
-    return GetSkyRadiance(camera, rayDir, 0.0, sunDir, transmittance);  // 现状，零回归
+    vec3 rad = GetSkyRadiance(camera, rayDir, 0.0, sunDir, transmittance);  // 现状，零回归
+    SUN_DISK_GLSL_INLINE  // r2 Imp-3：日盘（见下方说明，操作局部变量 rad）
+    return rad;
   }
 
   // —— Branch 3：camera 在阴影外，阴影段 [A, B]（three-geospatial runtime.ts:302-320）——
-  float A = shadowLengthVec2.y;          // distanceToFirstShadow
-  float B = A + x;                        // shadowLimit
-
-  // S(camera), M(camera) 在 camera 处
   IrradianceSpectrum singleMieCam;
   IrradianceSpectrum Scam = GetCombinedScattering(ATMOSPHERE, scattering_texture,
     single_mie_scattering_texture, r, mu, mu_s, nu, ray_r_mu_intersects_ground, singleMieCam);
-
-  // a 在 A 处（沿视线 A 米）
+  // a 在 A，b 在 B（r_p/mu_p/mu_s_p 同 GetSkyRadianceToPointScaled L214-216）
   float rA = ClampRadius(ATMOSPHERE, sqrt(A*A + 2.0*r*mu*A + r*r));
   float muA = (r*mu + A)/rA;  float muSA = (r*mu_s + A*nu)/rA;
-  IrradianceSpectrum singleMieA;
+  IrradianceSpectrum singleMieA, singleMieB;
   IrradianceSpectrum Sa = GetCombinedScattering(ATMOSPHERE, scattering_texture,
     single_mie_scattering_texture, rA, muA, muSA, nu, ray_r_mu_intersects_ground, singleMieA);
-  DimensionlessSpectrum TA = GetTransmittance(ATMOSPHERE, transmittance_texture,
-    r, mu, A, ray_r_mu_intersects_ground);
-
-  // b 在 B 处（沿视线 B 米）
+  DimensionlessSpectrum TA = GetTransmittance(ATMOSPHERE, transmittance_texture, r, mu, A, ray_r_mu_intersects_ground);
   float rB = ClampRadius(ATMOSPHERE, sqrt(B*B + 2.0*r*mu*B + r*r));
   float muB = (r*mu + B)/rB;  float muSB = (r*mu_s + B*nu)/rB;
-  IrradianceSpectrum singleMieB;
   IrradianceSpectrum Sb = GetCombinedScattering(ATMOSPHERE, scattering_texture,
     single_mie_scattering_texture, rB, muB, muSB, nu, ray_r_mu_intersects_ground, singleMieB);
-  DimensionlessSpectrum TB = GetTransmittance(ATMOSPHERE, transmittance_texture,
-    r, mu, B, ray_r_mu_intersects_ground);
+  DimensionlessSpectrum TB = GetTransmittance(ATMOSPHERE, transmittance_texture, r, mu, B, ray_r_mu_intersects_ground);
 
   // Branch 3 公式（three-geospatial runtime.ts:318-319）
   IrradianceSpectrum scattering = Scam - max(TA * Sa - TB * Sb, DimensionlessSpectrum(0.0));
+  // r2 Imp-4：singleMie 直接用减法结果（不外推，对齐 three-geospatial runtime.ts:319，保留 Mie 偏白色谱）
   singleMieCam = singleMieCam - max(TA * singleMieA - TB * singleMieB, DimensionlessSpectrum(0.0));
-
-#ifdef COMBINED_SCATTERING_TEXTURES
-  singleMieCam = GetExtrapolatedSingleMieScattering(ATMOSPHERE, vec4(scattering, singleMieCam.r));
-#endif
   singleMieCam *= smoothstep(0.0, 0.01, mu_s);  // sun below horizon hack
 
-  return (scattering * RayleighPhaseFunction(nu) + singleMieCam *
-          MiePhaseFunction(ATMOSPHERE.mie_phase_function_g, nu)) * SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
-  // SUN_DISK_GLSL（日盘叠加）由外层 skyBranch 选项附加，同 getSkyRadiance
+  vec3 rad = (scattering * RayleighPhaseFunction(nu) + singleMieCam *
+              MiePhaseFunction(ATMOSPHERE.mie_phase_function_g, nu)) * SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+  SUN_DISK_GLSL_INLINE  // r2 Imp-3：日盘
+  return rad;
 }
 ```
 
-> **实现要点**：r_p/mu_p/mu_s_p + GetTransmittance + GetCombinedScattering 模式复刻自 `GetSkyRadianceToPointScaled`（aerialPerspective.frag.ts:208-250，已验证）。Branch 3 共 3 次 GetCombinedScattering + 2 次 GetTransmittance（camera/A/B），比标量 1 次查询贵 3×，但只在天空分支 + `x>0` 时（§8.1 成本）。COMBINED_SCATTERING_TEXTURES 外推 single Mie 同现状。无 `HAS_HIGHER_ORDER_SCATTERING_TEXTURE` → 用总散射（含多阶）做 S(camera)/S(A)/S(B)，对比度弱于 three-geospatial（§7.7 已知上限）。
+> **r2 Imp-3 日盘**：两分支 return 前统一追加日盘（`SUN_DISK_GLSL_INLINE`：用 `fragmentAngle` 抗锯齿 + `transmittance*GetSolarRadiance*antialias` 叠加到局部变量 `rad`，移植自 `buildSkyRadianceFn` L270-281 的 `SUN_DISK_GLSL`，改为操作入参 `rad` 而非裸 return）。r0 注释"外层 skyBranch 附加"是错的——main 直接调 `getSkyRadianceShadowed` 绕过 wrapper，日盘必须函数内追加，否则开 godRays 日盘消失（违反零回归）。godRays=true 且 shadow_length=0（Branch 1）时日盘与 godRays=false bit 等价（§11.4 零回归测试）。
+
+> **实现要点**：r_p/mu_p/mu_s_p + GetTransmittance + GetCombinedScattering 模式复刻自 `GetSkyRadianceToPointScaled`（aerialPerspective.frag.ts:208-250，已验证）。Branch 3 共 3 次 GetCombinedScattering + 2 次 GetTransmittance（camera/A/B），比标量 1 次查询贵 3×，但只在天空分支 + `x>0` 时（§8.1 成本）。**r2 Imp-4**：Branch 3 后 single Mie **不外推**（直接用减法 vec3，对齐 three-geospatial runtime.ts:319，保留 Mie 偏白色谱；与地面分支 GetSkyRadianceToPoint L360-363 外推不同——那里是单次查询未做减法）。无 `HAS_HIGHER_ORDER_SCATTERING_TEXTURE` → 用总散射（含多阶）做 S(camera)/S(A)/S(B) 减法，阴影段过黑（§7.7 r2 修订）。
 
 ### 5.2 地面分支保持 shadow_length=0（零回归）
 
@@ -345,10 +353,10 @@ shadow_length（km）经 `u_godRaysIntensity` 缩放仍是有界正标量（0–
 
 v1 是**物理启发式近似**，三差距：
 1. **screen-space sun march 是 camera-depth 测试非太阳 POV**（参考库用 CSM 真 shadow map）→ 对大气尺度 P（km 高），Q 投影到天空 depth=1 或远处地形，march 退化为恒判 lit（§7.4）。
-2. **缺 HAS_HIGHER_ORDER_SCATTERING_TEXTURE**（lutLoader 只有 transmittance/scattering/irradiance 三张）→ Branch 3 的 S(camera)/S(A)/S(B) 用含多阶的总散射，对比度弱于 three-geospatial（多阶未正确阴影化）。
+2. **缺 HAS_HIGHER_ORDER_SCATTERING_TEXTURE**（lutLoader 只有 transmittance/scattering/irradiance 三张）→ Branch 3 的 S(camera)/S(A)/S(B) 用含多阶的总散射做减法，**阴影段被扣得更黑（多阶也扣），对比度过强/过暗**（r2 Imp-2 修订：r1 误判为"弱"；对照 three-geospatial 有 higher-order LUT 时只扣 single、multiple 不带阴影加回 runtime.ts:353-369）。
 3. **地形 god rays 物理限于低空**（阴影体边界高度 ≈ h + d·tanε，山脊高 h、太阳仰角 ε；ε=5° d=10km 处边界仅 h+0.87km）→ 无天空尺度贯穿光柱（需云）。
 
-**v1 验收口径**（§1.3）：山脊线附近被切割的低空光束，非物理正确 crepuscular rays。若 T7 对比度不足：可选 (a) 预计算加载 higher-order LUT（工程量大），(b) `u_godRaysIntensity>1` 人为放大（偏离物理但可验收）。
+**v1 验收口径**（§1.3）：山脊线附近被切割的低空光束，非物理正确 crepuscular rays。若 T7 god rays **过暗/过硬**（对比度过强）：可选 (a) `u_godRaysIntensity<1` 缩短扣减段缓解过暗（r2 修订：r1 误建议 >1），(b) Branch 3 减法加 <1 multiplier 近似保留部分多阶，(c) 长期预计算加载 higher-order LUT（工程量大）。
 
 ## 8. 性能
 
@@ -361,7 +369,7 @@ v1 是**物理启发式近似**，三差距：
 
 ### 8.2 early-exit
 
-`preRender` `u_godRaysSunVisible=0`（太阳地平下/视野外）→ march early-return 0（无循环）。白天大半时间太阳在视野外，收益显著。
+`preRender` `u_godRaysSunVisible=0`（太阳地平下/视野外）→ march early-return 0（无循环）。**r2 minor 诚实标注**：early-exit 只省 march 循环，不省 `gr_passthrough` 全分透传 pass（composite 不能 enabled=false），白天太阳视野外仍占 1 个全分 HalfFloat RT 写 + draw call。性能不达标时让 gr_passthrough 也走极简透传，或接受 1 pass 开销（profile 实测）。
 
 ### 8.3 profile
 
@@ -378,7 +386,7 @@ epipolar 极线采样（5–10× 加速，GLSL 移植复杂）；min/max mip dep
 ```glsl
 uniform sampler2D depthTexture;        // Cesium 内建 scene globe depth（r1 §3.3，非 czm_depth_temporal）
 uniform vec3  u_sunDirectionWC;        // state.sunDirection
-uniform vec3  u_altitudeCorrection;    // state.altitudeCorrection（r1 C3 单位对齐）
+uniform vec3  u_altitudeCorrection;    // state.altitudeCorrection，米域（r2 Imp-7：altitudeCorrection.ts:46 返回米，shader 内 *METER_TO_LENGTH_UNIT 转 km，同 aerialPerspective.frag:79/341）
 uniform float u_atmosphereTopRadius;   // 大气顶层半径 km（统一 uniform，不引 ATMOSPHERE const）
 uniform int   u_godRaysMainSteps;      // 主 march 步数（默认 16）
 uniform float u_godRaysMainStep0;      // 主 march 起始步长 km（默认 0.5）
@@ -386,13 +394,13 @@ uniform float u_godRaysMainStepGrowth; // 主 march 步长增长（默认 1.3）
 uniform int   u_godRaysSunSteps;       // 太阳 march 步数（默认 8）
 uniform float u_godRaysSunStep0;       // 太阳 march 起始步长 km（默认 0.5）
 uniform float u_godRaysSunStepGrowth;  // 太阳 march 步长增长（默认 1.5）
-uniform float u_godRaysDepthBias;      // eye-space 深度 bias km（默认 0.01）
+uniform float u_godRaysDepthBias;      // 深度 bias km（默认 0.01=10m；r2 Imp-5：eye-space z 是米，shader 内 /METER_TO_LENGTH_UNIT 转）
 uniform float u_godRaysIntensity;      // 强度缩放（默认 1.0=物理启发式，0=关闭）
 uniform int   u_godRaysSunVisible;     // preRender CPU 算（太阳地平下/视野外=0，shader early-return 0）
 uniform int   u_debugMode;             // 与 atmosphere 同源
 ```
 
-`METER_TO_LENGTH_UNIT` 从 cesiumCore buildAtmospherePrefix #define。`czm_viewerPositionWC`/`czm_view`/`czm_viewProjection`/`czm_windowToEyeCoordinates`/`czm_reverseLogDepthWindow`/`czm_currentFrustum`/`czm_viewport`：Cesium 自动注入（compile 桩补）。
+`METER_TO_LENGTH_UNIT` 从 cesiumCore buildAtmospherePrefix #define。**自动注入**（compile 桩补）：`czm_viewerPositionWC`/`czm_view`/`czm_viewProjection`/`czm_windowToEyeCoordinates`/`czm_currentFrustum`/`czm_viewport`。**r2 Imp-6**：`czm_reverseLogDepthWindow` **不是自动注入**，是项目 `logDepth.ts` 的 `LOG_DEPTH_GLSL` 自定义函数，march builder 必须 concat（同 aerialPerspective.frag:569）。
 
 ### 9.2 AtmosphereStageOptions 新增
 
@@ -427,7 +435,7 @@ debug=10/11 在 march pass 内截获输出，不进 atmosphere 消费链。
 
 ### 11.2 GLSL compile test
 
-`godRaysMarch.compile.test.ts` + `aerialPerspective` 扩展：glslangValidator + `#version 300 es` + `out vec4 out_FragColor`（r1 minor：非 gl_FragColor）+ `czm_*`/`czm_windowToEyeCoordinates`/`czm_reverseLogDepthWindow`/`czm_currentFrustum`/`czm_viewport` 桩（aerialPerspective VALIDATION_STUBS 先例）。godRays=true/false 两分支都过。
+`godRaysMarch.compile.test.ts` + `aerialPerspective` 扩展：glslangValidator + `#version 300 es` + `out vec4 out_FragColor`（r1 minor：非 gl_FragColor）+ 自动 uniform 桩 `czm_viewerPositionWC`/`czm_view`/`czm_viewProjection`/`czm_currentFrustum`/`czm_viewport`/4-arg `czm_windowToEyeCoordinates`（r2 Imp-6：march 用 czm_view/viewProjection/viewport，aerialPerspective VALIDATION_STUBS 未含，须补）。`czm_reverseLogDepthWindow` 用真实 LOG_DEPTH_GLSL 定义（concat，非桩）。godRays=true/false 两分支都过。
 
 ### 11.3 stage 创建单测
 
@@ -481,7 +489,7 @@ god rays 关闭：atmosphere 天空分支走 Branch 1（`getSkyRadiance(0)` 原�
 | march 策略 | epipolar + min/max mip | 全屏半分辨率 brute-force（初版） |
 | 输出 | vec2(totalShadowLength, distanceToFirstShadow) | **同**（§4.2 first moment） |
 | 消费 | runtime.ts 三分支 Branch 1/2/3 | **同**（§5.1，默认 Branch 3） |
-| higher-order LUT | 有（多阶正确阴影化） | **无**（对比度弱，§7.7） |
+| higher-order LUT | 有（多阶正确阴影化） | **无**（阴影段过黑/对比度过强，§7.7 r2） |
 | 后端 | WebGPU/TSL | GLSL ES 3.00 PostProcessStage + composite |
 
 ## 附录 C：r1 评审修订摘要（3 专家，2026-08-13）
@@ -504,3 +512,26 @@ god rays 关闭：atmosphere 天空分支走 Branch 1（`getSkyRadiance(0)` 原�
 | ATMOSPHERE.top_radius vs uniform | minor | Cesium 专家 | §4.2/§9.1 统一 u_atmosphereTopRadius |
 | 主 march 覆盖 50→109km | minor | 图形学 | §4.2 修正 |
 | Eq.17/18 行号 + 阴影位置 | minor | 图形学 | 附录 A 修正 |
+
+## 附录 D：r2 评审修订摘要（3 专家增量评审，2026-08-13）
+
+r2 增量评审（聚焦 r1 新增三分支/composite/depth 链/first-moment），3 专家 **approve_with_changes**（无 reject）。**r1 核心架构修订全部 survived/refuted（正确）**——composite 包裹（PostProcessStageCollection.js:751-754 验证）、Branch 3 公式与 three-geospatial runtime.ts:318 逐行一致、uniform-name 跨层引用、raw globe depth、first-moment 反推、Branch 1/3 连续性均经源码验证。但 r1 C3 单位修订引入 2 critical 新 bug + 7 important + 5 minor，已全部修订：
+
+| 评审项 | 级别 | 来源 | r2 修订 |
+|---|---|---|---|
+| Q 投影/QEyeZ 漏减 altitudeCorrection 偏移（主用例 lit 判定失效） | critical（survived 2 次） | 红队 | §4.3 Q_realECEF_m = Q_km/METER_TO_LENGTH_UNIT - u_altitudeCorrection |
+| 太空视角 distanceToFirstShadow 未同步（camera 移顶层） | critical | 红队 | §5.1 camera 移顶层分支 A=max(A-distanceToTop,0)（照搬 runtime.ts:196） |
+| march 循环 step*=growth;t+=step 顺序错（23% 空隙 + sample 段首） | important | 3 专家共识 | §4.2 先 t+=step 再 step*=growth，P 采样段中心 |
+| §7.7 缺 higher-order LUT 对比度方向说反（弱→过强/过暗） | important | 图形学 | §7.7 修正方向，intensity 调参 >1→<1 |
+| §5.1 漏 SUN_DISK_GLSL → 开 godRays 日盘消失 | important | 图形学 | §5.1 两分支 return 前追加 SUN_DISK_GLSL_INLINE |
+| §5.1 Branch 3 single Mie 再外推偏离 three-geospatial | important | 3 专家共识 | §5.1 删外推，直接用减法 vec3（对齐 runtime.ts:319） |
+| u_godRaysDepthBias 标 km 与 eye-space 米比较（差 1000×） | important | Cesium | §4.3 bias/METER_TO_LENGTH_UNIT 转；§9.1 注释明确 |
+| czm_reverseLogDepthWindow 非自动注入（致编译失败） | important | Cesium | §9.1 移出自动注入，标注 march builder concat LOG_DEPTH_GLSL |
+| altitudeCorrection 标 km 与代码（米）矛盾 | important | 红队 | §4.2/§9.1 注释改米域 |
+| gr_passthrough「保 atmosphere 读 .a」描述错 | minor | 红队+Cesium | §3.1/§3.4 atmosphere 不读 .a（hdrDepthTemporal:false 读 depthTexture.r） |
+| pointDist 裸 sqrt→SafeSqrt（掠射 NaN） | minor | 图形学+Cesium | §4.2 SafeSqrt |
+| Branch 3 B=A+x 未钳 pointDist（intensity>1 越界） | minor | 图形学 | §5.1 B=min(A+x,pointDist) |
+| §11.2 桩集缺 czm_view/viewProjection/viewport | minor | Cesium | §11.2 补桩 + logDepth 用真实定义 |
+| early-exit 只省循环不省 gr_passthrough pass | minor | 红队 | §8.2 诚实标注 |
+
+r2 修订后 spec 可进 writing-plans。剩余风险（§7.4 低角度 march 有效性、§7.5 时序闪烁、§7.7 对比度）为 T7 实测验证项，非 spec 阻塞。
