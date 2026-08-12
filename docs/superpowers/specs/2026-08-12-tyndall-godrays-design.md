@@ -105,7 +105,7 @@ bool sunOnScreen = (!sunBehindCamera) && all(greaterThanEqual(sunScreenPos, vec2
 ```glsl
 uniform sampler2D colorTexture;        // lensflare 输出（inputPreviousStage，被叠加，NEAREST 保 dither）
 uniform sampler2D u_sourceTexture;     // atmosphere 输出（uniform-name 引用 'atmosphere'）
-uniform sampler2D depthTexture;        // fallback 太阳门控（lensflare=false 时，复用 lensflare depth 源）
+uniform sampler2D depthTexture;        // 仅 fallback 路径声明（lensflare=false 时太阳门控）；主路径由 buildGodRaysFragmentShader 按 useOcclusionTexture 条件生成（见 §5.1，主路径不声明 depthTexture）
 uniform vec3  u_sunDirectionWC;        // state.sunDirection（§4.1 太阳投影用）
 uniform float u_intensity;             // 总强度（默认 0.08，评审修订：见 §8 量级估算）
 uniform float u_density;               // 步进密度（默认 1.0）
@@ -268,7 +268,7 @@ URL 参数解析（与现有 lensflare 参数同模式）：
   - 默认值断言（intensity 0.08 / threshold 8.0）。
   - `lensFlare=false` 时 createGodRaysStage 收到 `occlusionTextureName=undefined`（走 fallback）。
 - **glslang 编译校验**（`godRays.compile.test.ts`，依赖 `glslangValidator`）：`buildStandaloneShaderForValidation` 四组合（`useSmoothDepth` × `useOcclusionTexture`）均编译通过。
-- **量级估算单测**（纯 JS，对抗性 blocker 防回归）：断言默认参数下 god rays 量级公式 `accum ≈ (skySample - threshold) × Σdecay × intensity` 落在 ACES 中间调（godrays 叠加 atmosphere 后 ACES 输入 ∈ [5, 40]，不全饱和）。用典型天空 sample=15、太阳附近 sample=100 代入，断言天空路径 godrays < 10（中间调）、太阳附近核心允许饱和。
+- **量级回归锚点单测**（纯 JS，第 2 轮对抗性 important：原"用固定 sample=15/100 代入断言中间调"是 self-validating 循环测试——假设值证明假设值，真实量级差一个数量级时照过，给虚假信心）：改为**回归锚点**——把 T1 实测的 atmosphere HDR 量级（远天空 `SKY_FAR_HDR` / 近太阳天空 `SKY_NEAR_SUN_HDR` 两档，?debug=7 实测）作为常量写入，断言 `THRESHOLD_DEFAULT > SKY_FAR_HDR && THRESHOLD_DEFAULT < SKY_NEAR_SUN_HDR`（远天空不过阈值、近太阳天空过阈值）。未来 inscatterScale/exposure 改动动摇量级时测试真报警。
 
 ### 7.2 视觉门禁（`scripts/perf/capture.ts`，预期改变类）
 
@@ -290,21 +290,21 @@ URL 参数解析（与现有 lensflare 参数同模式）：
 
 ## 8. 风险与默认标定
 
-### 8.1 默认标定量级估算（对抗性 + 图形学共识 blocker 修复）
+### 8.1 默认标定（待实测校准，非纸面证明）
 
-旧默认（threshold=0.5, intensity=0.6）量级误判（已废）：
-- atmosphere 天空 inscatter 量级 = Bruneton inscatter × `u_inscatterScale=25` × exposure 1.2 ≈ 10-30（太阳附近 100+）。
-- bright-pass `max(s - 0.5, 0)` 几乎不过滤（0.5 远低于天空量级）。
-- 48-tap 累加 Σ(0.86^i, i=0..47) ≈ 7.14。
-- 天空路径 accum ≈ (15 − 0.5) × 7.14 ≈ 104，godrays ≈ 104 × 0.6 ≈ **62** → ACES(62) ≈ 1.0 全饱和 → **全屏白雾非光束**。
+> **第 2 轮复审修正**：原 §8.1 用 ACES(19)≈0.8 推导"中间调可见"，但项目 `tonemap.frag.ts` 用 Narkowicz ACES（a=2.51/b=0.03/c=2.43/d=0.59/e=0.14），**ACES(8) 即饱和到 1.0**（ACES(19)=1.0，非 0.8——原推导把线性输入与 ACES 输出混淆）。原纸面估算不可靠（ACES 数学错 + 天空 HDR 量级 "10-30" 高估约一个数量级——用户反馈"天空不白"反推 atmosphere 天空输出实际 <8）。本节改为"机制 + 待实测校准"，**不下"已验证"结论**。
 
-新默认（threshold=8.0, intensity=0.08）量级正确：
-- bright-pass `max(s - 8.0, 0)` 过滤一般天空（10-30 → 贡献 2-22）、保留太阳附近强 inscatter（100+ → 贡献 92+）。
-- 天空路径 accum ≈ (15 − 8) × 7.14 ≈ 50，godrays ≈ 50 × 0.08 ≈ **4.0**。
-- 叠加 atmosphere（15）→ ACES 输入 ≈ 19 → ACES ≈ 0.8（中间偏高调，可见光束，**不全饱和**）。
-- 太阳附近 accum ≈ (100 − 8) × 7.14 ≈ 657，godrays ≈ 52 → 光束核心饱和（期望的"亮核心"，只太阳附近像素，非全屏）。
+**机制（理解 god rays 可见性条件）**：
+- atmosphere 输出 = Bruneton inscatter × `u_inscatterScale=25` × 动态 exposure（0.1-1.2）。实际天空量级**须 `?debug=7` 实测**（debug=7 走 tonemap `c.rgb/5.0` false-color）。
+- bright-pass `max(s - threshold, 0)`：threshold 是"光束源亮度下限"。太低→全屏 inscatter 都贡献（旧 0.5 的失败模式）；太高→天空路径全被过滤（god rays 不可见）。
+- Mitchell illumDecay 每步 ×0.86：末位采样（i=47，落太阳盘）权重 0.86^47≈0.0008 可忽略——**god rays 可见性主要来自沿途天空路径（早期高权重 sample），非太阳盘本身**。Σ(0.86^i, i=0..47)≈7.14。
+- ACES 曲线约束：线性输入 ≈8 即 ACES 饱和。god rays 叠加到**亮天空**（已饱和）无视觉变化；god rays 只在**暗区**（atmosphere 线性 <8：晨昏地平线下、山脊阴影、近地表暗区）可见。**这是 ACES+HDR 后处理 god rays 的固有限制**——god rays 在晨昏地平线/暗区最明显，正午亮天空不可见是预期，非 bug。
 
-结论：新默认 god rays 在 ACES 中间调形成可见光束，太阳附近核心饱和是期望效果，全屏不白。
+**默认 threshold=8.0 / intensity=0.08 是占位初始值**（旧 0.5/0.6 量级误判的修正方向，但具体数值待实测）：
+- T1 spike 阶段用 `?debug=7` 实测典型视角（正午 + 晨昏）atmosphere 输出 HDR 量级：远天空 / 近太阳天空 / 太阳盘三档。
+- 实测后回填默认 threshold（落点：近太阳天空路径过阈值贡献光束、远天空与亮地表不过阈值）与 intensity（god rays 叠加暗区后 ACES 输入落在 1-4 区间，可见但不全屏白）。
+- **若实测天空 <8（adversarial 反推 likely 1-3）**，threshold 需降到约 1-3，intensity 相应重算（0.08 可能仍偏弱）。
+- 第 1 轮 blocker「全屏白雾」由 threshold 过滤 + decay 距离衰减把光束局域化到太阳附近路径来防，**非 intensity 缩放**——intensity 仅二次微调。
 
 ### 8.2 风险表（评审修订后）
 
@@ -312,12 +312,13 @@ URL 参数解析（与现有 lensflare 参数同模式）：
 |---|---|
 | ~~跨 composite 引用 `'atmosphere'` 不支持~~ | Cesium 源码已核实必可行（§3.1）；T1 改 spike 确认（30-60min），无 fallback |
 | ~~god rays 量级远小于 lensflare 全白~~ | **删除**（量级误判）；新默认经 §8.1 量级估算验证 |
-| bright-pass 阈值/exposure 随昼夜变化（exposure 0.1-1.2 动态） | threshold 作用在 finalColor·exposure 域，昼夜 god rays 强度可能跳变；URL `?godraysThreshold=` 按场景调；或未来改相对 luminance 判定（§9） |
+| 固定 threshold vs 动态 exposure（**晨昏失效**） | threshold 作用在 finalColor·exposure 域，**晨昏 exposure 0.1-0.3 让 atmosphere 输出可能低于 threshold → god rays 在黄金时刻反而最弱/消失**（crepuscular 主用例冲突，第 2 轮图形+对抗共识 important）。v1 验收 §7.3 加晨昏低 exposure 复核点；URL `?godraysThreshold=` 晨昏下调；**相对 luminance bright-pass 提到 v1.1 候选**（§9）根治 |
 | 与 lensflare 强度叠加过曝 | god rays 默认 intensity 0.08（godrays 量级 ~4）+ lensflare 0.001，叠加量级平衡；URL 各自可调 |
 | god rays 在太阳屏外仍跑（浪费 GPU） | shader 内 `!sunOnScreen` 早 return（透传，无累加）；§4.2 |
 | 屏边缘 clamp-to-edge 伪光束 | 循环内 `borderFade` 越界检测（图形学专家 important）；§4.2 |
 | 正对太阳时 god rays + lensflare 叠加全白 | 新默认量级 godrays ≈4（中间调），远小于旧误算 62；§8.1 + 手动验收 |
 | 全分辨率 48 tap 性能（4K/移动端） | 第一版全分（1080p ≈10ms 桌面可接受）；半分辨率优化（§9）待 `?profile=1` 实测 |
+| 运行时禁用 lensflare 与 god rays 主路径耦合（第 2 轮 cesium+图形 suggestion） | god rays 主路径（useOcclusionTexture）锁定引用 'lf_occlusion'；若运行时 `lensflareComposite.enabled=false`，lf_occlusion 输出未定义 → god rays 读垃圾值。约束：禁用 lensflare 必须同时 `godRays.enabled=false` 或 rebuild 走 fallback。当前 setMode 是 dead code，v1 文档化此约束 |
 
 ## 9. 未来增强（非 v1）
 
@@ -325,12 +326,12 @@ URL 参数解析（与现有 lensflare 参数同模式）：
 - **逐 sample depth mask**（L2）：沿径向每个 sample 读 depth，前景地物不贡献。处理"被阳光直射的亮山坡不被当作光束源"。默认关（避免削弱地平线 god rays），`?godRaysDepthMask=1` 开。需 log-depth 天空/远山阈值标定（远山 d≈0.999，天空 d≈1.0，区分难，可能需距离反演）。
 - **物理体积 march**（方案 B）：若后处理 god rays 物理感不足，新增全屏 march pass 积分解析 Mie 前向散射（HG g≈0.76）。公式参考 three-geospatial 体积云。需大幅降采样 + 时序累积。
 - **god rays 色散**：径向采样 R/G/B 通道偏移（波长依赖前向散射），制造轻微彩色光束边缘。
-- **相对 luminance bright-pass**：threshold 改为相对当前帧最亮 sky 值，与动态 exposure / inscatterScale 解耦（§8.2 昼夜跳变的根治）。
+- **相对 luminance bright-pass**（**v1.1 候选**，第 2 轮图形+对抗建议从未来提前）：threshold 改为相对当前帧最亮 sky 值（如 `threshold = 0.5 × maxSkyLuminance`，降采样一帧求 max），与动态 exposure / inscatterScale 解耦，**根治 §8.2 晨昏失效**。
 
 ## 10. 实现任务分解（供 writing-plans）
 
 预估 7-9 个 task（TDD）：
-1. T1：`godRaysConstants.ts` + 测试；**早期 spike**——建占位 stage（`u_sourceTexture:'atmosphere'` + `u_occlusionTexture:'lf_occlusion'` 采红色输出），add 到 lensflare 后 tonomap 前，demo 跑通即确认跨 stage 引用可行（§3.1，Cesium 源码已证低风险）。
+1. T1：`godRaysConstants.ts` + 测试；**早期 spike**——建占位 stage（`u_sourceTexture:'atmosphere'` + `u_occlusionTexture:'lf_occlusion'` 采红色输出），add 到 lensflare 后 tonomap 前，demo 跑通即确认跨 stage 引用可行（§3.1，Cesium 源码已证低风险）；**`?debug=7` 实测 atmosphere HDR 量级**（远天空 / 近太阳天空 / 太阳盘三档，正午 + 晨昏两视角），回填 §8.1 默认 threshold/intensity（占位 8.0/0.08 待实测校准，若实测天空 <8 则 threshold 降到 1-3）+ §7.1 回归锚点单测的 SKY_FAR_HDR/SKY_NEAR_SUN_HDR 常量。
 2. T2：`godRays.frag.ts` shader 构建器（`useSmoothDepth` × `useOcclusionTexture` 四组合）+ 结构测试 + glslang 校验。
 3. T3：`createGodRaysStage.ts` 装配（含 occlusionTextureName 参数）+ 结构测试。
 4. T4：`AtmosphereStage.ts` 集成（options/resolved/默认/create/setMode/destroy + lensFlare=false 时 occlusionTextureName=undefined）+ 测试。
