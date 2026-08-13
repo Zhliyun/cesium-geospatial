@@ -348,3 +348,43 @@ packages/
 | E14 | 6500 行乐观（含回退 8000-10000）（minor·红队） | **§2.4 + §6 补**：风险预算 |
 | E15 | Texture2DArray 无封装 + precision 顺序（minor·Cesium） | **§9 R5 + §6 M1 spike**：bridge + precision 声明顺序 |
 
+---
+
+## 附录 F：r2 调研增补（Cesium 渲染入口深度核实，2026-08-13）
+
+来源：Explore agent 调研 `@cesium/engine@26.1.0` 源码（`Scene.js` 帧序 / `PostProcessStage.js` / `Framebuffer.js` / `Context.js` / `Pass.js`）+ three-geospatial `clouds.frag`/`cloudsResolve.frag` 核实。**spec r1 架构方向经核实正确，本附录为精确化增补。**
+
+### F1. MRT 确认必需（option a 单输出打包不成立）
+spec r1 §6 M1 spike 曾考虑"PostProcessStage 单输出（color RGB + shadowLength alpha）+ 方差裁剪替代 depthVelocity"绕开 MRT。**核实不成立**（三硬伤）：
+- alpha 已被 transmittance 占（`clouds.frag:617`），丢则 composite 无法 over-blend。
+- shadowLength 线性米塞 alpha 精度不够（对比 depthTemporal 的 log-depth 压缩才能塞）。
+- **depthVelocity 不可由方差裁剪替代**：`cloudsResolve.frag:85-86/127-129` 证明 velocity 做 per-pixel history 重投影（找采样点），方差裁剪（`varianceClipping.glsl:42-68 clipAABB`）只 clip 不找采样点。
+
+### F2. MRT 死结有解：custom Primitive pass=VOXELS + 自管 MRT FBO
+- pass VOXELS(10) 在 GLOBE(2) 后、PostProcess 前执行（`Pass.js:27` + `Scene.js executeCommands` 序）→ globe depthTexture 已存在。
+- `DrawCommand._framebuffer` 优先于 `passState.framebuffer`（`Context.js:1412`）→ 云 DrawCommand 写自己的 3-attachment MRT FBO。
+- `Context.bindFramebuffer` 自动 `glDrawBuffers`（`Context.js:1219-1239`）→ MRT 无需额外 gl 调用。
+- `Framebuffer.js:84-215` 原生支持 `colorTextures: [t0,t1,t2]` 多 attachment。
+- czm_* 自动注入（`ShaderProgram._automaticUniforms`，Primitive 走 ShaderProgram）。
+
+### F3. 新增基建：VolumetricPrimitive（spec r1 §1 C6 精确化）
+spec r1 C6"倾向 custom Primitive"未列设计。r2 明确：core/platform 加 `VolumetricPrimitive`——封装"自定义 primitive 对象，`update(frameState)` 下发 `pass=VOXELS` + 自带 MRT framebuffer 的 DrawCommand"。这是**云主 march 的渲染入口**（`FullscreenPass`/`createViewportQuadCommand` 用于 BSM ShadowPass + resolve + history blit，二者职责不同）。
+
+### F4. cloudsBuffer → PostProcessStage 桥接：必须 bridge
+云主 pass 是 Primitive（非 PostProcessStage），cloudsBuffer **不能用 uniform-name 字符串**（`createLensFlareStage.ts:228` 那种 stage 间机制只适用于 stage→stage）。**必须用 bridge 对象**（`{_texture, _target}`，仿 `historyBlit.ts:80 getHistoryBridge`）注入后续 cloudsOverlay PostProcessStage 的 uniform。
+
+### F5. globe depthTexture 访问路径
+Primitive 内手动注 `scene._view.globeDepth.depthStencilTexture`（私有 API，`Scene.js:2841` 内部就用它）。封装进 VolumetricPrimitive helper 隔离私有 API 访问。
+
+### F6. 风险降级
+- **R10（czm_* 注入）已确认**：Primitive 走 ShaderProgram 必注入。降级为"实跑确认具体 uniform（czm_inverseView 等）可用"。
+- **M1 spike #1（链中间插入）调研已预答**：Primitive pass=VOXELS 可行。
+- **M1 spike #3（czm 注入）已确认**。
+- M1 spike #2（globe depth 访问）：路径明确（F5），仍需实跑验证私有 API 稳定。
+- M1 spike #4（2D_ARRAY + precision）：仍需实跑。
+
+### F7. M1 plan 调整
+- T5 `FullscreenPass`（createViewportQuadCommand 封装，BSM/resolve/blit 用）+ **新增 T5b `VolumetricPrimitive`**（pass=VOXELS + MRT FBO，云主 march 入口）。
+- spike 合并：#1/#3 调研已答，probe 聚焦 #2（globe depth 私有 API）+ #4（2D_ARRAY/precision）+ 实跑确认 Primitive pass=VOXELS + MRT 三 attachment 输出。
+
+
