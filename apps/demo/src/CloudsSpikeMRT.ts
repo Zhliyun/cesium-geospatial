@@ -39,6 +39,7 @@ import {
   TextureMagnificationFilter,
   TextureWrap,
   PostProcessStage,
+  RenderState,
   type Scene,
 } from 'cesium'
 import type { Context, DrawCommand } from 'cesium'
@@ -75,15 +76,13 @@ layout(location = 0) out vec4 out_FragColor;
 layout(location = 1) out vec4 out_DepthVelocity;
 layout(location = 2) out vec4 out_ShadowLength;
 void main() {
-  // raw globe depth（log 编码，spike 先看 raw 是否变化——不解码，验 #2 depthTexture 可读）。
-  // 注：log 深度编码下近地形 d 偏小（暗）、远空 d→1（亮），与「近白远黑」相反；
-  // spike 判据是 B/depth 「随距离变化」即可，方向非关键。
-  float d = texture(u_globeDepth, v_textureCoordinates).r;
-  // czm 注入验证（验 #3）：相机到地心距离 / 地球半径，地表≈1.0、太空视角>1。
-  float camMag = length(czm_viewerPositionWC) / 6.4e6;
-  out_FragColor = vec4(0.5, camMag, d, 1.0);       // att0: R=执行标记 G=czm量级 B=depth
-  out_DepthVelocity = vec4(d, 0.0, 0.0, 1.0);      // att1: R=depth（MRT 第 2 out 验证）
-  out_ShadowLength = vec4(0.3, 0.0, 0.0, 1.0);     // att2: R=0.3 固定（MRT 第 3 out 验证）
+  float d = texture(u_globeDepth, v_textureCoordinates).r;  // raw globe depth（log 编码）
+  // czm 注入测试（spike #3）：camMag = |czm_viewerPositionWC|，地表相机应 ≈6.4e6。
+  // R=1(czm<1e6 → 未注入/值0) / G=1(czm>=1e6 → 注入正确)。明确红绿二分，不靠量级归一化。
+  float camMag = length(czm_viewerPositionWC);
+  out_FragColor = vec4(camMag < 1e6 ? 1.0 : 0.0, camMag >= 1e6 ? 1.0 : 0.0, 0.0, 1.0);  // att0
+  out_DepthVelocity = vec4(d, 0.0, 0.0, 1.0);      // att1: depth（#2 + MRT 第 2 out）
+  out_ShadowLength = vec4(0.3, 0.0, 0.0, 1.0);     // att2: 固定（MRT 第 3 out）
 }
 `
 
@@ -147,6 +146,13 @@ export function createCloudsSpike(scene: Scene, attIndex: number): CloudsSpikeHa
   const idx = Math.min(Math.max(attIndex, 1), 3) - 1 // 0..2
   const context = (scene as unknown as { context: SpikeContext }).context
 
+  // spike 验收结论（2026-08-13）：4 项全 GO。MRT 死结有解——custom Primitive pass=VOXELS +
+  // 自管 MRT FBO + renderState(RenderState.fromCache 带 id) + bridge overlay 全链路通。
+  // 3 个 Cesium 接口坑（→ T5 VolumetricPrimitive 基建固化）：
+  //   1. Destroyable 三件套 update/isDestroyed/destroy（PrimitiveCollection.add 调 isDestroyed 检查）
+  //   2. pass 调度需 renderState（DerivedCommand getDepthOnlyRenderState 访问 renderState.id）
+  //   3. Primitive shader czm_* automatic uniforms 正确注入（实测绿，czm_viewerPositionWC 有值）
+
   // MRT 尺寸：drawingBuffer（spike 不处理 resize——resize 后 RT 尺寸不匹配会导致 overlay 采样偏移，
   // 验收期间保持窗口尺寸不变即可；正式体积云需 resize 重建 RT）。
   const width = context.drawingBufferWidth || 256
@@ -194,6 +200,14 @@ export function createCloudsSpike(scene: Scene, attIndex: number): CloudsSpikeHa
     },
     framebuffer: mrtFBO,
     pass: PASS_VOXELS,
+    // renderState 必须显式设（RenderState.fromCache 返回带 id 的缓存实例）：cmd 进 pass 调度后，
+    // Cesium updateDerivedCommands→createDepthOnlyDerivedCommand→getDepthOnlyRenderState（DerivedCommand.js:75）
+    // 访问 renderState.id 做缓存查找；undefined renderState → "reading 'id'" 炸。historyBlit 不暴露因
+    // postRender 手动 execute 不走 pass 派生。MRT FBO 无 depth attachment → depthTest off + depthMask false。
+    renderState: RenderState.fromCache({
+      depthTest: { enabled: false },
+      depthMask: false,
+    }),
   })
 
   // ── 自定义 primitive：update 压 cmd（PrimitiveCollection.update 遍历 primitives[i].update(frameState)，
