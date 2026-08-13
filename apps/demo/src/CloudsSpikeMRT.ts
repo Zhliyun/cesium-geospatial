@@ -112,9 +112,12 @@ const SPIKE_SAMPLER = new Sampler({
   wrapT: TextureWrap.CLAMP_TO_EDGE,
 })
 
-/** 自定义 primitive：update 压 cmd 到 frameState.commandList，Cesium 按 pass 调度执行。 */
+/** 自定义 primitive：update 压 cmd 到 frameState.commandList，Cesium 按 pass 调度执行。
+ *  须实现 Cesium Destroyable 三件套（update / isDestroyed / destroy）——PrimitiveCollection.add
+ *  会调 primitive.isDestroyed 检查存活（Scene.js:4134 createPrimitiveEventListener）。 */
 export interface CloudProbePrimitive {
   update(frameState: unknown): void
+  isDestroyed(): boolean
   destroy(): void
 }
 
@@ -202,6 +205,12 @@ export function createCloudsSpike(scene: Scene, attIndex: number): CloudsSpikeHa
       ;(frameState as { commandList: { push: (cmd: DrawCommand) => void } }).commandList.push(
         probeCmd,
       )
+    },
+    // isDestroyed：Cesium Destroyable 接口要求（PrimitiveCollection.add → Scene.js:4134
+    // createPrimitiveEventListener 调 primitive.isDestroyed）。缺它 → "primitive.isDestroyed is
+    // not a function" + 后续渲染 "reading 'id'" 崩（实测 2026-08-13 spike）。
+    isDestroyed(): boolean {
+      return destroyed
     },
     destroy(): void {
       if (destroyed) return
