@@ -255,8 +255,9 @@ async function main(): Promise<void> {
       temporalLowAlpha: temporalPreset.lowAlpha,
       temporalHighAlpha: temporalPreset.highAlpha,
       ...(temporalDepthThreshold != null ? { temporalDepthThreshold } : {}),
-      // depthTemporal stage 创建开关（Phase 1.1）：?depthTemporal=0 不创建 stage（省 1 全屏 pass+blit）
-      depthTemporal: getString('depthTemporal') !== '0'
+      // depthTemporal stage 创建开关（Phase 1.1 升级）：默认不创建（省 1 全屏 pass+blit+3 HF RT；
+      // 真实 GPU profile 实测 ≈2-6ms/帧）。?depthTemporal=1 显式创建（恢复旧行为，occlusion 用 smoothDepth）
+      depthTemporal: getString('depthTemporal') === '1'
     }
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =
@@ -308,19 +309,24 @@ async function main(): Promise<void> {
         for (let i = 0; i < stages.length; i++) {
           wrapStage(stages.get(i) as unknown as WrappableStage)
         }
-        // blit 计时归入 depthTemporal（评审 M7）
-        atmosphereHandle.setBlitTimerHook(fn => {
-          timer.begin('depthTemporal_blit')
-          fn()
-          timer.end('depthTemporal_blit')
-        })
+        // blit 计时归入 depthTemporal（评审 M7）。depthTemporal 默认 off（Phase 1.1 升级）时 stage 不存在、
+        // 无 blit lifecycle → 不注册 hook、snap 也不写 depthTemporal_blit（避免 null 占位混淆）
+        if (atmosphereHandle.depthTemporalStage) {
+          atmosphereHandle.setBlitTimerHook(fn => {
+            timer.begin('depthTemporal_blit')
+            fn()
+            timer.end('depthTemporal_blit')
+          })
+        }
         let frame = 0
         scene.postRender.addEventListener(() => {
           frame++
           if (frame % 60 === 0) {
             const snap: Record<string, number | null> = {}
             for (const { name } of wrapped) snap[name] = timer.read(name)
-            snap['depthTemporal_blit'] = timer.read('depthTemporal_blit')
+            if (atmosphereHandle.depthTemporalStage) {
+              snap['depthTemporal_blit'] = timer.read('depthTemporal_blit')
+            }
             console.log('[profile]', JSON.stringify(snap))
           }
         })

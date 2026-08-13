@@ -95,10 +95,11 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   temporalLowAlpha?: number // 静止强平滑 alpha（默认 LOW_ALPHA=0.05；?temporalQuality=high → 0.1 弱平滑减拖影）
   temporalHighAlpha?: number // 移动偏 current alpha（默认 HIGH_ALPHA=0.5；?temporalQuality=high → 0.8）
   temporalDepthThreshold?: number // log-depth 相对阈值（默认 DEPTH_THRESHOLD_DEFAULT=0.1，距离无关容差 ≈ 7% 距离变化）
-  // depthTemporal stage 创建开关（Phase 1.1，URL ?depthTemporal=0）：默认 true（HDR 设备创建，
-  // lensflare occlusion 用 smoothDepth）。false → 不创建 stage + 不注册 blit listener（省 1 全屏
-  // HalfFloat pass + 1 全屏 copy + 3 张全分辨率 HF RT）；atmosphere 不消费 .a（hdrDepthTemporal:false）、
-  // occlusion 回退 scene globe depth（temporalEmaEnabled=false），跳过安全。评审 M1/M7。
+  // depthTemporal stage 创建开关（Phase 1.1，URL ?depthTemporal=1）：默认 false（Phase 1.1 升级，
+  // 不创建 stage 省 1 全屏 HalfFloat pass + 1 全屏 copy + 3 张全分辨率 HF RT；atmosphere 不消费 .a
+  // （hdrDepthTemporal:false）、occlusion 回退 scene globe depth（temporalEmaEnabled=false）跳过安全。
+  // 真实 GPU profile 实测 depthTemporal+blit ≈ 2-6ms/帧，移除收益确定）。true → HDR 设备创建 stage，
+  // lensflare occlusion 用 smoothDepth（?depthTemporal=1 恢复旧行为）。评审 M1/M7。
   depthTemporal?: boolean
 }
 
@@ -228,7 +229,7 @@ export function validateAtmosphereOptions(
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
     temporalHighAlpha: options.temporalHighAlpha ?? HIGH_ALPHA,
     temporalDepthThreshold: options.temporalDepthThreshold ?? DEPTH_THRESHOLD_DEFAULT,
-    depthTemporal: options.depthTemporal !== false // 默认 true（!== false 让 undefined 也 true；仅显式 false 跳过 stage）
+    depthTemporal: options.depthTemporal === true // 默认 false（Phase 1.1 升级：不创建 stage 省 1 全屏 pass+blit+3 HF RT；?depthTemporal=1 显式开。atmosphere 不消费 .a，occlusion 回退 scene globe depth）
   }
 }
 

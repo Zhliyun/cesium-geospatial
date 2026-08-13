@@ -192,8 +192,8 @@ describe('validateAtmosphereOptions', () => {
       temporalLowAlpha: 0.05, // LOW_ALPHA
       temporalHighAlpha: 0.5, // HIGH_ALPHA
       temporalDepthThreshold: 0.1, // DEPTH_THRESHOLD_DEFAULT
-      // depthTemporal stage 创建开关（Phase 1.1）：默认 true（HDR 设备创建）
-      depthTemporal: true
+      // depthTemporal stage 创建开关（Phase 1.1 升级）：默认 false（不创建 stage 省 pass+blit+3 HF RT）
+      depthTemporal: false
     })
   })
 
@@ -382,9 +382,9 @@ describe('createAtmosphereStage（phase2b 三 stage 集成）', () => {
 
 // —— depthTemporal 装配（Task 7）：activeStages[0] + UNSIGNED_BYTE 兜底 + sanity check ——
 describe('createAtmosphereStage — depthTemporal 装配', () => {
-  it('HDR 设备（HALF_FLOAT）→ depthTemporal 装配为 activeStages[0]（atmosphere 前）', () => {
+  it('HDR 设备（HALF_FLOAT）+ depthTemporal:true → depthTemporal 装配为 activeStages[0]（atmosphere 前）', () => {
     const { scene, addSpy } = mockSceneWithAddSpy({ halfFloat: true })
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     expect(handle.temporalEmaEnabled).toBe(true)
     expect(handle.depthTemporalStage).toBeDefined()
     // add 顺序：depthTemporal[0] → atmosphere → tonomap（lensFlare=false 跳过 lensflare）
@@ -394,6 +394,15 @@ describe('createAtmosphereStage — depthTemporal 装配', () => {
     const atmoIdx = added.findIndex((s) => s === handle.atmosphereStage)
     expect(dtIdx).toBe(0) // activeStages[0]
     expect(atmoIdx).toBeGreaterThan(dtIdx) // atmosphere 在 depthTemporal 后
+  })
+
+  it('默认（不传 depthTemporal）HDR 设备 → 不创建 stage（Phase 1.1 升级：默认 false，occlusion 回退 scene globe depth）', () => {
+    const { scene, addSpy } = mockSceneWithAddSpy({ halfFloat: true })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    expect(handle.depthTemporalStage).toBeUndefined()
+    expect(handle.temporalEmaEnabled).toBe(false)
+    const added = addSpy.mock.calls.map((c: unknown[]) => c[0])
+    expect(added.some((s) => (s as { name?: string })?.name?.match?.(/depth_temporal/i))).toBe(false)
   })
 
   it('UNSIGNED_BYTE 设备（无 HALF_FLOAT/FLOAT）→ temporalEmaEnabled=false，不装配 depthTemporal', () => {
@@ -410,7 +419,7 @@ describe('createAtmosphereStage — depthTemporal 装配', () => {
 
   it('depthTemporal stage uniforms 接线（函数形式：history/prevVP/alpha + 静态 threshold）', () => {
     const { scene } = mockSceneWithAddSpy({ halfFloat: true })
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     const dt = handle.depthTemporalStage!
     const uniforms = (dt as unknown as { uniforms: Record<string, unknown> }).uniforms
     // u_depthThreshold 静态值（DEPTH_THRESHOLD_DEFAULT = 0.1）
@@ -518,7 +527,7 @@ describe('depthTemporal lifecycle', () => {
 
   it('postRender：blit depthTemporal.outputTexture → write history + swap（lifecycle 全链）', () => {
     const { scene } = mockSceneWithDepthTemporal()
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
     triggerPostRender(scene)
     // blit command 构造（src=outputTexture）+ history FBO 构造（write Tex）+ swap 翻转
@@ -529,7 +538,7 @@ describe('depthTemporal lifecycle', () => {
 
   it('postRender：outputTexture undefined → 跳过 blit（保持上帧 history，不 swap）', () => {
     const { scene } = mockSceneWithDepthTemporal()
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     setDtOutputTexture(handle.depthTemporalStage!, undefined)
     triggerPostRender(scene)
     expect(dtSpies.buildBlitCommand).not.toHaveBeenCalled()
@@ -539,7 +548,7 @@ describe('depthTemporal lifecycle', () => {
 
   it('resize：preRender 检测 drawingBufferWidth 变化 → 重建 history 到新尺寸', () => {
     const { scene } = mockSceneWithDepthTemporal({ drawingBufferWidth: 1920 })
-    createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     // 构造期 createHistoryState 调一次（1920）
     expect(dtSpies.createHistoryState).toHaveBeenCalledTimes(1)
     expect(dtSpies.createHistoryState).toHaveBeenNthCalledWith(
@@ -565,7 +574,7 @@ describe('depthTemporal lifecycle', () => {
 
   it('首帧：postRender blit 当前 output 作 history 基线（非跳过/非 loadNull）', () => {
     const { scene } = mockSceneWithDepthTemporal()
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
     // 首帧 postRender：outputTexture 就绪 → blit（作 history 基线，非跳过）
     triggerPostRender(scene)
@@ -574,7 +583,7 @@ describe('depthTemporal lifecycle', () => {
 
   it('postRender blit 后 prevViewProjection/temporalAlpha 更新（下帧 uniforms 自动反映）', () => {
     const { scene } = mockSceneWithDepthTemporal()
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
     const dt = handle.depthTemporalStage!
     const uniforms = (dt as unknown as { uniforms: Record<string, unknown> }).uniforms
@@ -594,7 +603,7 @@ describe('depthTemporal lifecycle', () => {
 
   it('destroy：清理 depthTemporal preRender/postRender listener（remove 后 trigger 不再调 blit）', () => {
     const { scene } = mockSceneWithDepthTemporal()
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     setDtOutputTexture(handle.depthTemporalStage!, { _texture: 'mock', _target: 0x0de1 })
     // 销毁前 listener 已注册
     expect(postRenderListeners.length).toBeGreaterThan(0)
@@ -643,7 +652,7 @@ describe('depthTemporal options 参数化（Task 12）', () => {
     // alpha 无意义）。仅 UNSIGNED_BYTE 才完全跳过 stage。temporalEmaEnabled=false 控制 lensFlare occlusion
     // depth 源回退 scene globe depth（passthrough .r=sceneColor 非 depth，不能用）。
     const { scene } = mockSceneWithAddSpy({ halfFloat: true })
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, temporalEma: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, temporalEma: false, depthTemporal: true })
     expect(handle.temporalEmaEnabled).toBe(false)
     expect(handle.depthTemporalStage).toBeDefined() // stage 仍创建（HDR，透传模式）
     // shader 走 enabled=false 透传路径：无 u_historyTexture/u_temporalAlpha（EMA 路径才声明），含 curLogDepth 透传
@@ -655,7 +664,7 @@ describe('depthTemporal options 参数化（Task 12）', () => {
 
   it('temporalEma=true（默认，HDR）→ temporalEmaEnabled=true + stage enabled=true EMA shader', () => {
     const { scene } = mockSceneWithAddSpy({ halfFloat: true })
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, depthTemporal: true })
     expect(handle.temporalEmaEnabled).toBe(true)
     expect(handle.depthTemporalStage).toBeDefined()
     // EMA shader 声明 u_historyTexture/u_temporalAlpha
@@ -666,7 +675,7 @@ describe('depthTemporal options 参数化（Task 12）', () => {
 
   it('temporalDepthThreshold 透传到 depthTemporal u_depthThreshold uniform（非默认 0.1）', () => {
     const { scene } = mockSceneWithAddSpy({ halfFloat: true })
-    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, temporalDepthThreshold: 0.05 })
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false, temporalDepthThreshold: 0.05, depthTemporal: true })
     const uniforms = (handle.depthTemporalStage as unknown as { uniforms: Record<string, unknown> }).uniforms
     expect(uniforms.u_depthThreshold).toBe(0.05) // 非 DEPTH_THRESHOLD_DEFAULT(0.1)
   })
@@ -677,6 +686,7 @@ describe('depthTemporal options 参数化（Task 12）', () => {
     const { scene } = mockSceneWithDepthTemporal()
     const handle = createAtmosphereStage(scene, stubLuts, {
       lensFlare: false,
+      depthTemporal: true,
       temporalLowAlpha: 0.1, // high preset lowAlpha（默认 0.05）
       temporalHighAlpha: 0.8 // high preset highAlpha（默认 0.5）
     })
