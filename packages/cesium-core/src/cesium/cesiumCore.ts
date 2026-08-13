@@ -20,6 +20,9 @@ export function buildAtmospherePrefix(): string {
     '#define IRRADIANCE_TEXTURE_HEIGHT 16',
     '#define METER_TO_LENGTH_UNIT 0.0010000',
     '#define COMBINED_SCATTERING_TEXTURES',
+    // C9（spec 附录 E2/E3 + r2 F1）：启用 higher-order scattering 分支，云 god rays 走
+    // bruneton/runtime.glsl 物理正确路径（只遮 single Rayleigh 保留多阶），防过暗黑。
+    '#define HAS_HIGHER_ORDER_SCATTERING_TEXTURE',
     glslIndex.bruneton.definitions,
     ATMOSPHERE_DEFAULT_GLSL
   ].join('\n')

@@ -287,6 +287,7 @@ export function buildAtmosphereUniforms(
     scattering_texture: () => luts.scattering,
     single_mie_scattering_texture: () => luts.scattering, // COMBINED 模式不采样，传同值占位
     irradiance_texture: () => luts.irradiance,
+    higher_order_scattering_texture: () => luts.higherOrderScattering, // C9：云 god rays 防过暗（HAS_HIGHER_ORDER_SCATTERING_TEXTURE 分支）
     sunDirection: () => state.sunDirection,
     altitudeCorrection: () => state.altitudeCorrection,
     exposure: () => state.exposure, // 动态（preRender 更新）

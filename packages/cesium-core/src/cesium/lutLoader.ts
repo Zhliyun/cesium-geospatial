@@ -6,6 +6,10 @@ export interface AtmosphereLUTs {
   transmittance: Texture
   scattering: Texture3D
   irradiance: Texture
+  // higher-order scattering LUT（C9，spec 附录 E2/E3 + r2 F1）：云 god rays 需 shadow_length>0，
+  // 走 bruneton/runtime.glsl HAS_HIGHER_ORDER_SCATTERING_TEXTURE 分支（只遮 single Rayleigh 保留多阶，
+  // 防过暗黑）。8388608 字节 = 256×128×32 half-float RGBA（与 scattering 同格式同维度）。
+  higherOrderScattering: Texture3D
 }
 
 // .bin 文件是 half-float (Uint16Array) RGBA，逐像素 4 通道。
@@ -28,10 +32,11 @@ export async function loadAtmosphereLUTs(
   context: Context,
   baseUrl: string
 ): Promise<AtmosphereLUTs> {
-  const [tBuf, sBuf, iBuf] = await Promise.all([
+  const [tBuf, sBuf, iBuf, hBuf] = await Promise.all([
     fetch(`${baseUrl}/transmittance.bin`).then(r => r.arrayBuffer()),
     fetch(`${baseUrl}/scattering.bin`).then(r => r.arrayBuffer()),
-    fetch(`${baseUrl}/irradiance.bin`).then(r => r.arrayBuffer())
+    fetch(`${baseUrl}/irradiance.bin`).then(r => r.arrayBuffer()),
+    fetch(`${baseUrl}/higher_order_scattering.bin`).then(r => r.arrayBuffer())
   ])
   return {
     transmittance: createLUT2D(
@@ -52,6 +57,13 @@ export async function loadAtmosphereLUTs(
       parseHalfFloatBin(iBuf),
       IRRADIANCE_W,
       IRRADIANCE_H
+    ),
+    higherOrderScattering: createLUT3D(
+      context,
+      parseHalfFloatBin(hBuf),
+      SCATTERING_W,
+      SCATTERING_H,
+      SCATTERING_D
     )
   }
 }

@@ -47,6 +47,7 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'scattering_texture',
   'single_mie_scattering_texture',
   'irradiance_texture',
+  'higher_order_scattering_texture',
   'sunDirection',
   'altitudeCorrection',
   'exposure',
@@ -74,6 +75,7 @@ uniform sampler2D transmittance_texture;
 uniform sampler3D scattering_texture;
 uniform sampler3D single_mie_scattering_texture;
 uniform sampler2D irradiance_texture;
+uniform sampler3D higher_order_scattering_texture;
 `
 
 // 每帧 uniform（命名对齐源仓库）。altitudeCorrection 单位米（shader 内 *METER_TO_LENGTH_UNIT 转 km）。
