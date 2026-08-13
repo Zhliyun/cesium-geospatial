@@ -25,6 +25,7 @@ import {
 } from '@cesium-geospatial/core'
 import { createSkyStage } from './SkyStage'
 import { createDepthDebugStage } from './DepthDebugStage'
+import { createCloudsSpike } from './CloudsSpikeMRT'
 
 // ---- URL 参数解析（评审 critical：可复现验收）----
 const params = new URLSearchParams(location.search)
@@ -335,6 +336,15 @@ async function main(): Promise<void> {
 
     // ion 影像+地形（失败 fallback，不阻断——无 token/网络/资产无权时 console.warn 裸 globe）。
     await setupIonImageryTerrain(viewer, ionToken)
+
+    // phase3 体积云 M1 spike probe：?cloudsSpike=1/2/3 验证 custom Primitive pass=VOXELS + 自管 MRT FBO
+    // 可行性（4 项 go/no-go，详见 CloudsSpikeMRT.ts 头注）。不传时不加 primitive/stage，atmosphere mode
+    // 完全不变（零回归）。1=overlay 读 att0(color) 验 #1/#2/#3；2=att1(depthVel) / 3=att2(shadowLen) 验 #4 MRT 多 out。
+    const cloudsSpike = getNumber('cloudsSpike')
+    if (cloudsSpike != null && cloudsSpike > 0) {
+      const spike = createCloudsSpike(scene, cloudsSpike)
+      ;(window as unknown as { __cloudsSpike?: unknown }).__cloudsSpike = spike
+    }
   } else if (mode === 'sky') {
     // 回归对照：Phase 0 SkyStage（对数深度保持 false）
     scene.logarithmicDepthBuffer = false
