@@ -43,6 +43,31 @@ importers:
         specifier: ^2.2.0
         version: 2.3.2(vite@6.4.3(@types/node@20.19.43)(tsx@4.23.8))
 
+  packages/cesium-clouds:
+    dependencies:
+      '@cesium-geospatial/core':
+        specifier: workspace:*
+        version: link:../cesium-core
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
+      cesium:
+        specifier: ^1.143.0
+        version: 1.143.0
+      glslang-validator-prebuilt-predownloaded:
+        specifier: 0.0.2
+        version: 0.0.2
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.3(@types/node@20.19.43)(tsx@4.23.8)
+      vitest:
+        specifier: ^4.1.0
+        version: 4.1.10(@types/node@20.19.43)(vite@6.4.3(@types/node@20.19.43)(tsx@4.23.8))
+
   packages/cesium-core:
     dependencies:
       '@petamoriken/float16':

@@ -1,0 +1,26 @@
+{
+  "name": "@cesium-geospatial/clouds",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@cesium-geospatial/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "cesium": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "cesium": "^1.143.0",
+    "glslang-validator-prebuilt-predownloaded": "0.0.2",
+    "typescript": "^5.9.2",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.0"
+  }
+}
