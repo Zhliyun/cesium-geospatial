@@ -51,3 +51,9 @@ export { FullscreenPass } from './cesium/platform'
 export type { FullscreenPassOptions } from './cesium/platform'
 export { createVolumetricPrimitive } from './cesium/platform'
 export type { VolumetricPrimitive, VolumetricPrimitiveOptions } from './cesium/platform'
+export {
+  createMRTFramebuffer,
+  createPingPong,
+  createArrayTextureBridge
+} from './cesium/platform'
+export type { PingPongState, ArrayTextureBridgeOptions } from './cesium/platform'

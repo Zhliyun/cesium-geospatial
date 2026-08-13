@@ -9,3 +9,9 @@ export { FullscreenPass } from './FullscreenPass'
 export type { FullscreenPassOptions } from './FullscreenPass'
 export { createVolumetricPrimitive } from './VolumetricPrimitive'
 export type { VolumetricPrimitive, VolumetricPrimitiveOptions } from './VolumetricPrimitive'
+export {
+  createMRTFramebuffer,
+  createPingPong,
+  createArrayTextureBridge,
+} from './FramebufferManager'
+export type { PingPongState, ArrayTextureBridgeOptions } from './FramebufferManager'
