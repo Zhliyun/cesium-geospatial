@@ -49,3 +49,5 @@ export { StageGpuTimer } from './cesium/profile/stageGpuTimer'
 // phase3 平台基建（spec r2 C4）：FullscreenPass / VolumetricPrimitive / FramebufferManager
 export { FullscreenPass } from './cesium/platform'
 export type { FullscreenPassOptions } from './cesium/platform'
+export { createVolumetricPrimitive } from './cesium/platform'
+export type { VolumetricPrimitive, VolumetricPrimitiveOptions } from './cesium/platform'

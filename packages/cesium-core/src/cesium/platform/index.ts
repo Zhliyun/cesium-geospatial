@@ -7,3 +7,5 @@
 
 export { FullscreenPass } from './FullscreenPass'
 export type { FullscreenPassOptions } from './FullscreenPass'
+export { createVolumetricPrimitive } from './VolumetricPrimitive'
+export type { VolumetricPrimitive, VolumetricPrimitiveOptions } from './VolumetricPrimitive'
