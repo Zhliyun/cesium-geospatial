@@ -13,3 +13,6 @@ export {
   type CloudsDefines,
   type CloudsStandaloneOptions
 } from './cloudsShaderAssembler'
+
+// weather 噪声纹理加载（T9）
+export { loadWeatherTextures, type WeatherTextures } from './weatherTextures'
