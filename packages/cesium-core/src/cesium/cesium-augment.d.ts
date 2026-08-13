@@ -58,6 +58,28 @@ declare module 'cesium' {
     MIRRORED_REPEAT = 33648,
   }
 
+  // RenderState（@cesium/engine Renderer 内部类，Cesium.js re-export，公开 .d.ts 缺失）。
+  // DrawCommand.renderState 须为 RenderState 实例（带 id）——cmd 进 pass 调度后，Cesium
+  // updateDerivedCommands→createDepthOnlyDerivedCommand→getDepthOnlyRenderState（DerivedCommand.js:75）
+  // 访问 renderState.id 做缓存查找；undefined renderState → "reading 'id'" 炸（spike 实测 2026-08-13）。
+  // fromCache 返回带 id 的缓存实例（相同配置不重复创建 GL render state 对象）。
+  export class RenderState {
+    static fromCache(options?: {
+      cull?: { enabled?: boolean; face?: number }
+      lineWidth?: number
+      polygonOffset?: { enabled?: boolean; factor?: number; units?: number }
+      scissorTest?: { enabled?: boolean; rectangle?: unknown }
+      depthRange?: { near?: number; far?: number }
+      depthTest?: { enabled?: boolean; func?: number }
+      colorMask?: { red?: boolean; green?: boolean; blue?: boolean; alpha?: boolean }
+      depthMask?: boolean
+      stencilTest?: unknown
+      blending?: unknown
+      [key: string]: unknown
+    }): RenderState
+    readonly id: number
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-empty-interface
   export interface Context {}
 

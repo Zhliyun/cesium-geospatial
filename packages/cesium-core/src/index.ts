@@ -46,3 +46,6 @@ export {
 } from './cesium/depthTemporal/depthTemporalConstants'
 // 性能 Phase 0：逐 stage GPU 计时（EXT_disjoint_timer_query_webgl2）
 export { StageGpuTimer } from './cesium/profile/stageGpuTimer'
+// phase3 平台基建（spec r2 C4）：FullscreenPass / VolumetricPrimitive / FramebufferManager
+export { FullscreenPass } from './cesium/platform'
+export type { FullscreenPassOptions } from './cesium/platform'
