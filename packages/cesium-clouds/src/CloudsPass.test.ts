@@ -102,7 +102,8 @@ function createMockWeather(): any {
   return {
     shape: { id: 'shape', _texture: { id: 'shape' }, _target: 0x806f },
     shapeDetail: { id: 'detail', _texture: { id: 'detail' }, _target: 0x806f },
-    stbn: { id: 'stbn', _texture: { id: 'stbn' }, _target: 0x806f }
+    stbn: { id: 'stbn', _texture: { id: 'stbn' }, _target: 0x806f },
+    localWeather: { id: 'localWeather' }
   }
 }
 
@@ -163,7 +164,7 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
-  it('uniformMap 注入 weather shape/shapeDetail/stbn（真 weather 对象）', () => {
+  it('uniformMap 注入 weather shape/shapeDetail/stbn/localWeather（真 weather 对象）', () => {
     vi.clearAllMocks()
     const weather = createMockWeather()
     const pass = createCloudsPass(scene2(), createMockLuts(), weather, state)
@@ -172,17 +173,15 @@ describe('createCloudsPass', () => {
     expect(um.shapeDetailTexture()).toBe(weather.shapeDetail)
     // stbnTexture = weather.stbn 真 3D 蓝噪声资产（非 dummy——白噪声 dummy 显形全屏雪花纹）
     expect(um.stbnTexture()).toBe(weather.stbn)
+    // localWeatherTexture = weather.localWeather 真 2D 资产（满 coverage dummy 显形连续云墙+地平线白线）
+    expect(um.localWeatherTexture()).toBe(weather.localWeather)
     pass.destroy()
   })
 
-  it('uniformMap dummy texture（localWeather/turbulence/depthBuffer 非 weather/luts）', () => {
+  it('uniformMap dummy texture（turbulence/depthBuffer 非 weather/luts）', () => {
     vi.clearAllMocks()
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
-    // localWeatherTexture 是 dummy（PNG decode 未做），不等于 weather 对象
-    const lw = um.localWeatherTexture()
-    expect(lw).toBeDefined()
-    expect(lw).not.toBe(createMockWeather().shape)
     // turbulenceTexture dummy
     expect(um.turbulenceTexture()).toBeDefined()
     // depthBuffer dummy（M6 globe depth 接通前）

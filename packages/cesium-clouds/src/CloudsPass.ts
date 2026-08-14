@@ -24,7 +24,9 @@
 //   - SHADOW_LENGTH（M5 god rays）：CloudsMaterial 不 define → marchShadowLength/outputShadowLength(loc2)
 //     不编译；applyAerialPerspective 用 shadowLength=0 调 GetSkyRadianceToPoint（无 god rays）
 //   - depthBuffer（M6 地形遮挡）：1×1 val=1.0 → depth<1.0-1e-7 false → getRayDistanceToScene 返 0 远截断
-//   - localWeatherTexture（M2 dummy）：1×1 RGBA（255,255,255,255）→ coverage 满（local_weather PNG decode 未做）
+//   - localWeatherTexture：weather.localWeather 真 2D 资产（512² RGBA 4 层 coverage，PNG decode +
+//     generateMipmap；decode 失败时 loadWeatherTextures 返 1×1 全白 fallback——满 coverage 连续云墙
+//     会显形地平线白线）
 //   - turbulenceTexture（M2 dummy）：1×1 RGBA（128,128,128,255）→ 中性位移
 //   - stbnTexture：weather.stbn 真 3D 资产（128×128×64 R8 蓝噪声；白噪声 dummy 会显形全屏雪花纹）
 
@@ -217,17 +219,6 @@ export function createCloudsPass(
     pixelDatatype: PixelDatatype.UNSIGNED_BYTE
   }) // depth=1.0 → getRayDistanceToScene 远截断（M6 接通真实 globe depthTexture + log-depth 转换）
 
-  const dummyLocalWeather = new Texture({
-    context,
-    source: {
-      width: 1,
-      height: 1,
-      arrayBufferView: new Uint8Array([255, 255, 255, 255])
-    },
-    pixelFormat: PixelFormat.RGBA,
-    pixelDatatype: PixelDatatype.UNSIGNED_BYTE
-  }) // 全 1 → coverage 满（M2 local_weather PNG decode 未做；M6 接通）
-
   const dummyTurbulence = new Texture({
     context,
     source: {
@@ -320,8 +311,9 @@ export function createCloudsPass(
     powderScale: () => params.powderScale,
     powderExponent: () => params.powderExponent,
 
-    // weather/shape（localWeather/turbulence dummy；shape/shapeDetail 真）
-    localWeatherTexture: () => dummyLocalWeather,
+    // weather/shape（localWeather 真纹理——decode 失败时 loadWeatherTextures 提供 1×1 全白
+    // fallback；turbulence dummy）
+    localWeatherTexture: () => weather.localWeather,
     localWeatherRepeat: () => params.localWeatherRepeat,
     localWeatherOffset: () => params.localWeatherOffset,
     coverage: () => params.coverage,
@@ -405,7 +397,6 @@ export function createCloudsPass(
       primitive.destroy() // 释放 MRT FBO（GL framebuffer handle），destroyAttachments=false 不连带 texture
       mrtTextures.forEach((t) => t.destroy())
       dummyDepthBuffer.destroy()
-      dummyLocalWeather.destroy()
       dummyTurbulence.destroy()
       // dummyShadowBuffer Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用）
       ;(dummyShadowBuffer as unknown as { destroy: () => void }).destroy() // sampler3D dummy，M3 BSM 接通时换真实；公开 .d.ts 未声明 destroy，cast

@@ -10,6 +10,7 @@
 // GPU 运行时生成 perlin），本项目 M1 用预计算资产最简，procedural 留作后续优化。
 import {
   Texture3D,
+  Texture,
   PixelFormat,
   PixelDatatype,
   Sampler,
@@ -41,14 +42,25 @@ const STBN_SAMPLER = new Sampler({
   magnificationFilter: TextureMagnificationFilter.NEAREST
 })
 
+// local_weather 采样用 textureLod 显式 LOD（sampleWeather 按 mipLevel 降噪）——纹理必须
+// generateMipmap 且 minFilter 用 mipmap 链，否则不完整纹理采样返回黑（coverage=0 → 无云）。
+// three 版普通 Texture 默认 generateMipmaps=true + LinearMipmapLinearFilter 等价。
+const LOCAL_WEATHER_SAMPLER = new Sampler({
+  wrapS: TextureWrap.REPEAT,
+  wrapT: TextureWrap.REPEAT,
+  minificationFilter: TextureMinificationFilter.LINEAR_MIPMAP_LINEAR,
+  magnificationFilter: TextureMagnificationFilter.LINEAR
+})
+
 export interface WeatherTextures {
   /** 云形状噪声 3D（R8 Uint8 128³）。 */
   shape: Texture3D
   /** 云细节噪声 3D（R8 Uint8 32³）。 */
   shapeDetail: Texture3D
-  /** STBN 蓝噪声 3D（R8 Uint8 128×128×64，getSTBN march jitter 用；M2 frame=0 静态采样 layer 0）。 */
+  /** STBN 蓝噪声 3D（R8 Uint8 128×128×64，getSTBN march jitter 用；frame=0 静态采样 layer 0）。 */
   stbn: Texture3D
-  // localWeather: Texture  // M2 后：local_weather.png（2D 512²）PNG decode + Texture 2D
+  /** local_weather 2D（RGBA Uint8 512²，RGBA 通道 = 4 层 packed coverage；decode 失败时 1×1 全白 fallback）。 */
+  localWeather: Texture
 }
 
 const SHAPE_SIZE = 128
@@ -57,19 +69,41 @@ const STBN_SIZE = 128
 const STBN_DEPTH = 64
 
 /**
- * 加载 weather 纹理（shape + shapeDetail + stbn 3D；local_weather 2D 待 PNG decode）。
+ * PNG decode 为 RGBA 字节（createImageBitmap + OffscreenCanvas 2d，浏览器原生无依赖）。
+ * local_weather.png 是 512² RGBA（RGBA 通道 = 4 层 packed coverage）。
+ */
+async function decodePngRgba(
+  blob: Blob
+): Promise<{ width: number; height: number; data: Uint8Array }> {
+  const bitmap = await createImageBitmap(blob)
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+  const ctx = canvas.getContext('2d')
+  if (ctx == null) throw new Error('OffscreenCanvas 2d context 不可用')
+  ctx.drawImage(bitmap, 0, 0)
+  const img = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
+  bitmap.close()
+  return { width: img.width, height: img.height, data: new Uint8Array(img.data.buffer) }
+}
+
+/**
+ * 加载 weather 纹理（shape + shapeDetail + stbn 3D + localWeather 2D PNG）。
+ *
+ * localWeather decode 失败（缺资产/浏览器 API 不可用）时 fallback 1×1 全白 dummy（coverage 满，
+ * 同 M2 旧 dummy 语义）——此时地平线掠射带是连续云墙，其 inscatter 饱和外缘显形为白线
+ * （实测 2026-08-14），仅作降级不阻断。
  *
  * @param context Cesium Context
- * @param baseUrl weather 资产目录（如 '/clouds'，含 shape.bin/shape_detail.bin/stbn.bin/local_weather.png）
+ * @param baseUrl weather 资产目录（shape.bin/shape_detail.bin/stbn.bin/local_weather.png）
  */
 export async function loadWeatherTextures(
   context: Context,
   baseUrl: string
 ): Promise<WeatherTextures> {
-  const [shapeBuf, detailBuf, stbnBuf] = await Promise.all([
+  const [shapeBuf, detailBuf, stbnBuf, weatherPng] = await Promise.all([
     fetch(`${baseUrl}/shape.bin`).then((r) => r.arrayBuffer()),
     fetch(`${baseUrl}/shape_detail.bin`).then((r) => r.arrayBuffer()),
-    fetch(`${baseUrl}/stbn.bin`).then((r) => r.arrayBuffer())
+    fetch(`${baseUrl}/stbn.bin`).then((r) => r.arrayBuffer()),
+    fetch(`${baseUrl}/local_weather.png`).then((r) => r.blob())
   ])
   // shape/shape_detail: R8 Uint8 3D（推算 128³/32³；M2 云 shader 采样时校准）。
   // PixelFormat.RED 单通道（WebGL2），UNSIGNED_BYTE。
@@ -115,5 +149,31 @@ export async function loadWeatherTextures(
     sampler: STBN_SAMPLER,
     flipY: false
   })
-  return { shape, shapeDetail, stbn }
+
+  // local_weather：PNG decode → RGBA 2D Texture（flipY=true 等价 three TextureLoader 上传翻转，
+  // globeUv 采样方向与 three 版一致）+ generateMipmap（textureLod 显式 LOD 采样需要 mipmap 链，
+  // 无 mip 的不完整纹理采样返回黑 → coverage=0 云消失）。decode 失败 fallback 1×1 全白。
+  let localWeather: Texture
+  try {
+    const { width, height, data } = await decodePngRgba(weatherPng)
+    localWeather = new Texture({
+      context,
+      source: { width, height, arrayBufferView: data },
+      pixelFormat: PixelFormat.RGBA,
+      pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+      sampler: LOCAL_WEATHER_SAMPLER,
+      flipY: true
+    })
+    ;(localWeather as unknown as { generateMipmap: () => void }).generateMipmap()
+  } catch (err) {
+    console.warn('[clouds] local_weather.png decode 失败，fallback 1×1 全白 dummy（连续云墙+地平线白线）', err)
+    localWeather = new Texture({
+      context,
+      source: { width: 1, height: 1, arrayBufferView: new Uint8Array([255, 255, 255, 255]) },
+      pixelFormat: PixelFormat.RGBA,
+      pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+      sampler: LOCAL_WEATHER_SAMPLER
+    })
+  }
+  return { shape, shapeDetail, stbn, localWeather }
 }
