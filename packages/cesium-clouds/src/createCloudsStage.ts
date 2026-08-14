@@ -50,6 +50,11 @@ export interface CloudsStageOptions extends CloudsPassOptions {
    * demo 在 atmosphere mode 内 `?clouds=1` 时传 true。
    */
   clouds?: boolean
+  /**
+   * overlay 云曝光（默认 10，对齐 three 版 clouds storybook ToneMapping exposure 标定）。
+   * demo `?cloudsExposure=N` 调节（偏灰→调大；过曝→调小）。
+   */
+  cloudsOverlayExposure?: number
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy。 */
@@ -66,8 +71,15 @@ export interface CloudsStageHandle {
 // M2 简化：cloud 先 ACES+gamma 到 display space，再 alpha mix（cloud.a = transmittance → opacity = 1-a）。
 // colorTexture 由 Cesium PostProcessStage 内建提供（前一 stage 输出）；u_cloudsBuffer 由 bridge 注入。
 // out_FragColor 不声明——Cesium 单输出 stage 自动注入 layout(location=0) out（同 CloudsSpikeMRT OVERLAY_SHADER）。
+//
+// 颜色链两处标定（2026-08-14 偏灰排查）：
+//   1. unpremultiply：cloud.rgb 是 premultiplied（云色×opacity），直接 ACES 会在薄云/边缘处被
+//      低值段压暗 ~5 倍（ACES(0.3L) ≠ 0.3·ACES(L)）→ 先 /a 还原 straight 云色再 tonemap。
+//   2. exposure：three 版 clouds storybook ToneMapping exposure=10（云线性 radiance 量级 ~0.1，
+//      ×10 拉进 ACES 工作区）；不乘则云整体暗 ~10 倍 → 偏灰。u_cloudsExposure uniform 可调。
 const OVERLAY_SHADER = `uniform sampler2D colorTexture;
 uniform sampler2D u_cloudsBuffer;
+uniform float u_cloudsExposure;
 in vec2 v_textureCoordinates;
 
 // ACES filmic（对齐 core tonemap.frag ACESFilmic 常数）。
@@ -83,14 +95,19 @@ vec3 cloudsOverlay_ACESFilmic(vec3 x) {
 void main() {
   vec4 scene = texture(colorTexture, v_textureCoordinates);
   vec4 cloud = texture(u_cloudsBuffer, v_textureCoordinates);
-  // cloud.a = transmittance（clouds.frag:617）；opacity = 1 - transmittance。
-  float cloudOpacity = 1.0 - cloud.a;
-  // M2：overlay 在 tonemap 后（链尾），cloud 线性 HDR → ACES + gamma 1/2.2 到 display space 再 mix。
-  vec3 cloudDisplay = pow(cloudsOverlay_ACESFilmic(cloud.rgb), vec3(1.0 / 2.2));
-  vec3 final = mix(scene.rgb, cloudDisplay, cloudOpacity);
+  // three 版 cloudsEffect.frag 语义（premultiplied over blend）：clouds.a = 云 opacity
+  // （无样本 clouds.frag:863 color=vec4(0) → a=0 → 不覆盖，scene 透传）；clouds.rgb premultiplied。
+  // M2 overlay 在 tonemap 后：cloud 线性 HDR（premultiplied）→ unpremultiply → ×exposure →
+  // ACES + gamma 到 display space → straight-alpha over（ACES 非线性下的近似，flat 阶段可接受）。
+  vec3 cloudLinear = cloud.rgb / max(cloud.a, 1e-4);
+  vec3 cloudDisplay = pow(cloudsOverlay_ACESFilmic(cloudLinear * u_cloudsExposure), vec3(1.0 / 2.2));
+  vec3 final = scene.rgb * (1.0 - cloud.a) + cloud.a * cloudDisplay;
   out_FragColor = vec4(final, scene.a);
 }
 `
+
+// 云 overlay ACES 曝光：对齐 three 版 clouds storybook ToneMapping exposure=10 标定。
+const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 10
 
 /**
  * 创建体积云 stage（CloudsPass + overlay）并接入 PostProcess 链。
@@ -131,7 +148,9 @@ export function createCloudsStage(
     fragmentShader: OVERLAY_SHADER,
     uniforms: {
       // bridge 每帧重新取（防 resize 后 colorTex 引用变更；M2 不处理 resize 但接口留动态）。
-      u_cloudsBuffer: () => cloudsPass.getColorBridge()
+      u_cloudsBuffer: () => cloudsPass.getColorBridge(),
+      // 云曝光（three 版 ToneMapping exposure=10 标定；URL ?cloudsExposure=N 可调）
+      u_cloudsExposure: options.cloudsOverlayExposure ?? CLOUDS_OVERLAY_EXPOSURE_DEFAULT
     },
     sampleMode: PostProcessStageSampleMode.NEAREST,
     pixelFormat: PixelFormat.RGBA,

@@ -349,8 +349,24 @@ async function main(): Promise<void> {
           context as Parameters<typeof loadWeatherTextures>[0],
           '/clouds'
         )
+        // M2 视觉调试（棕色同心圆排查）：?cloudsDebug=N → DEBUG_SHOW_*（1=globeUv 映射 /
+        // 2=云前深度 turbo / 3=march 采样数 / 4=BSM）；?cloudsShapeDetail=0 / ?cloudsTurbulence=0 /
+        // ?cloudsAccurate=0 关对应分支（隔离 pattern / 颜色来源）。
+        const cloudsDebug = getNumber('cloudsDebug')
+        const cloudsDebugShow =
+          cloudsDebug === 1 ? ('uv' as const)
+          : cloudsDebug === 2 ? ('frontDepth' as const)
+          : cloudsDebug === 3 ? ('sampleCount' as const)
+          : cloudsDebug === 4 ? ('shadowMap' as const)
+          : undefined
         const cloudsHandle = createCloudsStage(scene, luts, weather, {
-          clouds: true
+          clouds: true,
+          ...(cloudsDebugShow != null ? { debugShow: cloudsDebugShow } : {}),
+          ...(getString('cloudsShapeDetail') === '0' ? { shapeDetail: false } : {}),
+          ...(getString('cloudsTurbulence') === '0' ? { turbulence: false } : {}),
+          ...(getString('cloudsAccurate') === '0' ? { accurateSunSkyLight: false } : {}),
+          // 云 overlay 曝光（默认 10 对齐 three 版 storybook 标定；偏灰调大/过曝调小）
+          ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {})
         })
         // 暴露 window.__cloudsStage（调试/控制台 destroy 用，同 __cloudsSpike 模式）
         ;(window as unknown as { __cloudsStage?: unknown }).__cloudsStage =
