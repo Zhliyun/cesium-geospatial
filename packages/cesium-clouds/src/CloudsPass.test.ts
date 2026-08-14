@@ -186,13 +186,17 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
-  it('uniformMap shadowBuffer = bridge（sampler2DArray 1×1×4 全 0，M3 BSM dummy）', () => {
+  it('uniformMap shadowBuffer = Texture3D（sampler3D；Cesium createUniform 不认 sampler2DArray type 36289）', () => {
     vi.clearAllMocks()
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     const sb = um.shadowBuffer()
-    // bridge 形状 {_texture, _target=0x871a(TEXTURE_2D_ARRAY)}
-    expect(sb).toEqual({ _texture: expect.any(Object), _target: 0x871a })
+    // shadowBuffer 是 Texture3D（sampler3D dummy 全 0，depth=SHADOW_CASCADE_COUNT=4 cascade 维度）。
+    // 非 bridge——Cesium createUniform 不认 sampler2DArray(type 36289)，CloudsMaterial surgery 把
+    // uniform sampler2DArray → sampler3D，dummy 用 Texture3D（createUniform 认 SAMPLER_3D）。
+    expect(sb).toBeDefined()
+    expect(typeof sb).toBe('object')
+    expect(sb).not.toEqual({ _texture: expect.any(Object), _target: expect.any(Number) }) // 非 2D_ARRAY bridge
     pass.destroy()
   })
 
