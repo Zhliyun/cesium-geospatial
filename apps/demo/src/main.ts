@@ -23,6 +23,10 @@ import {
   TEMPORAL_QUALITY_PRESETS,
   type AtmosphereStageOptions
 } from '@cesium-geospatial/core'
+import {
+  loadWeatherTextures,
+  createCloudsStage
+} from '@cesium-geospatial/clouds'
 import { createSkyStage } from './SkyStage'
 import { createDepthDebugStage } from './DepthDebugStage'
 import { createCloudsSpike } from './CloudsSpikeMRT'
@@ -331,6 +335,33 @@ async function main(): Promise<void> {
             console.log('[profile]', JSON.stringify(snap))
           }
         })
+      }
+    }
+
+    // phase3 体积云 M2 主 raymarch：?clouds=1 → loadWeatherTextures + createCloudsStage
+    // （CloudsPass custom Primitive pass=VOXELS + MRT + cloudsBuffer overlay 接 atmosphere 链尾）。
+    // 验收 URL：?mode=atmosphere&clouds=1（天空有云形 flat lighting；相机移动稳定 ECEF 密切球；
+    // 零回归——?clouds 不传时 createCloudsStage 返 undefined，atmosphere 链完全不变）。
+    // 失败不阻断（weather .bin fetch 失败 → console.warn 跳过，atmosphere 照常）。
+    if (!skipAtmosphere && getString('clouds') === '1') {
+      try {
+        const weather = await loadWeatherTextures(
+          context as Parameters<typeof loadWeatherTextures>[0],
+          '/clouds'
+        )
+        const cloudsHandle = createCloudsStage(scene, luts, weather, {
+          clouds: true
+        })
+        // 暴露 window.__cloudsStage（调试/控制台 destroy 用，同 __cloudsSpike 模式）
+        ;(window as unknown as { __cloudsStage?: unknown }).__cloudsStage =
+          cloudsHandle
+        if (cloudsHandle != null) {
+          console.info(
+            '[phase3-clouds] M2 主 raymarch 已接线（flat lighting，无 BSM/temporal/god rays）'
+          )
+        }
+      } catch (err) {
+        console.warn('[phase3-clouds] weather 纹理加载失败，跳过体积云', err)
       }
     }
 

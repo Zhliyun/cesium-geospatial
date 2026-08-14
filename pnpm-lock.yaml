@@ -23,6 +23,9 @@ importers:
 
   apps/demo:
     dependencies:
+      '@cesium-geospatial/clouds':
+        specifier: workspace:*
+        version: link:../../packages/cesium-clouds
       '@cesium-geospatial/core':
         specifier: workspace:*
         version: link:../../packages/cesium-core

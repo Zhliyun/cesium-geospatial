@@ -9,9 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@cesium-geospatial/clouds": "workspace:*",
     "@cesium-geospatial/core": "workspace:*",
-    "cesium": "^1.143.0",
-    "@petamoriken/float16": "^3.9.3"
+    "@petamoriken/float16": "^3.9.3",
+    "cesium": "^1.143.0"
   },
   "devDependencies": {
     "typescript": "^5.9.2",
