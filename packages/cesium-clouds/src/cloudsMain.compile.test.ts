@@ -131,6 +131,20 @@ describe('M2 T1 buildCloudsMainFragmentShader —— three clouds.frag → Cesiu
     // → glslang 编译时该分支不激活（下面 glslang 编译用例验证）
   })
 
+  it('getRayDistanceToScene 换 czm log-depth 反演（three reverseLogDepth 版不适用 Cesium）', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    // core LOG_DEPTH_GLSL 注入反演函数定义（非 Cesium 内置——缺定义运行时编译错
+    // 'czm_reverseLogDepthDist: no matching overloaded function found'，实测 2026-08-14）
+    expect(src).toContain('float czm_reverseLogDepthDist(const float logDepth, const float near, const float far)')
+    expect(src).toContain('czm_reverseLogDepthDist(logDepth, czm_currentFrustum.x, czm_currentFrustum.y)')
+    // three 版三件套调用不应再出现在 getRayDistanceToScene（readDepthValue/reverseLogDepth/getViewZ
+    // 的定义仍在 three packing 库里，但本函数不再消费——断言函数体内无这三者）
+    const fnBody = src.slice(src.indexOf('float getRayDistanceToScene'), src.indexOf('void cloudsMainBody'))
+    expect(fnBody).not.toContain('readDepthValue')
+    expect(fnBody).not.toContain('reverseLogDepth(depth, cameraNear, cameraFar)')
+    expect(fnBody).not.toContain('getViewZ')
+  })
+
   it('选项可关闭 SHAPE_DETAIL / TURBULENCE / ACCURATE_SUN_SKY_LIGHT', () => {
     const off: CloudsMainOptions = {
       shapeDetail: false,

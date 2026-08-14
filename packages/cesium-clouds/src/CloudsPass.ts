@@ -23,7 +23,9 @@
 //     outputDepthVelocity 在 M2 未被消费
 //   - SHADOW_LENGTH（M5 god rays）：CloudsMaterial 不 define → marchShadowLength/outputShadowLength(loc2)
 //     不编译；applyAerialPerspective 用 shadowLength=0 调 GetSkyRadianceToPoint（无 god rays）
-//   - depthBuffer（M6 地形遮挡）：1×1 val=1.0 → depth<1.0-1e-7 false → getRayDistanceToScene 返 0 远截断
+//   - depthBuffer（M6 提前接通，2026-08-14）：globeDepth.depthStencilTexture（log-depth 编码，
+//     CloudsMaterial surgery 把 three reverseLogDepth 版 getRayDistanceToScene 换 czm_reverseLogDepthWindow
+//     反演）→ 云被地形截断/遮挡；未就绪时 fallback 1×1 val=1.0 dummy（远截断降级）
 //   - localWeatherTexture：weather.localWeather 真 2D 资产（512² RGBA 4 层 coverage，PNG decode +
 //     generateMipmap；decode 失败时 loadWeatherTextures 返 1×1 全白 fallback——满 coverage 连续云墙
 //     会显形地平线白线）
@@ -236,8 +238,8 @@ export function createCloudsPass(
   // 递增轮换层 + temporal reprojection 收敛）。
 
   // ── globe depth 闭包（spec 附录 F5：私有 API scene._view.globeDepth.depthStencilTexture）──
-  // M2 getRayDistanceToScene 走远截断（depthBuffer dummy val=1.0），不实际读 globe depth；
-  // 闭包提供接口契约，M6 接通时切真值即可（CloudsMaterial 桥接不变）。
+  // M6 提前接通（2026-08-14）：depthBuffer uniform 直连 globe depth（云被地形截断/遮挡）；
+  // 未就绪时 uniformMap fallback 1×1 val=1.0 dummy（远截断，无遮挡降级）。
   const globeDepthTexture = (): Texture | undefined => {
     const view = (scene as unknown as GlobeDepthView)._view
     return view?.globeDepth?.depthStencilTexture
@@ -357,8 +359,10 @@ export function createCloudsPass(
     viewReprojectionMatrix: () => params.viewReprojectionMatrix,
     temporalJitter: () => params.temporalJitter,
 
-    // depth（M6，M2 dummy val=1.0 远截断）
-    depthBuffer: () => dummyDepthBuffer,
+    // depth（M6 提前接通，2026-08-14）：真实 globe depthTexture（log-depth 编码，shader 内
+    // czm_reverseLogDepthWindow 反演）→ 云被地形正确截断/遮挡（青藏「云浮地形上」修）。
+    // globeDepth 未就绪（首帧/_view 缺失）时 fallback 1×1 val=1.0 dummy（远截断，无遮挡降级）。
+    depthBuffer: () => globeDepthTexture() ?? dummyDepthBuffer,
 
     // STBN（weather.stbn 真 3D 资产；M4 temporal 接通后 frame 递增轮换层）
     stbnTexture: () => weather.stbn

@@ -184,8 +184,17 @@ describe('createCloudsPass', () => {
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     // turbulenceTexture dummy
     expect(um.turbulenceTexture()).toBeDefined()
-    // depthBuffer dummy（M6 globe depth 接通前）
+    // depthBuffer fallback dummy（scene2 无 _view.globeDepth → 远截断降级）
     expect(um.depthBuffer()).toBeDefined()
+    pass.destroy()
+  })
+
+  it('depthBuffer 优先 globeDepth.depthStencilTexture（M6 提前接通：云被地形截断/遮挡）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene() // mock 带 _view.globeDepth.depthStencilTexture
+    const pass = createCloudsPass(scene, createMockLuts(), createMockWeather(), state)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um.depthBuffer()).toBe(scene._view.globeDepth.depthStencilTexture)
     pass.destroy()
   })
 

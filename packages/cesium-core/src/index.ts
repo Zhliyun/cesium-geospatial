@@ -10,6 +10,9 @@ export {
   SUN_ANGULAR_RADIUS
 } from './math/atmosphereParameters'
 export { getAltitudeCorrectionOffset } from './math/altitudeCorrection'
+// Cesium 对数深度反演 GLSL（czm_reverseLogDepthDist/Window 等）——cesium-clouds 的
+// getRayDistanceToScene（globe depth 截断 march）跨包复用，勿重命名 GLSL 内函数名。
+export { LOG_DEPTH_GLSL } from './cesium/logDepth'
 export { buildAtmospherePrefix } from './cesium/cesiumCore'
 export { DEPTH_RECONSTRUCTION_GLSL } from './cesium/depthReconstruction'
 export { loadAtmosphereLUTs, parseHalfFloatBin } from './cesium/lutLoader'

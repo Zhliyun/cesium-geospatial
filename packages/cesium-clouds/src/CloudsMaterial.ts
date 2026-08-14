@@ -34,7 +34,7 @@
 //     ShaderProgram 自动注入）
 //   - buildStandaloneCloudsShaderForValidation()：glslang 校验（补 #version 300 es + czm_* 桩）
 
-import { ATMOSPHERE_DEFAULT_GLSL } from '@cesium-geospatial/core'
+import { ATMOSPHERE_DEFAULT_GLSL, LOG_DEPTH_GLSL } from '@cesium-geospatial/core'
 import { glslIndex } from './glslIndex'
 import { resolveCloudsIncludes } from './resolveCloudsIncludes'
 
@@ -56,6 +56,12 @@ export interface CloudsMainOptions {
    * 默认 true（fragment 重建下避免顶点 irradiance 预计算；M2 clouds.vert 不走）。
    */
   accurateSunSkyLight?: boolean
+  /**
+   * Debug 视图（clouds.frag DEBUG_SHOW_* 分支，M2 视觉调试用）：
+   *   'uv'（globeUv checker 映射）/ 'frontDepth'（turbo 云前深度）/ 'sampleCount'（march 采样数）/
+   *   'shadowMap'（BSM 可视化，M3）。默认 null 正常渲染。
+   */
+  debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | null
 }
 
 type ResolvedCloudsMainOptions = Required<CloudsMainOptions>
@@ -63,7 +69,8 @@ type ResolvedCloudsMainOptions = Required<CloudsMainOptions>
 const DEFAULTS: ResolvedCloudsMainOptions = {
   shapeDetail: true,
   turbulence: true,
-  accurateSunSkyLight: true
+  accurateSunSkyLight: true,
+  debugShow: null
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include
@@ -106,13 +113,19 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     '#define PERSPECTIVE_CAMERA', // getViewZ perspectiveDepthToViewZ 分支（Cesium 相机恒透视）
     o.accurateSunSkyLight ? '#define ACCURATE_SUN_SKY_LIGHT' : '',
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',
-    o.turbulence ? '#define TURBULENCE' : ''
+    o.turbulence ? '#define TURBULENCE' : '',
+    o.debugShow === 'uv' ? '#define DEBUG_SHOW_UV' : '',
+    o.debugShow === 'frontDepth' ? '#define DEBUG_SHOW_FRONT_DEPTH' : '',
+    o.debugShow === 'sampleCount' ? '#define DEBUG_SHOW_SAMPLE_COUNT' : '',
+    o.debugShow === 'shadowMap' ? '#define DEBUG_SHOW_SHADOW_MAP' : ''
   ].filter(s => s.length > 0)
 }
 
 // czm_* automatic uniform / 函数桩（仅 glslang 校验用）。
 // Cesium 运行时由 ShaderProgram._automaticUniforms 自动注入（spec 附录 F6 R10 已确认 Primitive
 // 走 ShaderProgram 必注入）。校验入口补类型匹配的桩声明 + 桩函数。
+// 注：czm_reverseLogDepthDist/Window 不是 Cesium 内置——由 core LOG_DEPTH_GLSL 注入真定义
+// （buildCloudsMainFragmentShader 拼接），勿在此加桩（重复定义冲突）。
 const CZM_STUBS_GLSL = `
 // czm_* automatic uniform 桩（Cesium 运行时注入；glslang 校验需手写声明）
 uniform vec3 czm_viewerPositionWC;
@@ -268,6 +281,30 @@ function surgeryCloudsFrag(source: string): string {
     'uniform sampler3D shadowBuffer;'
   )
 
+  // 5) getRayDistanceToScene 函数体替换（M6 depth 提前接通，2026-08-14）：three 版
+  //    readDepthValue + reverseLogDepth（three log-depth 公式）+ getViewZ 不适用 Cesium——
+  //    Cesium logarithmicDepthBuffer 的编码不同。改用 core LOG_DEPTH_GLSL 的
+  //    czm_reverseLogDepthDist（log-depth → 视轴深度 -z_eye 米值，一步到位无需反投影，
+  //    仿 core aerialPerspective.frag Bug1 修法）→ 沿 ray 距离。depthBuffer 由 CloudsPass
+  //    注入 globeDepth.depthStencilTexture（scene._view 私有路径，spec 附录 F5）。
+  //    锚点唯一（getRayDistanceToScene 定义一处，grep 验证）。
+  src = src.replace(
+    /float getRayDistanceToScene\(const vec3 rayDirection, out float viewZ\) \{\n  float depth = readDepthValue\(depthBuffer, vUv \* targetUvScale \+ temporalJitter\);\n  if \(depth < 1\.0 - 1e-7\) \{\n    depth = reverseLogDepth\(depth, cameraNear, cameraFar\);\n    viewZ = getViewZ\(depth\);\n    return -viewZ \/ dot\(rayDirection, vCameraDirection\);\n  \}\n  viewZ = 0\.0;\n  return 0\.0;\n\}/,
+    `float getRayDistanceToScene(const vec3 rayDirection, out float viewZ) {
+  // Cesium 桥接：globe depthTexture 是 log-depth 编码（logarithmicDepthBuffer=true），
+  // czm_reverseLogDepthDist（core LOG_DEPTH_GLSL 注入）反演视轴深度；three 版
+  // reverseLogDepth 公式不适用 Cesium。
+  float logDepth = texture(depthBuffer, vUv * targetUvScale + temporalJitter).r;
+  if (logDepth < 1.0 - 1e-7) {
+    float zDist = czm_reverseLogDepthDist(logDepth, czm_currentFrustum.x, czm_currentFrustum.y);
+    viewZ = -zDist;
+    return -viewZ / dot(rayDirection, vCameraDirection);
+  }
+  viewZ = 0.0;
+  return 0.0;
+}`
+  )
+
   return src
 }
 
@@ -293,9 +330,16 @@ export function buildCloudsMainFragmentShader(
   const defines = buildM2Defines(o).join('\n')
   const surg = surgeryCloudsFrag(glslIndex.cloudsFrag)
 
-  const merged = [defines, BRIDGE_DEFINES_GLSL, surg, WRAPPER_MAIN_GLSL].join(
-    '\n\n'
-  )
+  // LOG_DEPTH_GLSL（core）：czm_reverseLogDepthDist 等 Cesium 对数深度反演（非 Cesium 内置，
+  // 必须注入定义）——getRayDistanceToScene（surgery 替换后）消费。放 surgery 之前 = 位于
+  // clouds.frag 所有函数定义前（GLSL 声明先于使用）。
+  const merged = [
+    defines,
+    BRIDGE_DEFINES_GLSL,
+    LOG_DEPTH_GLSL,
+    surg,
+    WRAPPER_MAIN_GLSL
+  ].join('\n\n')
 
   // resolveCloudsIncludes：Three <chunk> 兼容桩 + 跨包 core/* + atmosphere/bruneton/* + clouds 本地
   // + unrollLoops。桥接 #define / 全局变量声明 / wrapper main 不含 #include，原样穿透。
