@@ -16,3 +16,10 @@ export {
 
 // weather 噪声纹理加载（T9）
 export { loadWeatherTextures, type WeatherTextures } from './weatherTextures'
+
+// M2 T1：three clouds.frag → Cesium 主 march fragment shader 桥接组装器（双入口：运行时 + glslang 校验）
+export {
+  buildCloudsMainFragmentShader,
+  buildStandaloneCloudsShaderForValidation,
+  type CloudsMainOptions
+} from './CloudsMaterial'
