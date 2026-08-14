@@ -73,6 +73,17 @@ describe('M2 T1 buildCloudsMainFragmentShader —— three clouds.frag → Cesiu
     expect(src).not.toMatch(/uniform float cameraFar;/)
   })
 
+  it('ATMOSPHERE 剥离 uniform 声明 → const 构造注入（Cesium uniformMap 不支持嵌套 struct 数组）', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    // 原 uniform 声明剥离（同 core cesiumCore.ts 处理方式）
+    expect(src).not.toMatch(/uniform AtmosphereParameters ATMOSPHERE;/)
+    // 替换为 const ATMOSPHERE = AtmosphereParameters(...) 构造（ATMOSPHERE_DEFAULT_GLSL）
+    expect(src).toContain('const AtmosphereParameters ATMOSPHERE = AtmosphereParameters(')
+    // const 注入点位于 #include "atmosphere/bruneton/definitions" 之后（struct 已定义）
+    const defIdx = src.indexOf('AtmosphereParameters ATMOSPHERE = AtmosphereParameters(')
+    expect(defIdx).toBeGreaterThan(src.indexOf('struct AtmosphereParameters'))
+  })
+
   it('桥接重建函数 + cloudsMainBody（原 main 改名）+ wrapper main', () => {
     const src = buildCloudsMainFragmentShader(M2_OPTIONS)
     expect(src).toContain('void cloudsBridge_reconstructVaryings()')

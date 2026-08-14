@@ -34,6 +34,7 @@
 //     ShaderProgram 自动注入）
 //   - buildStandaloneCloudsShaderForValidation()：glslang 校验（补 #version 300 es + czm_* 桩）
 
+import { ATMOSPHERE_DEFAULT_GLSL } from '@cesium-geospatial/core'
 import { glslIndex } from './glslIndex'
 import { resolveCloudsIncludes } from './resolveCloudsIncludes'
 
@@ -233,6 +234,18 @@ function surgeryCloudsFrag(source: string): string {
   src = src.replace(/uniform float cameraNear;\n/, '')
   src = src.replace(/uniform float cameraFar;\n/, '')
 
+  // 1b) 剥离 uniform AtmosphereParameters ATMOSPHERE; → 原地替换为 const ATMOSPHERE 构造。
+  //     原因（同 core cesiumCore.ts 注释）：Cesium uniformMap（ShaderProgram 自动 uniform 派发）
+  //     不支持嵌套 struct / struct 数组——AtmosphereParameters 含 DensityProfile（内嵌
+  //     DensityProfileLayer[2] 数组），无法经 uniformMap 注入。core 已验证的方案是 GLSL
+  //     `const` 构造注入（ATMOSPHERE_DEFAULT_GLSL，逐字取自 three-geospatial
+  //     AtmosphereParameters.DEFAULT）。此 uniform 声明位于 clouds.frag L19（紧跟 L17
+  //     #include "atmosphere/bruneton/definitions" 之后），原地替换保证 const 在 struct 定义之后。
+  src = src.replace(
+    /uniform AtmosphereParameters ATMOSPHERE;\n/,
+    `${ATMOSPHERE_DEFAULT_GLSL}\n`
+  )
+
   // 2) IN-PLACE 替换 7 个 in varying 块（L87-93）为桥接块（in v_textureCoordinates + 变量声明 +
   //    reconstruct 函数）。非贪婪 [\s\S]*? 匹配 vUv...vCloudsIrradiance 最短块（grep 验证锚点唯一）。
   //    替换后桥接块位于 clouds.frag 原 in 块位置——所有使用 vUv/vCameraPosition/vGroundIrradiance
@@ -276,7 +289,21 @@ export function buildCloudsMainFragmentShader(
 
   // resolveCloudsIncludes：Three <chunk> 兼容桩 + 跨包 core/* + atmosphere/bruneton/* + clouds 本地
   // + unrollLoops。桥接 #define / 全局变量声明 / wrapper main 不含 #include，原样穿透。
-  return resolveCloudsIncludes(merged)
+  let resolved = resolveCloudsIncludes(merged)
+
+  // densityProfile struct uniform → const 注入（同 ATMOSPHERE 理由：Cesium uniformMap 不支持
+  // struct 注入；CloudDensityProfile 是 flat struct 4×vec4，构造简单）。声明在 parameters.glsl
+  // （经 #include "parameters" 展开进入 resolved），此处后处理替换。
+  // 值 = CloudLayers.DEFAULT packDensityProfiles 结果（每层 CloudLayer 默认 densityProfile
+  // (expTerm=0, exponent=0, linearTerm=0.75, constantTerm=0.25) → 四层 pack 后 vec4 标量）。
+  // M2 固定 CloudLayers.DEFAULT；M6 qualityPresets 可在此参数化或改 uniform struct（若 Cesium 验证支持）。
+  resolved = resolved.replace(
+    /uniform CloudDensityProfile densityProfile;\n/,
+    `const CloudDensityProfile densityProfile = CloudDensityProfile(\n` +
+      `  vec4(0.0), vec4(0.0), vec4(0.75), vec4(0.25));\n`
+  )
+
+  return resolved
 }
 
 /**

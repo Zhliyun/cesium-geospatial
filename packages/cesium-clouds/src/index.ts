@@ -23,3 +23,15 @@ export {
   buildStandaloneCloudsShaderForValidation,
   type CloudsMainOptions
 } from './CloudsMaterial'
+
+// M2 T2：CloudsPass（custom Primitive pass=VOXELS + 3-attachment MRT + 全 business uniform 注入）
+export {
+  createCloudsPass,
+  type CloudsPass,
+  type CloudsFrameState,
+  type CloudsPassOptions
+} from './CloudsPass'
+export {
+  defaultCloudsParameters,
+  type CloudsParameters
+} from './cloudsDefaultParameters'
