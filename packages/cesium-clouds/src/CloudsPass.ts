@@ -44,7 +44,7 @@ import {
 } from 'cesium'
 import {
   createVolumetricPrimitive,
-  createArrayTextureBridge,
+
   type VolumetricPrimitive,
   type AtmosphereLUTs
 } from '@cesium-geospatial/core'
@@ -184,11 +184,23 @@ export function createCloudsPass(
   const mrtTextures = [colorTex, depthVelTex, shadowLenTex]
 
   // ── dummy texture（M3/M4/M5/M6 未接通项）──
-  const dummyShadowBuffer = createArrayTextureBridge(context, {
-    width: 1,
-    height: 1,
-    layers: SHADOW_CASCADE_COUNT
-  }) // 全 0（texImage3D pixels=null → 零初始化）→ Beer-Lambert 1（M3 BSM）
+  // shadowBuffer 用 Texture3D（sampler3D）：Cesium createUniform 不认 sampler2DArray（type 36289，
+  // bind 炸 "Unrecognized uniform type"）。CloudsMaterial.ts surgery 把 clouds.frag
+  // `uniform sampler2DArray shadowBuffer` → `uniform sampler3D shadowBuffer`。depth=SHADOW_CASCADE_COUNT
+  // 当 cascade 维度，全 0 → Beer-Lambert 1（M3 BSM）。texture(sampler3D, vec3) 与 sampler2DArray
+  // 调用兼容；M3 真实 BSM 时 cascade 离散化处理。
+  const dummyShadowBuffer = new Texture3D({
+    context,
+    source: {
+      width: 1,
+      height: 1,
+      depth: SHADOW_CASCADE_COUNT,
+      arrayBufferView: new Uint8Array(SHADOW_CASCADE_COUNT * 4) // 全 0
+    },
+    pixelFormat: PixelFormat.RGBA,
+    pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+    flipY: false
+  })
 
   const dummyDepthBuffer = new Texture({
     context,
@@ -401,9 +413,7 @@ export function createCloudsPass(
       dummyTurbulence.destroy()
       // dummyStbn Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用）
       ;(dummyStbn as unknown as { destroy: () => void }).destroy()
-      // dummyShadowBuffer 是裸 GL texture（createArrayTextureBridge 返 bridge，非 Cesium Texture 对象），
-      // 需 gl.deleteTexture 释放（context._gl）。M2 leak 1 个 1×1×4 texture 可接受（销毁时一次性）；
-      // 严格释放需 FramebufferManager 补 deleteArrayTexture helper。TODO(M3): BSM 接通时统一管理。
+      ;(dummyShadowBuffer as unknown as { destroy: () => void }).destroy() // Texture3D（sampler3D dummy，M3 BSM 接通时换真实；公开 .d.ts 未声明 destroy，同 dummyStbn cast）
     }
   }
 }

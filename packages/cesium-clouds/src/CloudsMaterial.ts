@@ -258,6 +258,16 @@ function surgeryCloudsFrag(source: string): string {
   // 3) 重命名 main → cloudsMainBody（clouds.frag L823 唯一处 void main()）
   src = src.replace(/\bvoid\s+main\s*\(\s*\)\s*\{/, 'void cloudsMainBody() {')
 
+  // 4) shadowBuffer: sampler2DArray → sampler3D。Cesium createUniform 不认 sampler2DArray
+  //    （type 36289，createUniform.js:31-35 仅 SAMPLER_2D/3D/CUBE/UNSIGNED_INT_SAMPLER_2D）→
+  //    shader bind 炸 "Unrecognized uniform type: 36289"。M2 dummy 全 0（Texture3D），
+  //    texture(sampler3D, vec3) 与 sampler2DArray 调用兼容（vec3）；
+  //    M3 真实 BSM 时决定 sampler3D 模拟 cascade 离散化 或 augment createUniform 支持 2D_ARRAY。
+  src = src.replace(
+    /uniform sampler2DArray shadowBuffer;/,
+    'uniform sampler3D shadowBuffer;'
+  )
+
   return src
 }
 
