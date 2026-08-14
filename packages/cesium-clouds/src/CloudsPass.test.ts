@@ -130,7 +130,7 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
-  it('MRT：3 texture（color/depthVelocity/shadowLength）传入 createVolumetricPrimitive.mrtColorTextures', () => {
+  it('MRT：2 texture（color/depthVelocity）传入 createVolumetricPrimitive.mrtColorTextures（M2 无 SHADOW_LENGTH；drawBuffers 数须=shader out 数）', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
     const pass = createCloudsPass(
@@ -140,7 +140,10 @@ describe('createCloudsPass', () => {
       state
     )
     const callOpts = (createVolumetricPrimitive as any).mock.calls[0][0]
-    expect(callOpts.mrtColorTextures).toHaveLength(3)
+    // M2 shader 只 location 0/1 两个 out（SHADOW_LENGTH 不 define）→ FBO 必须 2 attachment，
+    // 3 attachment 触发 GL_INVALID_OPERATION "missing fragment shader outputs"（实测）。
+    // M5 define SHADOW_LENGTH 加 shadowLenTex 成 3。
+    expect(callOpts.mrtColorTextures).toHaveLength(2)
     pass.destroy()
   })
 

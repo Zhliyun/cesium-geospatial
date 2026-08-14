@@ -180,8 +180,12 @@ export function createCloudsPass(
     })
   const colorTex = mkMrtTex() // att0：云 color（RGB linear HDR）+ transmittance（A）
   const depthVelTex = mkMrtTex() // att1：depthVelocity（M4 temporal 接通；M2 写 0 不消费）
-  const shadowLenTex = mkMrtTex() // att2：shadowLength（M5 god rays 接通；M2 SHADOW_LENGTH 不 define 不编译）
-  const mrtTextures = [colorTex, depthVelTex, shadowLenTex]
+  // M2 只 attach 2（color + depthVelocity）：FBO drawBuffers 数必须匹配 shader out 数——
+  // M2 不 define SHADOW_LENGTH，shader 只有 location 0/1 两个 out；3 attachment + 2 out 触发
+  // GL_INVALID_OPERATION "Active draw buffers with missing fragment shader outputs"（实测）。
+  // M5 define SHADOW_LENGTH 时 shader 加 location 2 out（outputShadowLength），届时加 shadowLenTex
+  // 成 3 attachment。
+  const mrtTextures = [colorTex, depthVelTex]
 
   // ── dummy texture（M3/M4/M5/M6 未接通项）──
   // shadowBuffer 用 Texture3D（sampler3D）：Cesium createUniform 不认 sampler2DArray（type 36289，
