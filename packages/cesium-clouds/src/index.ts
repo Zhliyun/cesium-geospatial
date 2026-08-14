@@ -35,3 +35,10 @@ export {
   defaultCloudsParameters,
   type CloudsParameters
 } from './cloudsDefaultParameters'
+
+// M2 T3：createCloudsStage 顶层工厂（编排 CloudsPass + overlay → 接 PostProcess 链）
+export {
+  createCloudsStage,
+  type CloudsStageHandle,
+  type CloudsStageOptions
+} from './createCloudsStage'
