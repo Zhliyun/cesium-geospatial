@@ -106,8 +106,9 @@ void main() {
 }
 `
 
-// 云 overlay ACES 曝光：对齐 three 版 clouds storybook ToneMapping exposure=10 标定。
-const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 10
+// 云 overlay ACES 曝光：three 版 clouds storybook ToneMapping exposure=10 标定，本项目
+// 视觉验收校准为 6（用户 2026-08-14 标定——云暗灰修正后 10 略过曝）。
+const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 6
 
 /**
  * 创建体积云 stage（CloudsPass + overlay）并接入 PostProcess 链。
