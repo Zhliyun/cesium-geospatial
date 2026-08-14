@@ -365,6 +365,9 @@ async function main(): Promise<void> {
           ...(getString('cloudsShapeDetail') === '0' ? { shapeDetail: false } : {}),
           ...(getString('cloudsTurbulence') === '0' ? { turbulence: false } : {}),
           ...(getString('cloudsAccurate') === '0' ? { accurateSunSkyLight: false } : {}),
+          // M3 BSM 云自阴影诊断基线：?cloudsShadow=0 跳过 ShadowPass（主 march fallback
+          // 全 0 dummy → Beer=1 无自阴影；开/关对比云体积感用）
+          ...(getString('cloudsShadow') === '0' ? { shadowPass: false } : {}),
           // 云 overlay 曝光（默认 10 对齐 three 版 storybook 标定；偏灰调大/过曝调小）
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {})
         })
@@ -373,7 +376,7 @@ async function main(): Promise<void> {
           cloudsHandle
         if (cloudsHandle != null) {
           console.info(
-            '[phase3-clouds] M2 主 raymarch 已接线（flat lighting，无 BSM/temporal/god rays）'
+            '[phase3-clouds] M3 BSM 云自阴影已接线（?cloudsShadow=0 关闭对比；?cloudsDebug=4 可视化 BSM）'
           )
         }
       } catch (err) {

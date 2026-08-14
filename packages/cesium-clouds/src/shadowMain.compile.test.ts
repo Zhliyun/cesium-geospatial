@@ -67,6 +67,18 @@ describe('M3 T2 shadow.frag surgery 断言', () => {
     const src = buildCloudsShadowFragmentShader(OPTS)
     expect(src).toContain('uniform mat4 inverseShadowMatrices[CASCADE_COUNT];')
   })
+  it('densityProfile struct uniform → const 注入（Cesium uniformMap 无 struct；与主 march 同值保生成/消费密度一致）', () => {
+    const src = buildCloudsShadowFragmentShader(OPTS)
+    // getLayerDensity 消费 densityProfile（clouds.glsl L103-109）——留 uniform 则运行时
+    // 无值全 0 → 云密度恒 0 → BSM 全 0 光深 → Beer=1（自阴影静默失效）。必须 const 注入，
+    // 值与 CloudsMaterial.ts 的 CloudLayers.DEFAULT packDensityProfiles 逐字一致
+    // （生成端/消费端密度不同分布会造成阴影与云形错位）。
+    expect(src).not.toContain('uniform CloudDensityProfile densityProfile;')
+    expect(src).toContain(
+      'const CloudDensityProfile densityProfile = CloudDensityProfile(\n' +
+        '  vec4(0.0), vec4(0.0), vec4(0.75), vec4(0.25));'
+    )
+  })
   it('运行时 shader 不带 #version；校验 shader 以 #version 300 es 开头', () => {
     expect(buildCloudsShadowFragmentShader(OPTS).startsWith('#version')).toBe(false)
     expect(buildStandaloneCloudsShadowShaderForValidation(OPTS).startsWith('#version 300 es')).toBe(true)

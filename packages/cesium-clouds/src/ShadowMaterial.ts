@@ -17,6 +17,10 @@
 //   4. main 的 unroll 循环 → 单 cascade(u_cascadeIndex, mipLevels[u_cascadeIndex], outputColor)
 // shadow.frag 不引用任何 czm_*（无需 CZM_STUBS）。
 //
+// 后处理（resolveCloudsIncludes 之后，非 surgery）：densityProfile struct uniform → const
+// 注入（T5 补）——Cesium uniformMap 无 struct 注入，值与主 march（CloudsMaterial.ts）逐字
+// 一致，保 BSM 生成端与主 march 消费端的云密度同分布。
+//
 // 双入口（仿 core aerialPerspective.frag.ts / CloudsMaterial.ts）：
 //   - buildCloudsShadowFragmentShader()：Cesium 运行时（无 #version；由 ShaderProgram 注入）
 //   - buildStandaloneCloudsShadowShaderForValidation()：glslang 校验（补 #version 300 es +
@@ -117,7 +121,21 @@ function surgeryShadowFrag(source: string): string {
 export function buildCloudsShadowFragmentShader(options: ShadowMainOptions = {}): string {
   const o: ResolvedShadowMainOptions = { ...DEFAULTS, ...options }
   const merged = [buildDefines(o), surgeryShadowFrag(glslIndex.shadowFrag)].join('\n\n')
-  return resolveCloudsIncludes(merged)
+  let resolved = resolveCloudsIncludes(merged)
+
+  // densityProfile struct uniform → const 注入（T5 补，与 CloudsMaterial.ts:391-395 同款）：
+  // Cesium uniformMap 不支持 struct 注入（GL 链接后拆成 densityProfile.expTerms 等点分名，
+  // uniformMap 按名查找不命中 → 全 0），而 getLayerDensity 消费它（clouds.glsl L103-109）——
+  // 留 uniform 则云密度恒 0 → BSM 全 0 光深 → Beer=1（自阴影静默失效）。值 = CloudLayers.DEFAULT
+  // packDensityProfiles（每层 (0,0,0.75,0.25) pack 成 vec4），与主 march 逐字一致——生成端/
+  // 消费端密度分布不同会造成阴影与云形错位。
+  resolved = resolved.replace(
+    /uniform CloudDensityProfile densityProfile;\n/,
+    `const CloudDensityProfile densityProfile = CloudDensityProfile(\n` +
+      `  vec4(0.0), vec4(0.0), vec4(0.75), vec4(0.25));\n`
+  )
+
+  return resolved
 }
 
 /**

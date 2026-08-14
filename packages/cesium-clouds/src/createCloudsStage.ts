@@ -5,7 +5,16 @@
 //   - sunDirection：Simon1994 + ICRF→Fixed → ECEF（preRender 每帧更新，仿 AtmosphereStage）
 //   - altitudeCorrection：getAltitudeCorrectionOffset（密切球再中心化，R2 防大坐标单精度失效）
 //   - reprojectionMatrix/viewReprojectionMatrix/temporalJitter：M2 dummy identity/0（M4 temporal 接通）
-//   - shadowMatrices/shadowIntervals：M2 dummy（M3 BSM 接通）
+//
+// M3 T5 BSM 编排（本文件新增，plan 决策 D2/D5/D6）：
+//   - preRender（sunDirection 更新后）：太阳天顶角 → 虚拟光源距离 lerp(1e6, 1e3, zenith)
+//     （three CloudsEffect.ts:387 语义）→ CascadedShadowMaps.update（near/far = 完整视锥
+//     preRender 时刻值；far 与 maxRayDistance 取小，D6）→ shadowState.matrices/intervals/
+//     cameraNear/far 覆写 → ShadowPass.render()（先于云 march VOXELS pass，此刻 GL 状态干净）
+//   - ShadowPass uniformMap = buildSharedCloudsUniforms（与主 march 同源共享段，CloudsPass.ts
+//     抽出）+ BSM 专属（inverseShadowMatrices 数组闭包 + shadowMarch 档 7 参数平铺）
+//   - options.shadowPass=false（demo ?cloudsShadow=0）→ 诊断基线：不建 cascades/ShadowPass，
+//     state.shadow 恒 undefined → 主 march fallback dummy → Beer=1（无自阴影，M2 行为）
 //
 // 集成（spec §4.3 + 附录 F4）：
 //   - CloudsPass 是 Primitive（非 PostProcessStage）→ cloudsBuffer（att0）必须用 bridge {_texture,_target}
@@ -21,14 +30,18 @@
 import {
   PostProcessStage,
   PostProcessStageSampleMode,
+  Cartesian2,
   Cartesian3,
+  Matrix4,
   Matrix3,
   Simon1994PlanetaryPositions,
   Transforms,
   JulianDate,
   PixelFormat,
   PixelDatatype,
-  type Scene
+  Texture,
+  type Scene,
+  type Context
 } from 'cesium'
 import {
   getAltitudeCorrectionOffset,
@@ -37,10 +50,19 @@ import {
 } from '@cesium-geospatial/core'
 import {
   createCloudsPass,
+  buildSharedCloudsUniforms,
+  resolveCloudsHdrDatatype,
   type CloudsPass,
   type CloudsFrameState,
   type CloudsPassOptions
 } from './CloudsPass'
+import { CascadedShadowMaps } from './CascadedShadowMaps'
+import { createShadowPass, type ShadowPass } from './ShadowPass'
+import {
+  defaultCloudsParameters,
+  type CloudsParameters,
+  type CloudsShadowFrameState
+} from './cloudsDefaultParameters'
 import type { WeatherTextures } from './weatherTextures'
 
 /** createCloudsStage 选项（透传 CloudsPassOptions + clouds 开关）。 */
@@ -55,6 +77,12 @@ export interface CloudsStageOptions extends CloudsPassOptions {
    * demo `?cloudsExposure=N` 调节（偏灰→调大；过曝→调小）。
    */
   cloudsOverlayExposure?: number
+  /**
+   * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
+   * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
+   * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
+   */
+  shadowPass?: boolean
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy。 */
@@ -129,6 +157,12 @@ export function createCloudsStage(
   if (options.clouds !== true) return undefined
 
   const ellipsoid = scene.globe.ellipsoid
+  const context = (scene as unknown as { context: Context }).context
+
+  // ── 业务参数同源（M3 T5 上提）：CloudsPass 与 ShadowPass/共享 uniform 段共用一份 ──
+  // （若各自 defaultCloudsParameters() 会得两份独立对象——默认值恰好一致但参数化后漂移；
+  // 注入 options.parameters 后 createCloudsPass 内 `options.parameters ?? default` 取到同一份）
+  const params: CloudsParameters = options.parameters ?? defaultCloudsParameters()
 
   // ── 每帧可变状态（createCloudsStage 持有；preRender 更新；CloudsPass uniformMap 闭包读引用）──
   const state: CloudsFrameState = {
@@ -137,9 +171,96 @@ export function createCloudsStage(
   }
   const sunInertialScratch = new Cartesian3()
   const icrfScratch = new Matrix3()
+  const normalScratch = new Cartesian3()
+
+  // ── M3 BSM：cascade 矩阵 + shadowState + 生成 pass ──
+  const cascadeCount = params.shadowCascadeCount // = shader #define SHADOW_CASCADE_COUNT = CASCADE_COUNT
+  const mapSize = 512 // three 默认；BSM 单边尺寸（texelSize 同源）
+  const cascades = new CascadedShadowMaps({ cascadeCount, mapSize })
+
+  // shadowState 数组用新分配实例（勿复用 params.shadowMatrices/shadowIntervals 默认数组：
+  // 默认 shadowMatrices 元素是 Object.freeze 的全局 Matrix4.IDENTITY——Matrix4.clone 逐项
+  // 覆写会抛 TypeError（ESM 严格模式写冻结对象），且即使可写也会污染全局 identity 常量）。
+  // CloudsPass uniformMap 闭包读 state.shadow 引用，preRender 逐帧覆写即可。
+  const shadowMatrices = [new Matrix4(), new Matrix4(), new Matrix4()]
+  const shadowIntervals = [new Cartesian2(), new Cartesian2(), new Cartesian2()]
+  const shadowState: CloudsShadowFrameState = {
+    matrices: shadowMatrices,
+    intervals: shadowIntervals,
+    cameraNear: 0,
+    far: 0, // preRender 首帧填（min(frustum.far, maxRayDistance)）
+    texelSize: new Cartesian2(1 / mapSize, 1 / mapSize),
+    bsm: undefined
+  }
 
   // ── CloudsPass（custom Primitive pass=VOXELS + MRT + 全 business uniform）──
-  const cloudsPass = createCloudsPass(scene, luts, weather, state, options)
+  const cloudsPass = createCloudsPass(scene, luts, weather, state, {
+    ...options,
+    parameters: params
+  })
+
+  // ── ShadowPass 生成端（options.shadowPass=false 跳过——诊断基线 Beer=1）──
+  const enableShadow = options.shadowPass !== false
+  // 生成端 turbulence dummy（与 CloudsPass 同款 1×1 中性灰 (128,128,128)——sampleMedia
+  // TURBULENCE 分支采样；两端各自持有便于独立 destroy）
+  const shadowTurbulenceDummy = enableShadow
+    ? new Texture({
+        context,
+        source: {
+          width: 1,
+          height: 1,
+          arrayBufferView: new Uint8Array([128, 128, 128, 255])
+        },
+        pixelFormat: PixelFormat.RGBA,
+        pixelDatatype: PixelDatatype.UNSIGNED_BYTE
+      })
+    : undefined
+
+  // BSM 专属 inverseShadowMatrices[CASCADE_COUNT]（shadow.frag cascade() z=-1 反投影太阳侧
+  // 起点）：preRender 逐帧覆写的 mutable 数组，uniform 闭包持引用。
+  const inverseMatrices = shadowMatrices.map(() => new Matrix4())
+
+  // shadow uniformMap = 共享段（与主 march 同源闭包）+ BSM 专属（反投影矩阵 + shadowMarch 档
+  // 平铺——Cesium uniformMap 不支持 struct；同名 maxIterationCount 等与主 march 档不同值，
+  // 故 march 档不进共享段、各端自绑）。u_cascadeIndex 由 ShadowPass 内部注入（勿重复绑）。
+  const shadowUniformMap: { [name: string]: () => unknown } = {
+    ...buildSharedCloudsUniforms(scene, luts, weather, state, params, shadowTurbulenceDummy!),
+    inverseShadowMatrices: () => inverseMatrices,
+    // shadowMarch 档（qualityPresets.ts defaults.shadow：50/100/1000/1e-5/1e-5/1e-4/2）
+    maxIterationCount: () => params.shadowMarch.maxIterationCount,
+    minStepSize: () => params.shadowMarch.minStepSize,
+    maxStepSize: () => params.shadowMarch.maxStepSize,
+    minDensity: () => params.shadowMarch.minDensity,
+    minExtinction: () => params.shadowMarch.minExtinction,
+    minTransmittance: () => params.shadowMarch.minTransmittance,
+    opticalDepthTailScale: () => params.shadowMarch.opticalDepthTailScale
+  }
+
+  const shadowPass: ShadowPass | undefined = enableShadow
+    ? createShadowPass({
+        context,
+        cascadeCount,
+        mapSize,
+        // RGBA16F 作 FBO color attachment 需 colorBufferHalfFloat——resolveCloudsHdrDatatype
+        // 检测恰好覆盖（HALF_FLOAT→FLOAT→UNSIGNED_BYTE 兜底）；FBO 不完整时 render 内部
+        // warn+跳过（消费端保全 0 Beer=1 降级，不炸）
+        pixelDatatype: resolveCloudsHdrDatatype(scene),
+        uniformMap: shadowUniformMap,
+        // 编译分支与主 march 同步（BSM 与主 march 的云密度必须同分布——shapeDetail/turbulence
+        // 单端关闭会造成阴影与云形错位）
+        shaderOptions: {
+          shapeDetail: options.shapeDetail,
+          turbulence: options.turbulence
+        }
+      })
+    : undefined
+
+  if (enableShadow) {
+    state.shadow = shadowState
+    // 创建即全 0（ShadowPass allocZeroedTexels）→ 首帧 render 前采样 Beer=1，与 dummy
+    // 同降级语义（T4 concern：可直接赋值，不必等首次 render）
+    shadowState.bsm = shadowPass?.bsmTexture
+  }
 
   // ── overlay PostProcessStage（cloudsBuffer bridge + tonemap 输出 mix）──
   // sampleMode NEAREST：保护云边缘锐利（cloudsBuffer 是 raymarch 像素对齐数据纹理，LINEAR 会糊边缘）。
@@ -188,6 +309,42 @@ export function createCloudsStage(
           Cartesian3.normalize(sunFixed, state.sunDirection)
         }
       }
+
+      // ── M3 BSM：级联矩阵更新 + 生成（sunDirection 更新后，本帧矩阵与光照一致）──
+      // preRender 时刻 camera.frustum.near/far 是完整视锥值（multi-frustum 分段前）——
+      // cascade 归一化域与 u_shadowCameraNear 同帧同源（T4 concern #1）。
+      if (shadowPass != null) {
+        // 虚拟光源距离：太阳天顶角越高（正午）越近（three CloudsEffect.ts:387 语义
+        // lerp(1e6, 1e3, zenith)；distance 过大时场景会超出 ortho 盒深——CascadedShadowMaps
+        // update 的 distance 参数约束，勿传大值）
+        const normal = ellipsoid.geodeticSurfaceNormal(camera.positionWC, normalScratch)
+        const zenith = Math.max(0, Cartesian3.dot(state.sunDirection, normal))
+        const distance = 1e6 + (1e3 - 1e6) * zenith
+        // BSM far：完整视锥 far 与 maxRayDistance 取小（决策 D6——云 march 不超 maxRayDistance）
+        const far = Math.min(camera.frustum.far, params.maxRayDistance)
+        const near = camera.frustum.near
+        cascades.update(
+          {
+            inverseViewMatrix: camera.inverseViewMatrix,
+            projectionMatrix: (camera.frustum as unknown as { projectionMatrix: Matrix4 })
+              .projectionMatrix,
+            near,
+            far
+          },
+          state.sunDirection,
+          distance
+        )
+        for (let i = 0; i < cascadeCount; i++) {
+          Matrix4.clone(cascades.cascades[i].matrix, shadowMatrices[i])
+          Matrix4.clone(cascades.cascades[i].inverseMatrix, inverseMatrices[i])
+          shadowIntervals[i].x = cascades.cascades[i].interval.x
+          shadowIntervals[i].y = cascades.cascades[i].interval.y
+        }
+        shadowState.cameraNear = near
+        shadowState.far = far
+        shadowState.bsm = shadowPass.bsmTexture
+        shadowPass.render()
+      }
     }
   )
 
@@ -199,7 +356,11 @@ export function createCloudsStage(
       if (destroyed) return
       destroyed = true
       removePreRender()
+      // 顺序：先 CloudsPass（消费端，撤 bsm 引用）后 ShadowPass（释放 bsmTexture——T3
+      // concern #4），最后生成端 turbulence dummy
       cloudsPass.destroy()
+      shadowPass?.destroy()
+      shadowTurbulenceDummy?.destroy()
       // overlay：PostProcessStageCollection.remove 成功则内部已 destroy，失败则手动 destroy
       if (!scene.postProcessStages.remove(overlayStage)) {
         overlayStage.destroy()

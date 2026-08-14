@@ -264,7 +264,7 @@ describe('createShadowPass', () => {
   it('checkFramebufferStatus 非 COMPLETE：console.warn 且跳过 draw（降级——主 march fallback Beer=1）+ 仍恢复 prevFbo', () => {
     const context = createMockContext()
     const record = mkRecord()
-    gl.checkFramebufferStatus.mockReturnValue(36061) // GL_FRAMEBUFFER_UNSUPPORTED = 0x8cdd
+    gl.checkFramebufferStatus.mockReturnValueOnce(36061) // GL_FRAMEBUFFER_UNSUPPORTED = 0x8cdd（Once——不泄漏到后续用例）
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const pass = createShadowPass({
       context,

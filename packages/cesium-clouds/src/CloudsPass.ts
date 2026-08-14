@@ -69,8 +69,10 @@ import type { WeatherTextures } from './weatherTextures'
  *
  * HALF_FLOAT 优先（精度够 + 性能好），FLOAT 次选，UNSIGNED_BYTE 兜底（线性 >1 段被 clip）。
  * 云 MRT colorTex 需 HDR 承载 applyAerialPerspective 线性输出（>1 段供 overlay ACES 压缩）。
+ * M3 T5 起也供 createCloudsStage 组 ShadowPass 的 BSM pixelDatatype（RGBA16F 作 FBO color
+ * attachment 需 colorBufferHalfFloat——本检测恰好覆盖；生成端/消费端同类型保量化一致）。
  */
-function resolveCloudsHdrDatatype(scene: Scene): number {
+export function resolveCloudsHdrDatatype(scene: Scene): number {
   const ctx = (scene as unknown as {
     context: {
       halfFloatingPointTexture: boolean
@@ -121,6 +123,96 @@ export interface CloudsFrameState {
 export interface CloudsPassOptions extends CloudsMainOptions {
   /** 业务参数覆盖（缺省取 defaultCloudsParameters）。M6 qualityPresets 用。 */
   parameters?: CloudsParameters
+}
+
+/**
+ * 主 march（CloudsPass）与 BSM 生成端（ShadowPass，M3 T5）共享的 business uniform 段
+ * （T5 从 createCloudsPass uniformMap 逐项搬移，纯重构不改语义）。
+ *
+ * 覆盖：大气 LUT / SUN-SKY 光度 / 大气（bottomRadius/worldToECEF/ecefToWorld/
+ * altitudeCorrection/sunDirection）/ 参与 medium / scatter 视觉 / weather+shape /
+ * 云层 packed / frame / stbnTexture。**不含**：主 march/次 march 档参数（shadow.frag 声明
+ * 同名 maxIterationCount 等、值取 params.shadowMarch 不同档——必须各端自绑）、BSM 消费段
+ * （shadowBuffer 等）、reprojection/depth/cameraHeight/resolution/targetUvScale（clouds.frag
+ * 专有，生成端无此 uniform）。
+ *
+ * @param turbulenceTexture 中性灰 1×1 dummy（sampleMedia TURBULENCE 分支采样；两端各自
+ *   创建持有便于独立 destroy——传参而非内部创建，所有权留在调用方）。
+ */
+export function buildSharedCloudsUniforms(
+  scene: Scene,
+  luts: AtmosphereLUTs,
+  weather: WeatherTextures,
+  state: CloudsFrameState,
+  params: CloudsParameters,
+  turbulenceTexture: Texture
+): { [name: string]: () => unknown } {
+  return {
+    // 大气 LUT（与 AtmosphereStage buildAtmosphereUniforms 同源）
+    transmittance_texture: () => luts.transmittance,
+    scattering_texture: () => luts.scattering,
+    single_mie_scattering_texture: () => luts.scattering, // COMBINED 模式不采样，传同值占位
+    irradiance_texture: () => luts.irradiance,
+    higher_order_scattering_texture: () => luts.higherOrderScattering, // C9：云 god rays 防过暗
+
+    // SUN/SKY 光度换算（const，ACCURATE_SUN_SKY_LIGHT 路径用；生成端无此 uniform，绑了不消费）
+    SUN_SPECTRAL_RADIANCE_TO_LUMINANCE: () => SUN_SPECTRAL_RADIANCE_TO_LUMINANCE,
+    SKY_SPECTRAL_RADIANCE_TO_LUMINANCE: () => SKY_SPECTRAL_RADIANCE_TO_LUMINANCE,
+
+    // 大气（bottomRadius 静态；altitudeCorrection/sunDirection/worldToECEFMatrix 每帧闭包）
+    bottomRadius: () => params.bottomRadius,
+    worldToECEFMatrix: () => params.worldToECEFMatrix,
+    ecefToWorldMatrix: () => params.ecefToWorldMatrix,
+    altitudeCorrection: () => state.altitudeCorrection,
+    sunDirection: () => state.sunDirection,
+
+    // 参与 medium
+    scatteringCoefficient: () => params.scatteringCoefficient,
+    absorptionCoefficient: () => params.absorptionCoefficient,
+
+    // scatter 视觉（生成端不消费，主 march 专有；同段抽出避免两端值漂移）
+    skyLightScale: () => params.skyLightScale,
+    groundBounceScale: () => params.groundBounceScale,
+    powderScale: () => params.powderScale,
+    powderExponent: () => params.powderExponent,
+
+    // weather/shape（localWeather 真纹理——decode 失败时 loadWeatherTextures 提供 1×1 全白
+    // fallback；turbulence 由调用方传 dummy）
+    localWeatherTexture: () => weather.localWeather,
+    localWeatherRepeat: () => params.localWeatherRepeat,
+    localWeatherOffset: () => params.localWeatherOffset,
+    coverage: () => params.coverage,
+    shapeTexture: () => weather.shape,
+    shapeRepeat: () => params.shapeRepeat,
+    shapeOffset: () => params.shapeOffset,
+    shapeDetailTexture: () => weather.shapeDetail,
+    shapeDetailRepeat: () => params.shapeDetailRepeat,
+    shapeDetailOffset: () => params.shapeDetailOffset,
+    turbulenceTexture: () => turbulenceTexture,
+    turbulenceRepeat: () => params.turbulenceRepeat,
+    turbulenceDisplacement: () => params.turbulenceDisplacement,
+
+    // 云层 packed（CloudLayers.DEFAULT 展开）
+    minLayerHeights: () => params.minLayerHeights,
+    maxLayerHeights: () => params.maxLayerHeights,
+    minIntervalHeights: () => params.minIntervalHeights,
+    maxIntervalHeights: () => params.maxIntervalHeights,
+    densityScales: () => params.densityScales,
+    shapeAmounts: () => params.shapeAmounts,
+    shapeDetailAmounts: () => params.shapeDetailAmounts,
+    weatherExponents: () => params.weatherExponents,
+    shapeAlteringBiases: () => params.shapeAlteringBiases,
+    coverageFilterWidths: () => params.coverageFilterWidths,
+    minHeight: () => params.minHeight,
+    maxHeight: () => params.maxHeight,
+    shadowTopHeight: () => params.shadowTopHeight,
+    shadowBottomHeight: () => params.shadowBottomHeight,
+    shadowLayerMask: () => params.shadowLayerMask,
+
+    // STBN（weather.stbn 真 3D 资产；frame=0 静态采样 layer 0，M4 temporal 递增轮换层）
+    frame: () => params.frame,
+    stbnTexture: () => weather.stbn
+  }
 }
 
 /** CloudsPass 句柄：持 primitive + MRT textures + uniformMap + bridge getter + destroy。 */
@@ -253,6 +345,9 @@ export function createCloudsPass(
 
   // ── uniformMap：注入 clouds.frag + parameters.glsl 全部 business uniform ──
   // 每帧可变量（sun/altitude/cameraHeight/resolution）走闭包读 state/scene；静态量取 params。
+  // 共享段（LUT/光度/大气/medium/scatter 视觉/weather/云层/frame/stbn）经
+  // buildSharedCloudsUniforms（M3 T5 抽出，ShadowPass 生成端复用同段）；本段为 CloudsPass 专有
+  // （march 档/BSM 消费/reprojection/depth——生成端 shader 无这些 uniform 或取值不同档）。
   // ATMOSPHERE / densityProfile 已由 CloudsMaterial.ts const 注入，不在此声明。
   // viewMatrix/cameraNear/cameraFar 已由 CloudsMaterial.ts #define 重定向到 czm_*，不在此声明。
   // cameraHeight：测地高度（米，ellipsoid 起算）——clouds.frag L745 与 minHeight/maxHeight（米）
@@ -268,34 +363,13 @@ export function createCloudsPass(
   }
 
   const uniformMap: { [name: string]: () => unknown } = {
-    // 大气 LUT（与 AtmosphereStage buildAtmosphereUniforms 同源）
-    transmittance_texture: () => luts.transmittance,
-    scattering_texture: () => luts.scattering,
-    single_mie_scattering_texture: () => luts.scattering, // COMBINED 模式不采样，传同值占位
-    irradiance_texture: () => luts.irradiance,
-    higher_order_scattering_texture: () => luts.higherOrderScattering, // C9：云 god rays 防过暗
+    ...buildSharedCloudsUniforms(scene, luts, weather, state, params, dummyTurbulence),
 
-    // SUN/SKY 光度换算（const，ACCURATE_SUN_SKY_LIGHT 路径用）
-    SUN_SPECTRAL_RADIANCE_TO_LUMINANCE: () => SUN_SPECTRAL_RADIANCE_TO_LUMINANCE,
-    SKY_SPECTRAL_RADIANCE_TO_LUMINANCE: () => SKY_SPECTRAL_RADIANCE_TO_LUMINANCE,
-
-    // 相机/场景（每帧闭包）
+    // 相机/场景（每帧闭包；cameraHeight/resolution/targetUvScale/mipLevelScale 为 clouds.frag 专有）
     cameraHeight,
     resolution,
-    frame: () => params.frame,
     targetUvScale: () => params.targetUvScale,
     mipLevelScale: () => params.mipLevelScale,
-
-    // 大气（bottomRadius 静态；altitudeCorrection/sunDirection/worldToECEFMatrix 每帧闭包）
-    bottomRadius: () => params.bottomRadius,
-    worldToECEFMatrix: () => params.worldToECEFMatrix,
-    ecefToWorldMatrix: () => params.ecefToWorldMatrix,
-    altitudeCorrection: () => state.altitudeCorrection,
-    sunDirection: () => state.sunDirection,
-
-    // 参与 medium
-    scatteringCoefficient: () => params.scatteringCoefficient,
-    absorptionCoefficient: () => params.absorptionCoefficient,
 
     // 主 raymarch
     maxIterationCount: () => params.maxIterationCount,
@@ -312,45 +386,6 @@ export function createCloudsPass(
     maxIterationCountToGround: () => params.maxIterationCountToGround,
     minSecondaryStepSize: () => params.minSecondaryStepSize,
     secondaryStepScale: () => params.secondaryStepScale,
-
-    // scatter 视觉
-    skyLightScale: () => params.skyLightScale,
-    groundBounceScale: () => params.groundBounceScale,
-    powderScale: () => params.powderScale,
-    powderExponent: () => params.powderExponent,
-
-    // weather/shape（localWeather 真纹理——decode 失败时 loadWeatherTextures 提供 1×1 全白
-    // fallback；turbulence dummy）
-    localWeatherTexture: () => weather.localWeather,
-    localWeatherRepeat: () => params.localWeatherRepeat,
-    localWeatherOffset: () => params.localWeatherOffset,
-    coverage: () => params.coverage,
-    shapeTexture: () => weather.shape,
-    shapeRepeat: () => params.shapeRepeat,
-    shapeOffset: () => params.shapeOffset,
-    shapeDetailTexture: () => weather.shapeDetail,
-    shapeDetailRepeat: () => params.shapeDetailRepeat,
-    shapeDetailOffset: () => params.shapeDetailOffset,
-    turbulenceTexture: () => dummyTurbulence,
-    turbulenceRepeat: () => params.turbulenceRepeat,
-    turbulenceDisplacement: () => params.turbulenceDisplacement,
-
-    // 云层 packed（CloudLayers.DEFAULT 展开）
-    minLayerHeights: () => params.minLayerHeights,
-    maxLayerHeights: () => params.maxLayerHeights,
-    minIntervalHeights: () => params.minIntervalHeights,
-    maxIntervalHeights: () => params.maxIntervalHeights,
-    densityScales: () => params.densityScales,
-    shapeAmounts: () => params.shapeAmounts,
-    shapeDetailAmounts: () => params.shapeDetailAmounts,
-    weatherExponents: () => params.weatherExponents,
-    shapeAlteringBiases: () => params.shapeAlteringBiases,
-    coverageFilterWidths: () => params.coverageFilterWidths,
-    minHeight: () => params.minHeight,
-    maxHeight: () => params.maxHeight,
-    shadowTopHeight: () => params.shadowTopHeight,
-    shadowBottomHeight: () => params.shadowBottomHeight,
-    shadowLayerMask: () => params.shadowLayerMask,
 
     // BSM（M3：state.shadow 由 createCloudsStage preRender 填；未就绪 fallback 全 0 dummy → Beer=1）
     shadowBuffer: () => state.shadow?.bsm ?? dummyShadowBuffer,
@@ -371,10 +406,7 @@ export function createCloudsPass(
     // depth（M6 提前接通，2026-08-14）：真实 globe depthTexture（log-depth 编码，shader 内
     // czm_reverseLogDepthWindow 反演）→ 云被地形正确截断/遮挡（青藏「云浮地形上」修）。
     // globeDepth 未就绪（首帧/_view 缺失）时 fallback 1×1 val=1.0 dummy（远截断，无遮挡降级）。
-    depthBuffer: () => globeDepthTexture() ?? dummyDepthBuffer,
-
-    // STBN（weather.stbn 真 3D 资产；M4 temporal 接通后 frame 递增轮换层）
-    stbnTexture: () => weather.stbn
+    depthBuffer: () => globeDepthTexture() ?? dummyDepthBuffer
   }
 
   // ── VolumetricPrimitive 装配（M1 基建）──

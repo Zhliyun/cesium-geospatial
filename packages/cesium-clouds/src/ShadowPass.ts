@@ -209,8 +209,8 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
         }
       } finally {
         // restore：外部 FBO 绑定 + viewport 回 drawingBuffer（RenderState.viewport=mapSize
-        // 在 execute 内 apply 过；bindFramebuffer 切回时 WebGL 虽会重置 viewport，显式恢复
-        // 以防 prevFbo 尺寸非当前 drawingBuffer 的边角）
+        // 在 execute 内 apply 过。显式恢复是防御性冗余：viewport 是 GL 全局状态，不随 FBO
+        // 绑定切换重置——仅当外部后续代码假设 viewport= drawingBuffer 时兜底）
         gl.bindFramebuffer(GL_FRAMEBUFFER, prevFbo)
         gl.viewport(0, 0, context.drawingBufferWidth, context.drawingBufferHeight)
       }
