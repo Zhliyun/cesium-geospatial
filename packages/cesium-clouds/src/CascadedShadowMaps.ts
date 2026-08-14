@@ -1,7 +1,32 @@
 // CascadedShadowMaps.ts
 //
-// M3 T1：sun-POV 级联正交 shadow 相机（three-geospatial CascadedShadowMaps.ts 的 Cesium 移植，
-// 基于 three-csm / three.js csm example，MIT © 2019 vtHawk，源注释保留）。
+// M3 T1：sun-POV 级联正交 shadow 相机（three-geospatial CascadedShadowMaps.ts 的 Cesium 移植）。
+//
+// Based on the following work with slight modifications.
+// https://github.com/StrandedKitty/three-csm/
+// https://github.com/mrdoob/three.js/tree/r169/examples/jsm/csm
+//
+// MIT License
+//
+// Copyright (c) 2019 vtHawk
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
 //
 // 职责：把主相机视锥按 practical split 切 N 段，每段在 light space 求正交包围盒（texel 对齐），
 // 产出 per-cascade {matrix（world→light clip）, inverseMatrix（clip→world）, interval（归一化视深）}。
@@ -98,9 +123,10 @@ class FrustumCorners {
       // NDC → camera-local：齐次反投影（w 除）。near 平面 z=-1 的点在透视下 w=near，除后距离=near。
       this.near[i] = unproject(invProj, nearNdc[i], this.near[i])
       const f = unproject(invProj, farNdc[i], this.far[i])
-      // far 截断（three：|z| 超界的角缩到 far——透视下按范数缩放等价视线截断）
-      const dist = Cartesian3.magnitude(f)
-      if (dist > far) Cartesian3.multiplyByScalar(f, far / dist, f)
+      // far 截断（three：按视深 |z|，multiplyScalar(Math.min(far/absZ, 1))——只截不放大。
+      // 不能按欧氏范数：对角射线角点会被拉近到 cos(对角半张角)·far，末段 ortho 盒收窄 20%+）
+      const absZ = Math.abs(f.z)
+      if (absZ > far) Cartesian3.multiplyByScalar(f, far / absZ, f)
       this.far[i] = f
     }
     return this

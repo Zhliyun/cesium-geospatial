@@ -74,11 +74,37 @@ describe('CascadedShadowMaps.update', () => {
     }
   })
 
-  it('light-space 中心 texel 对齐（x,y 是 texelWidth 整数倍，±浮点容差）', () => {
+  it('末段 cascade ortho 半径 ≥ far 面对角线半径真值（far 截断按视深 |z|，不收窄）', () => {
+    // far 截断必须按视深 |z|（three：multiplyScalar(min(far/absZ, 1))），不能按欧氏范数——
+    // 范数截断会把对角射线角点拉近到 cos(对角半张角)·far（fovy 60° 约 0.82·far），
+    // radius 随之收窄 22%+，远处云影系统性缺失。盒永远「自洽罩住自己的锥」（角点收窄盒也收窄），
+    // 故对角点盒内断言无区分度；真正的信号是 ortho 半径绝对值 ≥ far 面对角线半径真值
+    // （three getFrustumRadius 的 diagonal 含 max(far 面对角, …) 项，radius = diagonal/2 ≥ 下界）。
     const cam = makeCamera(1.0, 2e5)
     csm.update(cam, new Cartesian3(0, 0, 1), 1e5)
-    // texel 对齐保证 shadow 相机平移不产生亚像素抖动（three 版同款 snapping）
-    // 断言方式：连续两次 update 同输入 → 矩阵逐元素相等（确定性）
+    // far 面对角线半径真值（aspect=1）：√2·tan(fovy/2)·far
+    const diagonalRadiusTrue = Math.SQRT2 * Math.tan(Math.PI / 6) * 2e5 // ≈163299
+    // computeOrthographicOffCenter(l=-r, r)：projectionMatrix 第 0 列 x 分量 = 2/(r-l) = 1/r
+    const m00 = Matrix4.getColumn(csm.cascades[2].projectionMatrix, 0, new Cartesian4()).x
+    expect(1 / m00).toBeGreaterThanOrEqual(diagonalRadiusTrue)
+    // 护栏：NDC (1,1) 角的 far 面真角点（视深恰为 far）仍落盒内
+    const corner = new Cartesian3(
+      Math.tan(Math.PI / 6) * 2e5, Math.tan(Math.PI / 6) * 2e5, 6.4e6 - 2e5
+    )
+    const clip = Matrix4.multiplyByPoint(
+      csm.cascades[2].matrix, corner, new Cartesian3()
+    )
+    expect(Math.abs(clip.x)).toBeLessThanOrEqual(1)
+    expect(Math.abs(clip.y)).toBeLessThanOrEqual(1)
+    expect(Math.abs(clip.z)).toBeLessThanOrEqual(1)
+  })
+
+  it('texel 对齐（含 Math.round snapping）：同输入连续 update 矩阵逐位一致', () => {
+    const cam = makeCamera(1.0, 2e5)
+    csm.update(cam, new Cartesian3(0, 0, 1), 1e5)
+    // texel 对齐保证 shadow 相机平移不产生亚像素抖动（three 版同款 snapping）；
+    // snap 含 Math.round，黑盒下可测的是确定性（逐位一致、无亚像素随机性）。
+    // 真正的「落在 texel 网格上」断言需要非对称 bbox 场景，由 T6 视觉验收（平移相机无阴影闪烁）覆盖。
     const m0 = Matrix4.clone(csm.cascades[0].matrix)
     csm.update(cam, new Cartesian3(0, 0, 1), 1e5)
     expect(Matrix4.equals(m0, csm.cascades[0].matrix)).toBe(true)
