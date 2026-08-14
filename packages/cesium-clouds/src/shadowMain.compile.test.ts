@@ -17,6 +17,7 @@ import {
   buildStandaloneCloudsShadowShaderForValidation,
   type ShadowMainOptions
 } from './ShadowMaterial'
+import { buildCloudsMainFragmentShader } from './CloudsMaterial'
 import { compileFragment } from './glslangUtil'
 
 const OPTS: ShadowMainOptions = {}
@@ -82,6 +83,42 @@ describe('M3 T2 shadow.frag surgery 断言', () => {
   it('运行时 shader 不带 #version；校验 shader 以 #version 300 es 开头', () => {
     expect(buildCloudsShadowFragmentShader(OPTS).startsWith('#version')).toBe(false)
     expect(buildStandaloneCloudsShadowShaderForValidation(OPTS).startsWith('#version 300 es')).toBe(true)
+  })
+})
+
+describe('M3 终审：BSM 与主 march 编译分支一致性（SHAPE_DETAIL/TURBULENCE）', () => {
+  // 不变量（ShadowMaterial.ts 文件头「BSM 生成端与主 march 消费端的云密度同分布」）：
+  // 相同 options 下两个组装器的 SHAPE_DETAIL/TURBULENCE define 有无必须一致——单端关分支
+  // 会造成 BSM 光深用不同密度场，阴影与云形细节错位。此处直接对比两组装器输出源文本
+  // （define 仅由组装器 buildDefines/buildM2Defines 注入，glsl 源内无其他 #define 命中，
+  // 无前缀撞名——已核实）。编排层透传错位（createCloudsStage shaderOptions undefined 覆盖）
+  // 由 createCloudsStage.test.ts 默认路径用例守。
+  const DENSITY_BRANCH_DEFINES = ['SHAPE_DETAIL', 'TURBULENCE'] as const
+
+  it('默认 options：两端都 define（默认全开）', () => {
+    const main = buildCloudsMainFragmentShader()
+    const shadow = buildCloudsShadowFragmentShader()
+    for (const d of DENSITY_BRANCH_DEFINES) {
+      expect(main).toContain(`#define ${d}`)
+      expect(shadow).toContain(`#define ${d}`)
+    }
+  })
+
+  it('显式全关：两端都不 define', () => {
+    const main = buildCloudsMainFragmentShader({ shapeDetail: false, turbulence: false })
+    const shadow = buildCloudsShadowFragmentShader({ shapeDetail: false, turbulence: false })
+    for (const d of DENSITY_BRANCH_DEFINES) {
+      expect(main).not.toContain(`#define ${d}`)
+      expect(shadow).not.toContain(`#define ${d}`)
+    }
+  })
+
+  it('单关单开：两端 define 有无逐项一致', () => {
+    const main = buildCloudsMainFragmentShader({ shapeDetail: false, turbulence: true })
+    const shadow = buildCloudsShadowFragmentShader({ shapeDetail: false, turbulence: true })
+    for (const d of DENSITY_BRANCH_DEFINES) {
+      expect(main.includes(`#define ${d}`)).toBe(shadow.includes(`#define ${d}`))
+    }
   })
 })
 

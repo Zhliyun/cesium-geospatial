@@ -341,6 +341,22 @@ describe('createCloudsStage M3 T5 BSM 编排', () => {
     handle!.destroy()
   })
 
+  it('shaderOptions 默认对齐：不传 shapeDetail/turbulence 时生成端解析为 true（M3 终审修复）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    const opts = (createShadowPass as any).mock.calls[0][0]
+    // 修复前：shaderOptions 字面量无条件建键 {shapeDetail: undefined, turbulence: undefined}
+    // → buildCloudsShadowFragmentShader 的 {...DEFAULTS, ...options} 被「显式 undefined 键」
+    // 覆盖默认 true（spread 按键存在性覆盖，不按值）→ 生成端不 define SHAPE_DETAIL/
+    // TURBULENCE 而主 march define（主 march 端 spread 透传，键不存在 → DEFAULTS 生效）
+    // → BSM 光深用无 detail 密度场，阴影与云形细节错位。须 ?? true 对齐主 march 默认。
+    expect(opts.shaderOptions).toEqual({ shapeDetail: true, turbulence: true })
+    handle!.destroy()
+  })
+
   it('preRender 触发后：cascades.update 写 shadowState（cameraNear/far 来自 frustum + intervals 切分 + 逆矩阵自洽）+ shadowPass.render', () => {
     vi.clearAllMocks()
     const scene = createMockScene()

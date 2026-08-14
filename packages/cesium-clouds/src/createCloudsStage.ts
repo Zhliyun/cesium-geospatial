@@ -247,10 +247,12 @@ export function createCloudsStage(
         pixelDatatype: resolveCloudsHdrDatatype(scene),
         uniformMap: shadowUniformMap,
         // 编译分支与主 march 同步（BSM 与主 march 的云密度必须同分布——shapeDetail/turbulence
-        // 单端关闭会造成阴影与云形错位）
+        // 单端关闭会造成阴影与云形错位）。?? true 必须：本字面量无条件建键，若透传 undefined，
+        // ShadowMaterial 的 {...DEFAULTS, ...options} 会被「显式 undefined 键」覆盖默认 true
+        // （spread 按键存在性覆盖）→ 生成端不 define 而主 march define（M3 终审修复）
         shaderOptions: {
-          shapeDetail: options.shapeDetail,
-          turbulence: options.turbulence
+          shapeDetail: options.shapeDetail ?? true,
+          turbulence: options.turbulence ?? true
         }
       })
     : undefined
@@ -315,8 +317,12 @@ export function createCloudsStage(
       // cascade 归一化域与 u_shadowCameraNear 同帧同源（T4 concern #1）。
       if (shadowPass != null) {
         // 虚拟光源距离：太阳天顶角越高（正午）越近（three CloudsEffect.ts:387 语义
-        // lerp(1e6, 1e3, zenith)；distance 过大时场景会超出 ortho 盒深——CascadedShadowMaps
-        // update 的 distance 参数约束，勿传大值）
+        // lerp(1e6, 1e3, zenith)）。distance 大（晨昏 zenith=0 → 1e6 上限）是安全的：
+        // BSM 两端均不消费 clip.z——生成端 cascade() 的 march 起点经 getRayNearFar 与
+        // 云层球壳解析求交（inverseShadowMatrices 的 z=-1 反投影只取 xy），消费端
+        // getShadowUv 只取 clip.xy（正交投影 xy 与 z 解耦）。CascadedShadowMaps 的
+        // 「distance 过大会超出 ortho 盒深、勿传大值」警告（T1）仅针对未来引入
+        // clip.z 剔除/依赖的场景，当前管线不受约束。
         const normal = ellipsoid.geodeticSurfaceNormal(camera.positionWC, normalScratch)
         const zenith = Math.max(0, Cartesian3.dot(state.sunDirection, normal))
         const distance = 1e6 + (1e3 - 1e6) * zenith
