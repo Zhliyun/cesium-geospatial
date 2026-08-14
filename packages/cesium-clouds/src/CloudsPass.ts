@@ -24,9 +24,9 @@
 //   - SHADOW_LENGTH（M5 god rays）：CloudsMaterial 不 define → marchShadowLength/outputShadowLength(loc2)
 //     不编译；applyAerialPerspective 用 shadowLength=0 调 GetSkyRadianceToPoint（无 god rays）
 //   - depthBuffer（M6 地形遮挡）：1×1 val=1.0 → depth<1.0-1e-7 false → getRayDistanceToScene 返 0 远截断
-//   - localWeatherTexture（M2 dummy）：1×1 RGBA（255,255,255,255）→ coverage 满（local_weather PNG decode M2 未做）
+//   - localWeatherTexture（M2 dummy）：1×1 RGBA（255,255,255,255）→ coverage 满（local_weather PNG decode 未做）
 //   - turbulenceTexture（M2 dummy）：1×1 RGBA（128,128,128,255）→ 中性位移
-//   - stbnTexture（M2 dummy）：1×1×1 RGBA（128,128,128,255）→ 中性随机
+//   - stbnTexture：weather.stbn 真 3D 资产（128×128×64 R8 蓝噪声；白噪声 dummy 会显形全屏雪花纹）
 
 import {
   Texture,
@@ -239,32 +239,10 @@ export function createCloudsPass(
     pixelDatatype: PixelDatatype.UNSIGNED_BYTE
   }) // 中性位移（M2 dummy；procedural turbulence M6 接通）
 
-  // STBN 3D 噪声（march per-pixel jitter）：M4 接真 STBN 资产前 CPU 随机生成 64×64×4
-  // （getSTBN 用 gl_FragCoord.xy + frame%depth 采样）。恒值 jitter（1×1 dummy）会导致 march
-  // 步进 banding——俯视径向同心带/干涉纹（实测 2026-08-14）。NEAREST + REPEAT（噪声不插值、循环）。
-  const stbnSize = 64
-  const stbnDepth = 4
-  const stbnData = new Uint8Array(stbnSize * stbnSize * stbnDepth * 4)
-  for (let i = 0; i < stbnData.length; i++) stbnData[i] = (Math.random() * 256) | 0
-  const dummyStbn = new Texture3D({
-    context,
-    source: {
-      width: stbnSize,
-      height: stbnSize,
-      depth: stbnDepth,
-      arrayBufferView: stbnData
-    },
-    pixelFormat: PixelFormat.RGBA,
-    pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-    sampler: new Sampler({
-      wrapS: TextureWrap.REPEAT,
-      wrapT: TextureWrap.REPEAT,
-      wrapR: TextureWrap.REPEAT,
-      minificationFilter: TextureMinificationFilter.NEAREST,
-      magnificationFilter: TextureMagnificationFilter.NEAREST
-    }),
-    flipY: false
-  })
+  // STBN 蓝噪声（march per-pixel jitter）：weather.stbn 真 3D 资产（128×128×64 R8，takram 打包）。
+  // 白噪声 dummy（CPU Math.random 64×64×4）会让 jitter 显形为全屏雪花纹（实测 2026-08-14）——
+  // 蓝噪声误差能量在人眼不敏感高频段，观感平滑。frame=0 静态采样 layer 0（M4 temporal 接通后
+  // 递增轮换层 + temporal reprojection 收敛）。
 
   // ── globe depth 闭包（spec 附录 F5：私有 API scene._view.globeDepth.depthStencilTexture）──
   // M2 getRayDistanceToScene 走远截断（depthBuffer dummy val=1.0），不实际读 globe depth；
@@ -390,8 +368,8 @@ export function createCloudsPass(
     // depth（M6，M2 dummy val=1.0 远截断）
     depthBuffer: () => dummyDepthBuffer,
 
-    // STBN（M4，M2 dummy 1×1×1）
-    stbnTexture: () => dummyStbn
+    // STBN（weather.stbn 真 3D 资产；M4 temporal 接通后 frame 递增轮换层）
+    stbnTexture: () => weather.stbn
   }
 
   // ── VolumetricPrimitive 装配（M1 基建）──
@@ -429,9 +407,8 @@ export function createCloudsPass(
       dummyDepthBuffer.destroy()
       dummyLocalWeather.destroy()
       dummyTurbulence.destroy()
-      // dummyStbn Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用）
-      ;(dummyStbn as unknown as { destroy: () => void }).destroy()
-      ;(dummyShadowBuffer as unknown as { destroy: () => void }).destroy() // Texture3D（sampler3D dummy，M3 BSM 接通时换真实；公开 .d.ts 未声明 destroy，同 dummyStbn cast）
+      // dummyShadowBuffer Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用）
+      ;(dummyShadowBuffer as unknown as { destroy: () => void }).destroy() // sampler3D dummy，M3 BSM 接通时换真实；公开 .d.ts 未声明 destroy，cast
     }
   }
 }

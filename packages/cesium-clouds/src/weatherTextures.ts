@@ -30,30 +30,46 @@ const WEATHER_SAMPLER = new Sampler({
   magnificationFilter: TextureMagnificationFilter.LINEAR
 })
 
+// STBN（spatiotemporal blue noise）采样必须 NEAREST：蓝噪声的结构在纹素级，LINEAR 插值会把
+// 高频误差能量抹平成中频 → 失去蓝噪声特性（人眼不敏感频段收敛）退化回灰雾。three 版
+// STBNLoader 同用 NearestFilter + RepeatWrapping。
+const STBN_SAMPLER = new Sampler({
+  wrapS: TextureWrap.REPEAT,
+  wrapT: TextureWrap.REPEAT,
+  wrapR: TextureWrap.REPEAT,
+  minificationFilter: TextureMinificationFilter.NEAREST,
+  magnificationFilter: TextureMagnificationFilter.NEAREST
+})
+
 export interface WeatherTextures {
   /** 云形状噪声 3D（R8 Uint8 128³）。 */
   shape: Texture3D
   /** 云细节噪声 3D（R8 Uint8 32³）。 */
   shapeDetail: Texture3D
-  // localWeather: Texture  // M2：local_weather.png（2D 512²）PNG decode + Texture 2D
+  /** STBN 蓝噪声 3D（R8 Uint8 128×128×64，getSTBN march jitter 用；M2 frame=0 静态采样 layer 0）。 */
+  stbn: Texture3D
+  // localWeather: Texture  // M2 后：local_weather.png（2D 512²）PNG decode + Texture 2D
 }
 
 const SHAPE_SIZE = 128
 const SHAPE_DETAIL_SIZE = 32
+const STBN_SIZE = 128
+const STBN_DEPTH = 64
 
 /**
- * 加载 weather 纹理（shape + shapeDetail 3D；local_weather 2D 待 M2 PNG decode）。
+ * 加载 weather 纹理（shape + shapeDetail + stbn 3D；local_weather 2D 待 PNG decode）。
  *
  * @param context Cesium Context
- * @param baseUrl weather 资产目录（如 '/clouds'，含 shape.bin/shape_detail.bin/local_weather.png）
+ * @param baseUrl weather 资产目录（如 '/clouds'，含 shape.bin/shape_detail.bin/stbn.bin/local_weather.png）
  */
 export async function loadWeatherTextures(
   context: Context,
   baseUrl: string
 ): Promise<WeatherTextures> {
-  const [shapeBuf, detailBuf] = await Promise.all([
+  const [shapeBuf, detailBuf, stbnBuf] = await Promise.all([
     fetch(`${baseUrl}/shape.bin`).then((r) => r.arrayBuffer()),
-    fetch(`${baseUrl}/shape_detail.bin`).then((r) => r.arrayBuffer())
+    fetch(`${baseUrl}/shape_detail.bin`).then((r) => r.arrayBuffer()),
+    fetch(`${baseUrl}/stbn.bin`).then((r) => r.arrayBuffer())
   ])
   // shape/shape_detail: R8 Uint8 3D（推算 128³/32³；M2 云 shader 采样时校准）。
   // PixelFormat.RED 单通道（WebGL2），UNSIGNED_BYTE。
@@ -83,5 +99,21 @@ export async function loadWeatherTextures(
     sampler: WEATHER_SAMPLER,
     flipY: false
   })
-  return { shape, shapeDetail }
+  // stbn：R8 128×128×64（takram 从 NVIDIA STBN PNG 逐层打包，apps/data/src/targets/stbn.ts）。
+  // 白噪声 dummy（CPU Math.random）会让 march jitter 显形为全屏雪花纹（实测 2026-08-14）——
+  // 蓝噪声把误差能量推到人眼不敏感的高频段，静态采样（frame=0）观感平滑。
+  const stbn = new Texture3D({
+    context,
+    source: {
+      width: STBN_SIZE,
+      height: STBN_SIZE,
+      depth: STBN_DEPTH,
+      arrayBufferView: new Uint8Array(stbnBuf)
+    },
+    pixelFormat: PixelFormat.RED,
+    pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+    sampler: STBN_SAMPLER,
+    flipY: false
+  })
+  return { shape, shapeDetail, stbn }
 }

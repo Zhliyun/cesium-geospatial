@@ -101,7 +101,8 @@ function createMockLuts(): any {
 function createMockWeather(): any {
   return {
     shape: { id: 'shape', _texture: { id: 'shape' }, _target: 0x806f },
-    shapeDetail: { id: 'detail', _texture: { id: 'detail' }, _target: 0x806f }
+    shapeDetail: { id: 'detail', _texture: { id: 'detail' }, _target: 0x806f },
+    stbn: { id: 'stbn', _texture: { id: 'stbn' }, _target: 0x806f }
   }
 }
 
@@ -162,21 +163,23 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
-  it('uniformMap 注入 weather shape/shapeDetail（真 weather 对象）', () => {
+  it('uniformMap 注入 weather shape/shapeDetail/stbn（真 weather 对象）', () => {
     vi.clearAllMocks()
     const weather = createMockWeather()
     const pass = createCloudsPass(scene2(), createMockLuts(), weather, state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     expect(um.shapeTexture()).toBe(weather.shape)
     expect(um.shapeDetailTexture()).toBe(weather.shapeDetail)
+    // stbnTexture = weather.stbn 真 3D 蓝噪声资产（非 dummy——白噪声 dummy 显形全屏雪花纹）
+    expect(um.stbnTexture()).toBe(weather.stbn)
     pass.destroy()
   })
 
-  it('uniformMap dummy texture（localWeather/turbulence/depthBuffer/stbn 非 weather/luts）', () => {
+  it('uniformMap dummy texture（localWeather/turbulence/depthBuffer 非 weather/luts）', () => {
     vi.clearAllMocks()
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
-    // localWeatherTexture 是 dummy（M2 PNG decode 未做），不等于 weather 对象
+    // localWeatherTexture 是 dummy（PNG decode 未做），不等于 weather 对象
     const lw = um.localWeatherTexture()
     expect(lw).toBeDefined()
     expect(lw).not.toBe(createMockWeather().shape)
@@ -184,8 +187,6 @@ describe('createCloudsPass', () => {
     expect(um.turbulenceTexture()).toBeDefined()
     // depthBuffer dummy（M6 globe depth 接通前）
     expect(um.depthBuffer()).toBeDefined()
-    // stbnTexture dummy（Texture3D 1×1×1）
-    expect(um.stbnTexture()).toBeDefined()
     pass.destroy()
   })
 

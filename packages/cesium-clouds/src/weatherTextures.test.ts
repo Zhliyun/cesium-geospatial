@@ -18,7 +18,7 @@ vi.mock('cesium', () => ({
 import { loadWeatherTextures } from './weatherTextures'
 
 describe('loadWeatherTextures', () => {
-  it('fetch shape.bin + shape_detail.bin（M1 T9，local_weather 2D 待 M2）', async () => {
+  it('fetch shape.bin + shape_detail.bin + stbn.bin（M1 T9 + STBN 资产；local_weather 2D 待后续）', async () => {
     const fetchMock = vi.fn((url: string) =>
       Promise.resolve({
         arrayBuffer: () => Promise.resolve(new ArrayBuffer(16))
@@ -30,8 +30,10 @@ describe('loadWeatherTextures', () => {
       const w = await loadWeatherTextures({} as never, '/clouds')
       expect(w.shape).toBeDefined()
       expect(w.shapeDetail).toBeDefined()
+      expect(w.stbn).toBeDefined()
       expect(fetchMock).toHaveBeenCalledWith('/clouds/shape.bin')
       expect(fetchMock).toHaveBeenCalledWith('/clouds/shape_detail.bin')
+      expect(fetchMock).toHaveBeenCalledWith('/clouds/stbn.bin')
     } finally {
       global.fetch = origFetch
     }
