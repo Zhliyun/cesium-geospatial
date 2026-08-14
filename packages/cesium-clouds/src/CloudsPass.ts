@@ -239,18 +239,32 @@ export function createCloudsPass(
     pixelDatatype: PixelDatatype.UNSIGNED_BYTE
   }) // 中性位移（M2 dummy；procedural turbulence M6 接通）
 
+  // STBN 3D 噪声（march per-pixel jitter）：M4 接真 STBN 资产前 CPU 随机生成 64×64×4
+  // （getSTBN 用 gl_FragCoord.xy + frame%depth 采样）。恒值 jitter（1×1 dummy）会导致 march
+  // 步进 banding——俯视径向同心带/干涉纹（实测 2026-08-14）。NEAREST + REPEAT（噪声不插值、循环）。
+  const stbnSize = 64
+  const stbnDepth = 4
+  const stbnData = new Uint8Array(stbnSize * stbnSize * stbnDepth * 4)
+  for (let i = 0; i < stbnData.length; i++) stbnData[i] = (Math.random() * 256) | 0
   const dummyStbn = new Texture3D({
     context,
     source: {
-      width: 1,
-      height: 1,
-      depth: 1,
-      arrayBufferView: new Uint8Array([128, 128, 128, 255])
+      width: stbnSize,
+      height: stbnSize,
+      depth: stbnDepth,
+      arrayBufferView: stbnData
     },
     pixelFormat: PixelFormat.RGBA,
     pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+    sampler: new Sampler({
+      wrapS: TextureWrap.REPEAT,
+      wrapT: TextureWrap.REPEAT,
+      wrapR: TextureWrap.REPEAT,
+      minificationFilter: TextureMinificationFilter.NEAREST,
+      magnificationFilter: TextureMagnificationFilter.NEAREST
+    }),
     flipY: false
-  }) // 中性随机（M2 dummy；STBN 3D 噪声 M4 temporal 用）
+  })
 
   // ── globe depth 闭包（spec 附录 F5：私有 API scene._view.globeDepth.depthStencilTexture）──
   // M2 getRayDistanceToScene 走远截断（depthBuffer dummy val=1.0），不实际读 globe depth；

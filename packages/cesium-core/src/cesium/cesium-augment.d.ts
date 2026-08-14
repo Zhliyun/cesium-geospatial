@@ -12,6 +12,7 @@ declare module 'cesium' {
       }
       pixelFormat?: number
       pixelDatatype?: number
+      sampler?: Sampler
       flipY?: boolean
     })
   }
@@ -45,6 +46,7 @@ declare module 'cesium' {
     constructor(options?: {
       wrapS?: TextureWrap
       wrapT?: TextureWrap
+      wrapR?: TextureWrap
       minificationFilter?: TextureMinificationFilter
       magnificationFilter?: TextureMagnificationFilter
       maximumAnisotropy?: number

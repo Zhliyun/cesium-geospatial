@@ -1,12 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
 
-// mock cesium 的 Texture3D 构造 + PixelFormat/PixelDatatype（避免 WebGL context 依赖）
+// mock cesium 的 Texture3D/Sampler 构造 + PixelFormat/PixelDatatype/TextureWrap（避免 WebGL context 依赖）
 vi.mock('cesium', () => ({
   Texture3D: class {
     constructor(_opts: unknown) {}
   },
+  Sampler: class {
+    constructor(_opts?: unknown) {}
+  },
   PixelFormat: { RED: 0x1903 },
-  PixelDatatype: { UNSIGNED_BYTE: 0x1401 }
+  PixelDatatype: { UNSIGNED_BYTE: 0x1401 },
+  TextureWrap: { REPEAT: 10497, CLAMP_TO_EDGE: 33071, MIRRORED_REPEAT: 33648 },
+  TextureMinificationFilter: { LINEAR: 9729, NEAREST: 9728 },
+  TextureMagnificationFilter: { LINEAR: 9729, NEAREST: 9728 }
 }))
 
 import { loadWeatherTextures } from './weatherTextures'

@@ -8,8 +8,27 @@
 // format/dimensions 推算自 three 版 CLOUD_SHAPE_TEXTURE_SIZE + 文件大小，M2 云 shader 实际采样时
 // 校准（PixelFormat.RED 单通道，WebGL2 sampler3D 采 .r）。three 版还有 procedural 版（CloudShape.ts
 // GPU 运行时生成 perlin），本项目 M1 用预计算资产最简，procedural 留作后续优化。
-import { Texture3D, PixelFormat, PixelDatatype } from 'cesium'
+import {
+  Texture3D,
+  PixelFormat,
+  PixelDatatype,
+  Sampler,
+  TextureWrap,
+  TextureMinificationFilter,
+  TextureMagnificationFilter
+} from 'cesium'
 import type { Context } from 'cesium'
+
+// 3D 噪声采样 wrap 必须 REPEAT：shapePosition = position×shapeRepeat 是大值循环采样（fract），
+// Cesium Sampler 默认 CLAMP_TO_EDGE 会把采样钉在纹理边缘 → 云噪声退化为常数/条纹（实测 2026-08-14）。
+// three 版 Data3DTexture 用 RepeatWrapping 等价。
+const WEATHER_SAMPLER = new Sampler({
+  wrapS: TextureWrap.REPEAT,
+  wrapT: TextureWrap.REPEAT,
+  wrapR: TextureWrap.REPEAT,
+  minificationFilter: TextureMinificationFilter.LINEAR,
+  magnificationFilter: TextureMagnificationFilter.LINEAR
+})
 
 export interface WeatherTextures {
   /** 云形状噪声 3D（R8 Uint8 128³）。 */
@@ -48,6 +67,7 @@ export async function loadWeatherTextures(
     },
     pixelFormat: PixelFormat.RED,
     pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+    sampler: WEATHER_SAMPLER,
     flipY: false
   })
   const shapeDetail = new Texture3D({
@@ -60,6 +80,7 @@ export async function loadWeatherTextures(
     },
     pixelFormat: PixelFormat.RED,
     pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+    sampler: WEATHER_SAMPLER,
     flipY: false
   })
   return { shape, shapeDetail }
