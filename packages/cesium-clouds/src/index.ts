@@ -33,7 +33,9 @@ export {
 } from './CloudsPass'
 export {
   defaultCloudsParameters,
-  type CloudsParameters
+  type CloudsParameters,
+  type CloudsShadowMarchParameters,
+  type CloudsShadowFrameState
 } from './cloudsDefaultParameters'
 
 // M2 T3：createCloudsStage 顶层工厂（编排 CloudsPass + overlay → 接 PostProcess 链）

@@ -17,8 +17,11 @@
 //      czm_windowToEyeCoordinates + v_textureCoordinates 重建（clouds.vert 等价，但只在 fragment 跑）
 //   3. 重命名 main → cloudsMainBody；wrapper main 先 cloudsBridge_reconstructVaryings() 再调用
 //   4. M3/M4/M5 dummy：
-//      - M3 BSM：不摘 shadowBuffer 声明（T2 提供 1×1×4 全 0 纹理）→ sampleShadowOpticalDepth 返 0
-//        → Beer-Lambert 1（无自阴影，flat lighting）
+//      - M3 BSM（T4 已接通）：shadowBuffer = ShadowPass.bsmTexture（sampler3D，z 归一化
+//        (i+0.5)/SHADOW_CASCADE_COUNT 层中心采样）；cascade 选择 near 用独立 uniform
+//        u_shadowCameraNear（BSM split 完整视锥 near，≠ czm_currentFrustum.x 分段值）。
+//        未就绪时 CloudsPass fallback 1×1×3 全 0 dummy → sampleShadowOpticalDepth 返 0
+//        → Beer-Lambert 1（无自阴影，flat lighting 降级）
 //      - M4 temporal：不摘 reprojectionMatrix/viewReprojectionMatrix（T2 提供 identity）→ velocity
 //        非 0 但 outputDepthVelocity 在 M2 未被消费（M4 resolve 接通）
 //      - M5 god rays：不 define SHADOW_LENGTH → marchShadowLength/outputShadowLength(loc2) 不编译；
@@ -99,11 +102,16 @@ const CLOUDS_MAIN_DEFINES = [
   '#define SCATTER_ANISOTROPY_1 0.5',
   '#define SCATTER_ANISOTROPY_2 -0.5',
   '#define SCATTER_ANISOTROPY_MIX 0.35',
-  '#define SHADOW_CASCADE_COUNT 4',
+  // M3：cascade 数 4→3（CascadedShadowMaps 级联数对齐；uniform shadowIntervals/[Matrices] 数组长度）
+  '#define SHADOW_CASCADE_COUNT 3',
   '#define SHADOW_SAMPLE_COUNT 16',
   '#define MULTI_SCATTERING_OCTAVES 6',
   '#define LOCAL_WEATHER_CHANNELS rgba',
-  '#define DEPTH_PACKING 0'
+  '#define DEPTH_PACKING 0',
+  // M3 决策 D4：powder 效果（clouds.frag L581 面向光源边缘变暗）。three CloudsMaterial 在
+  // powderScale > 0 时动态 define；本仓库 powderScale=0.8（cloudsDefaultParameters）恒正 → 固定开。
+  // M2 漏 define 导致云底/向光侧偏亮（Beer 无 powder 项）。
+  '#define POWDER'
 ]
 
 // 构造 M2 运行期 define 集（基础 clouds.frag 编译分支 + M2 桥接分支开关）。
@@ -153,6 +161,13 @@ const BRIDGE_DEFINES_GLSL = `
 #define viewMatrix czm_view
 #define cameraNear czm_currentFrustum.x
 #define cameraFar czm_currentFrustum.y
+
+// M3 决策 D3：cascade 选择的归一化 near 解耦——viewZToOrthographicDepth(viewZ, near, shadowFar)
+// 的归一化域必须与 BSM split（preRender 时刻完整视锥 near/far）一致；而上面 cameraNear 被
+// #define 到 czm_currentFrustum.x（multi-frustum 分段值），分段执行时归一化错位 → cascade 全错。
+// 故 surgery 把 cascade 选择 3 处调用点的 cameraNear 换本 uniform（CloudsPass 从
+// state.shadow.cameraNear 注入）。getViewZ 的 depth 反演继续用 czm_currentFrustum（段语义正确）。
+uniform float u_shadowCameraNear;
 `
 
 // 桥接 varying 重建块（替代 clouds.frag 原 7 个 in varying；clouds.vert 算 → fragment 重建）。
@@ -304,6 +319,28 @@ function surgeryCloudsFrag(source: string): string {
   return 0.0;
 }`
   )
+
+  // 6) M3：sampler3D 的 z 是归一化深度（sampler2DArray 才是 layer 索引）——半 texel 中心采样，
+  //    z 恰在层中心 → LINEAR 三线性 z 邻层权重 0，无跨层混叠（决策 D1）。锚点唯一（L180）。
+  src = src.replace(
+    /vec4 shadow = texture\(shadowBuffer, vec3\(uv, float\(cascadeIndex\)\)\);/,
+    'vec4 shadow = texture(shadowBuffer, vec3(uv, (float(cascadeIndex) + 0.5) / float(SHADOW_CASCADE_COUNT)));'
+  )
+
+  // 6b) M3：DEBUG_SHOW_SHADOW_MAP 的 4 处 layer 字面量（L257-270 原文 0.0/1.0/2.0/3.0）同 z
+  //     归一化语义换 (i+0.5)/SHADOW_CASCADE_COUNT（sampler3D z ∈ [0,1] 连续深度，非 layer 索引）。
+  //     #if SHADOW_CASCADE_COUNT > N 分支结构保留（COUNT=3 时 i=3 分支被预处理裁掉）。
+  src = src.replace(/vec3\(coord\.xw, 0\.0\)/, 'vec3(coord.xw, 0.5 / float(SHADOW_CASCADE_COUNT))')
+  src = src.replace(/vec3\(coord\.zw, 1\.0\)/, 'vec3(coord.zw, 1.5 / float(SHADOW_CASCADE_COUNT))')
+  src = src.replace(/vec3\(coord\.xy, 2\.0\)/, 'vec3(coord.xy, 2.5 / float(SHADOW_CASCADE_COUNT))')
+  src = src.replace(/vec3\(coord\.zy, 3\.0\)/, 'vec3(coord.zy, 3.5 / float(SHADOW_CASCADE_COUNT))')
+
+  // 7) M3：cascade 选择的归一化 near 必须用 BSM split 时的完整 near（u_shadowCameraNear，
+  //    BRIDGE_DEFINES_GLSL 尾部声明），而非 czm_currentFrustum.x（multi-frustum 分段值——
+  //    分段执行时归一化错位 → cascade 全错）。3 处调用点：getCascadeColor /
+  //    getFadedCascadeColor / sampleShadowOpticalDepth（marchShadowLength 经
+  //    sampleShadowOpticalDepth 间接覆盖，M5 SHADOW_LENGTH 接通时自动正确）。
+  src = src.replaceAll('cameraNear,\n    shadowFar', 'u_shadowCameraNear,\n    shadowFar')
 
   return src
 }

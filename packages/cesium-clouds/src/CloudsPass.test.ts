@@ -109,7 +109,7 @@ function createMockWeather(): any {
 
 import { createCloudsPass, type CloudsFrameState } from './CloudsPass'
 import { createVolumetricPrimitive } from '@cesium-geospatial/core'
-import { Cartesian3 } from 'cesium'
+import { Cartesian2, Cartesian3, Matrix4 } from 'cesium'
 
 describe('createCloudsPass', () => {
   const state: CloudsFrameState = {
@@ -203,13 +203,87 @@ describe('createCloudsPass', () => {
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     const sb = um.shadowBuffer()
-    // shadowBuffer 是 Texture3D（sampler3D dummy 全 0，depth=SHADOW_CASCADE_COUNT=4 cascade 维度）。
+    // shadowBuffer 是 Texture3D（sampler3D dummy 全 0，depth=SHADOW_CASCADE_COUNT=3 cascade 维度）。
     // 非 bridge——Cesium createUniform 不认 sampler2DArray(type 36289)，CloudsMaterial surgery 把
     // uniform sampler2DArray → sampler3D，dummy 用 Texture3D（createUniform 认 SAMPLER_3D）。
+    // M3 T4：state.shadow 未就绪时 fallback 此 dummy → Beer=1（无自阴影降级）。
     expect(sb).toBeDefined()
     expect(typeof sb).toBe('object')
     expect(sb).not.toEqual({ _texture: expect.any(Object), _target: expect.any(Number) }) // 非 2D_ARRAY bridge
+    // depth 与 shader #define SHADOW_CASCADE_COUNT 3 对齐（sampler3D z 归一化 (i+0.5)/3 层中心）
+    expect(sb.source.depth).toBe(3)
+    expect(sb.source.arrayBufferView).toHaveLength(3 * 4)
     pass.destroy()
+  })
+
+  it('M3 BSM：state.shadow 有值时 uniformMap 返回 state 值（真 BSM 接通）', () => {
+    vi.clearAllMocks()
+    const bsm = { id: 'bsm', _texture: { id: 'bsm-tex' }, _target: 0x806f } // Texture3D mock
+    const matrices = [Matrix4.IDENTITY, Matrix4.clone(Matrix4.IDENTITY), Matrix4.clone(Matrix4.IDENTITY)]
+    const intervals = [
+      new Cartesian2(0, 0.3),
+      new Cartesian2(0.3, 0.7),
+      new Cartesian2(0.7, 1)
+    ]
+    const texelSize = new Cartesian2(1 / 512, 1 / 512)
+    const st: CloudsFrameState = {
+      sunDirection: { x: 1, y: 0, z: 0 } as any,
+      altitudeCorrection: { x: 0, y: 0, z: 0 } as any,
+      shadow: {
+        matrices,
+        intervals,
+        cameraNear: 1.5, // 完整视锥 near（≠ czm_currentFrustum.x 分段值）
+        far: 5e6,
+        texelSize,
+        bsm
+      }
+    }
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), st)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um.shadowBuffer()).toBe(bsm) // ShadowPass.bsmTexture 直传
+    expect(um.shadowMatrices()).toBe(matrices)
+    expect(um.shadowIntervals()).toBe(intervals)
+    expect(um.shadowFar()).toBe(5e6)
+    expect(um.shadowTexelSize()).toBe(texelSize)
+    expect(um.u_shadowCameraNear()).toBe(1.5)
+    pass.destroy()
+  })
+
+  it('M3 BSM fallback：state.shadow 未就绪（无 shadow 字段或 bsm undefined）时降级 dummy', () => {
+    vi.clearAllMocks()
+    // 分支 1：无 shadow 字段 → u_shadowCameraNear=0 + dummy shadowBuffer
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um.u_shadowCameraNear()).toBe(0)
+    const dummy1 = um.shadowBuffer()
+    expect(dummy1).toBeDefined()
+    expect(dummy1.source.depth).toBe(3) // fallback dummy（Beer=1 降级）
+    pass.destroy()
+
+    // 分支 2：shadow 存在但 bsm undefined（首帧前 ShadowPass 未 render）→ shadowBuffer 仍 dummy
+    vi.clearAllMocks()
+    const st: CloudsFrameState = {
+      sunDirection: { x: 1, y: 0, z: 0 } as any,
+      altitudeCorrection: { x: 0, y: 0, z: 0 } as any,
+      shadow: {
+        matrices: [Matrix4.IDENTITY, Matrix4.IDENTITY, Matrix4.IDENTITY],
+        intervals: [new Cartesian2(0, 1), new Cartesian2(0, 1), new Cartesian2(0, 1)],
+        cameraNear: 1.0,
+        far: 1e6,
+        texelSize: new Cartesian2(1 / 512, 1 / 512),
+        bsm: undefined
+      }
+    }
+    const pass2 = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), st)
+    const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    const dummy2 = um2.shadowBuffer()
+    expect(dummy2).toBeDefined()
+    expect(dummy2.source.depth).toBe(3)
+    expect(dummy2).not.toBe(st.shadow?.bsm) // bsm undefined → 非 undefined 的 dummy
+    // 其余 shadow 值仍取 state（matrices/intervals 已就绪，仅纹理未生成）
+    expect(um2.shadowFar()).toBe(1e6)
+    expect(um2.u_shadowCameraNear()).toBe(1.0)
+    pass2.destroy()
   })
 
   it('uniformMap 不含 ATMOSPHERE / densityProfile / viewMatrix / cameraNear / cameraFar（已 const/#define 注入）', () => {
@@ -309,7 +383,7 @@ describe('createCloudsPass', () => {
       'maxStepSize', 'maxRayDistance', 'perspectiveStepScale',
       'maxIterationCountToSun', 'maxIterationCountToGround', 'minSecondaryStepSize',
       'secondaryStepScale', 'shadowBuffer', 'shadowTexelSize', 'shadowIntervals',
-      'shadowMatrices', 'shadowFar', 'maxShadowFilterRadius',
+      'shadowMatrices', 'shadowFar', 'maxShadowFilterRadius', 'u_shadowCameraNear',
       'resolution', 'frame', 'stbnTexture', 'bottomRadius', 'worldToECEFMatrix',
       'ecefToWorldMatrix', 'altitudeCorrection', 'sunDirection',
       'scatteringCoefficient', 'absorptionCoefficient', 'minDensity',

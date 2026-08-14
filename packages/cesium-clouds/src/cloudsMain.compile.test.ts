@@ -186,3 +186,50 @@ describe('M2 T1 glslangValidator 真编译（clouds.frag 完整桥接 shader）'
     expect(output).toContain('ERROR')
   })
 })
+
+describe('M3 T4 BSM 消费 surgery', () => {
+  it('sampler3D z 归一化：texture(shadowBuffer, vec3(uv, (i+0.5)/SHADOW_CASCADE_COUNT))', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    // readShadowOpticalDepth 的采样点（clouds.frag L180 原文 texture(shadowBuffer, vec3(uv, float(cascadeIndex)))）
+    expect(src).toContain('(float(cascadeIndex) + 0.5) / float(SHADOW_CASCADE_COUNT)')
+    expect(src).not.toContain('texture(shadowBuffer, vec3(uv, float(cascadeIndex)))')
+  })
+
+  it('DEBUG_SHOW_SHADOW_MAP 4 处 layer 字面量同步 z 归一化（sampler3D z 非 layer 索引）', () => {
+    const src = buildCloudsMainFragmentShader({ debugShow: 'shadowMap' })
+    // clouds.frag L257-270 原文 0.0/1.0/2.0/3.0（sampler2DArray layer 索引）→ (i+0.5)/COUNT
+    // 层中心采样；#if SHADOW_CASCADE_COUNT > N 分支结构保留（COUNT=3 时 i=3 分支裁掉）。
+    expect(src).toContain('vec3(coord.xw, 0.5 / float(SHADOW_CASCADE_COUNT))')
+    expect(src).toContain('vec3(coord.zw, 1.5 / float(SHADOW_CASCADE_COUNT))')
+    expect(src).toContain('vec3(coord.xy, 2.5 / float(SHADOW_CASCADE_COUNT))')
+    expect(src).toContain('vec3(coord.zy, 3.5 / float(SHADOW_CASCADE_COUNT))')
+    expect(src).not.toContain('vec3(coord.xw, 0.0)')
+  })
+
+  it('cascade 选择解 multi-frustum 错位：cameraNear→u_shadowCameraNear（3 处调用点）', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    expect(src).toContain('uniform float u_shadowCameraNear;')
+    // getCascadeColor / getFadedCascadeColor / sampleShadowOpticalDepth 内共 3 处
+    const count = src.split('u_shadowCameraNear,\n    shadowFar').length - 1
+    expect(count).toBe(3)
+    // DEBUG_SHOW_CASCADES 关闭时这些调用不编译，但源文本手术已替换（glslang 编译验证见下）
+  })
+
+  it('#define POWDER（powderScale=0.8>0，three 默认开）+ SHADOW_CASCADE_COUNT 3', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    expect(src).toContain('#define POWDER')
+    expect(src).toContain('#define SHADOW_CASCADE_COUNT 3')
+    expect(src).not.toContain('#define SHADOW_CASCADE_COUNT 4')
+  })
+
+  it('glslang：M3 默认 options（含 POWDER）编译通过', () => {
+    compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'M3 默认')
+  })
+
+  it('glslang：debugShow=shadowMap（z 归一化 DEBUG 路径真编译）编译通过', () => {
+    compileOrFail(
+      buildStandaloneCloudsShaderForValidation({ debugShow: 'shadowMap' }),
+      'M3 shadowMap debug'
+    )
+  })
+})

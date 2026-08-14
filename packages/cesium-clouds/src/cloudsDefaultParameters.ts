@@ -9,12 +9,50 @@
 //   - scatter 视觉参数（skyLightScale/powderScale 等）：CloudsMaterial.ts:212-215
 //   - 云层 packed 向量（minLayerHeights/densityScales 等）：CloudLayers.DEFAULT（CloudLayers.ts:31-68）
 //     经 packValues / packSums / packIntervalHeights（uniforms.ts:124-186）展开
-//   - BSM 参数（shadowMatrices/shadowIntervals 等）：M2 dummy（M3 BSM 接通后由 CascadedShadowMaps 算）
+//   - BSM 参数（shadowMatrices/shadowIntervals 等）：M3 T4 起 state.shadow（CascadedShadowMaps +
+//     ShadowPass 产出）覆盖；本表值仅 fallback（shadowMarch 档是 ShadowPass 生成端参数，T5 绑定）
 //
 // 纯数据模块（无 Cesium 依赖，除 Cartesian2/3/4/Matrix4 类型）→ node 单测可直接断言。
 // 参数化：createCloudsStage 透传 options 覆盖默认（M6 qualityPresets 用）。
 
 import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from 'cesium'
+import type { Texture3D } from 'cesium'
+
+/**
+ * BSM 生成端（ShadowPass）march 档（three-geospatial qualityPresets.ts defaults.shadow 逐字）。
+ * shadow.frag 消费 maxIterationCount/minStepSize/maxStepSize/opticalDepthTailScale +
+ * parameters.glsl 通用 march 终止阈值（minDensity/minExtinction/minTransmittance）。
+ * T5 在 createCloudsStage 组 ShadowPass uniformMap 时展开绑定。
+ */
+export interface CloudsShadowMarchParameters {
+  maxIterationCount: number
+  minStepSize: number
+  maxStepSize: number
+  minDensity: number
+  minExtinction: number
+  minTransmittance: number
+  opticalDepthTailScale: number
+}
+
+/**
+ * M3 BSM 每帧状态（createCloudsStage preRender 填；CloudsPass uniformMap 闭包读引用）。
+ * 值来源：CascadedShadowMaps.update（matrices/intervals/cameraNear/far）+ ShadowPass（bsm）。
+ * 未就绪（首帧前 / shadow 未填）时 CloudsPass fallback dummy（Beer=1 降级）。
+ */
+export interface CloudsShadowFrameState {
+  /** [3]：cascades[i].matrix（world→light clip）→ shadowMatrices uniform。 */
+  matrices: Matrix4[]
+  /** [3]：cascades[i].interval（归一化视深切分）→ shadowIntervals uniform。 */
+  intervals: Cartesian2[]
+  /** BSM split 用的完整视锥 near（preRender 时刻值）→ u_shadowCameraNear uniform（≠ czm_currentFrustum.x 分段值）。 */
+  cameraNear: number
+  /** BSM far（shadowFar uniform 同源 = CascadedShadowMaps.far）。 */
+  far: number
+  /** BSM 单 texel 尺寸 1/mapSize → shadowTexelSize uniform。 */
+  texelSize: Cartesian2
+  /** ShadowPass.bsmTexture（首帧 render 前 undefined → fallback dummy）。 */
+  bsm: Texture3D | undefined
+}
 
 /**
  * M2 clouds 业务 uniform 默认值（flat，struct 已 const 注入）。
@@ -110,15 +148,24 @@ export interface CloudsParameters {
   shadowBottomHeight: number
   shadowLayerMask: Cartesian4
 
-  // ── BSM（M3，M2 dummy）──
+  // ── BSM（M3，T4 接通；未就绪时 dummy）──
+  /** cascade 数（= shader #define SHADOW_CASCADE_COUNT = CascadedShadowMaps cascadeCount）。 */
+  shadowCascadeCount: number
   /** shadowTexelSize：M2 dummy (1,1)；M3 BSM 接通后 = 1/mapSize。 */
   shadowTexelSize: Cartesian2
-  /** shadowIntervals[4]：M2 dummy 全 0；M3 BSM cascade 区间。 */
+  /** shadowIntervals[3]：M2 dummy 全 0；M3 由 state.shadow（cascades[i].interval）覆盖。 */
   shadowIntervals: Cartesian2[]
-  /** shadowMatrices[4]：M2 dummy identity；M3 BSM cascade VP。 */
+  /** shadowMatrices[3]：M2 dummy identity；M3 由 state.shadow（cascades[i].matrix）覆盖。 */
   shadowMatrices: Matrix4[]
   shadowFar: number
   maxShadowFilterRadius: number
+
+  // ── BSM shadow march 档（M3，qualityPresets.ts defaults.shadow）──
+  /**
+   * BSM 生成端（ShadowPass，T5 绑定）march 参数。主 march uniformMap 不绑这些——
+   * clouds.frag 主 shader 无同名 uniform（绑了反而未声明 uniform）。
+   */
+  shadowMarch: CloudsShadowMarchParameters
 
   // ── reprojection（M4，M2 dummy）──
   /** reprojectionMatrix：M2 identity（velocity 0，outputDepthVelocity 写 0 但 M2 不消费）。 */
@@ -212,10 +259,10 @@ export function defaultCloudsParameters(): CloudsParameters {
     shadowBottomHeight: 750, // min(altitude) with shadow=true
     shadowLayerMask: new Cartesian4(1, 1, 0, 0),
 
-    // BSM（M3，M2 dummy）
+    // BSM（M3，T4 接通；state.shadow 未就绪时 fallback 这些 dummy 值）
+    shadowCascadeCount: 3, // = shader #define SHADOW_CASCADE_COUNT 3 = CascadedShadowMaps cascadeCount
     shadowTexelSize: new Cartesian2(1.0, 1.0),
     shadowIntervals: [
-      new Cartesian2(0, 0),
       new Cartesian2(0, 0),
       new Cartesian2(0, 0),
       new Cartesian2(0, 0)
@@ -223,11 +270,21 @@ export function defaultCloudsParameters(): CloudsParameters {
     shadowMatrices: [
       Matrix4.IDENTITY,
       Matrix4.IDENTITY,
-      Matrix4.IDENTITY,
       Matrix4.IDENTITY
     ],
     shadowFar: 0,
     maxShadowFilterRadius: 6,
+
+    // BSM shadow march 档（qualityPresets.ts defaults.shadow 逐字；ShadowPass 侧 T5 绑定）
+    shadowMarch: {
+      maxIterationCount: 50,
+      minStepSize: 100,
+      maxStepSize: 1000,
+      minDensity: 1e-5,
+      minExtinction: 1e-5,
+      minTransmittance: 1e-4,
+      opticalDepthTailScale: 2
+    },
 
     // reprojection（M4，M2 dummy identity → velocity 0）
     reprojectionMatrix: Matrix4.IDENTITY,

@@ -5,8 +5,9 @@
 //
 // 职责（plan T2）：
 //   1. 创建 3 MRT texture（color/depthVelocity/shadowLength，HalfFloat 优先，UNSIGNED_BYTE 兜底）
-//   2. 创建 dummy texture（shadowBuffer 2D_ARRAY 1×1×4 全 0 / depthBuffer 1×1 val=1.0 /
-//      localWeatherTexture 1×1 / turbulenceTexture 1×1 / stbnTexture 1×1×1）——M3/M4/M5/M6 未接通项
+//   2. 创建 dummy texture（shadowBuffer 3D 1×1×3 全 0（M3 真值经 state.shadow 注入）/ depthBuffer
+//      1×1 val=1.0 / localWeatherTexture 1×1 / turbulenceTexture 1×1 / stbnTexture 1×1×1）
+//      ——M3/M4/M5/M6 未就绪项 fallback
 //   3. uniformMap 注入 clouds.frag + parameters.glsl 全部 business uniform（atmosphere LUT 共享
 //      AtmosphereStage 的 luts / weather shape+shapeDetail / 每帧闭包 camera/sun / 静态 scatter 参数）
 //   4. createVolumetricPrimitive 装配（globeDepthTexture 闭包隔离私有 API scene._view.globeDepth）
@@ -17,8 +18,10 @@
 // cameraPosition 经桥接 = czm_viewerPositionWC。temporalJitter = (0,0)（M4 Bayer）。
 //
 // dummy 决策（M2 vs M3/M4/M5/M6 hook 标注）：
-//   - shadowBuffer（M3 BSM）：1×1×4 全 0 sampler2DArray → sampleShadowOpticalDepth 返 0 →
-//     Beer-Lambert exp(-0)=1（无自阴影，flat lighting）
+//   - shadowBuffer（M3 BSM 已接通，T4）：state.shadow.bsm = ShadowPass.bsmTexture（sampler3D，
+//     z 归一化 (i+0.5)/SHADOW_CASCADE_COUNT 层中心采样）；未就绪（首帧/降级）fallback
+//     1×1×3 全 0 dummy → sampleShadowOpticalDepth 返 0 → Beer-Lambert exp(-0)=1（无自阴影）。
+//     cascade 选择 near/far 同步换 u_shadowCameraNear/state.shadow.far（BSM split 完整视锥域）
 //   - reprojectionMatrix/viewReprojectionMatrix（M4 temporal）：identity → velocity 非 0 但
 //     outputDepthVelocity 在 M2 未被消费
 //   - SHADOW_LENGTH（M5 god rays）：CloudsMaterial 不 define → marchShadowLength/outputShadowLength(loc2)
@@ -55,7 +58,8 @@ import {
 import { buildCloudsMainFragmentShader, type CloudsMainOptions } from './CloudsMaterial'
 import {
   defaultCloudsParameters,
-  type CloudsParameters
+  type CloudsParameters,
+  type CloudsShadowFrameState
 } from './cloudsDefaultParameters'
 import type { WeatherTextures } from './weatherTextures'
 
@@ -99,9 +103,6 @@ const SKY_SPECTRAL_RADIANCE_TO_LUMINANCE = new Cartesian3(
   65310.548555 / SUN_LUMINANCE
 )
 
-// SHADOW_CASCADE_COUNT=4（CloudsMaterial.ts CLOUDS_MAIN_DEFINES）。BSM cascade 数，M2 dummy 全 0/identity。
-const SHADOW_CASCADE_COUNT = 4
-
 /**
  * 每帧可变状态（createCloudsStage 持有并 preRender 更新；CloudsPass uniformMap 闭包读引用）。
  * 仿 core AtmosphereFrameState。sunDirection 为 ECEF 单位向量；altitudeCorrection 为密切球偏移（米）。
@@ -109,6 +110,11 @@ const SHADOW_CASCADE_COUNT = 4
 export interface CloudsFrameState {
   sunDirection: Cartesian3
   altitudeCorrection: Cartesian3
+  /**
+   * M3 BSM 状态（T5 createCloudsStage preRender 填：CascadedShadowMaps.update + ShadowPass.render）。
+   * 未就绪（首帧 / 未填）时 uniformMap fallback 全 0 dummy → Beer=1（无自阴影降级）。
+   */
+  shadow?: CloudsShadowFrameState
 }
 
 /** CloudsPass 构造选项。 */
@@ -191,19 +197,19 @@ export function createCloudsPass(
   // 成 3 attachment。
   const mrtTextures = [colorTex, depthVelTex]
 
-  // ── dummy texture（M3/M4/M5/M6 未接通项）──
+  // ── dummy texture（fallback：state.shadow 未就绪项）──
   // shadowBuffer 用 Texture3D（sampler3D）：Cesium createUniform 不认 sampler2DArray（type 36289，
   // bind 炸 "Unrecognized uniform type"）。CloudsMaterial.ts surgery 把 clouds.frag
-  // `uniform sampler2DArray shadowBuffer` → `uniform sampler3D shadowBuffer`。depth=SHADOW_CASCADE_COUNT
-  // 当 cascade 维度，全 0 → Beer-Lambert 1（M3 BSM）。texture(sampler3D, vec3) 与 sampler2DArray
-  // 调用兼容；M3 真实 BSM 时 cascade 离散化处理。
+  // `uniform sampler2DArray shadowBuffer` → `uniform sampler3D shadowBuffer`。depth=shadowCascadeCount
+  // 当 cascade 维度，全 0 → Beer-Lambert 1。M3 T4 已接真实 BSM（state.shadow.bsm = ShadowPass.bsmTexture，
+  // z 归一化层中心采样）；此 dummy 仅首帧/降级 fallback。
   const dummyShadowBuffer = new Texture3D({
     context,
     source: {
       width: 1,
       height: 1,
-      depth: SHADOW_CASCADE_COUNT,
-      arrayBufferView: new Uint8Array(SHADOW_CASCADE_COUNT * 4) // 全 0
+      depth: params.shadowCascadeCount,
+      arrayBufferView: new Uint8Array(params.shadowCascadeCount * 4) // 全 0
     },
     pixelFormat: PixelFormat.RGBA,
     pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
@@ -346,12 +352,15 @@ export function createCloudsPass(
     shadowBottomHeight: () => params.shadowBottomHeight,
     shadowLayerMask: () => params.shadowLayerMask,
 
-    // BSM（M3，M2 dummy）
-    shadowBuffer: () => dummyShadowBuffer,
-    shadowTexelSize: () => params.shadowTexelSize,
-    shadowIntervals: () => params.shadowIntervals,
-    shadowMatrices: () => params.shadowMatrices,
-    shadowFar: () => params.shadowFar,
+    // BSM（M3：state.shadow 由 createCloudsStage preRender 填；未就绪 fallback 全 0 dummy → Beer=1）
+    shadowBuffer: () => state.shadow?.bsm ?? dummyShadowBuffer,
+    shadowTexelSize: () => state.shadow?.texelSize ?? params.shadowTexelSize,
+    shadowIntervals: () => state.shadow?.intervals ?? params.shadowIntervals,
+    shadowMatrices: () => state.shadow?.matrices ?? params.shadowMatrices,
+    shadowFar: () => state.shadow?.far ?? params.shadowFar,
+    // cascade 选择归一化 near（CloudsMaterial BRIDGE_DEFINES 声明；BSM split 完整视锥 near，
+    // ≠ czm_currentFrustum.x multi-frustum 分段值——分段执行时错位 cascade 全错）
+    u_shadowCameraNear: () => state.shadow?.cameraNear ?? 0,
     maxShadowFilterRadius: () => params.maxShadowFilterRadius,
 
     // reprojection（M4，M2 dummy identity → velocity 0）
@@ -402,8 +411,9 @@ export function createCloudsPass(
       mrtTextures.forEach((t) => t.destroy())
       dummyDepthBuffer.destroy()
       dummyTurbulence.destroy()
-      // dummyShadowBuffer Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用）
-      ;(dummyShadowBuffer as unknown as { destroy: () => void }).destroy() // sampler3D dummy，M3 BSM 接通时换真实；公开 .d.ts 未声明 destroy，cast
+      // dummyShadowBuffer Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用）。
+      // M3 T4 已接真实 BSM（state.shadow.bsm），此 dummy 仅首帧/降级 fallback。
+      ;(dummyShadowBuffer as unknown as { destroy: () => void }).destroy()
     }
   }
 }
