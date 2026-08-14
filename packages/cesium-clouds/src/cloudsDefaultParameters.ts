@@ -150,8 +150,11 @@ export function defaultCloudsParameters(): CloudsParameters {
     targetUvScale: new Cartesian2(1.0, 1.0),
     mipLevelScale: 1.0,
 
-    // 大气（bottomRadius = ATMOSPHERE.bottomRadius = 6360 km）
-    bottomRadius: 6360.0,
+    // 大气（bottomRadius = ATMOSPHERE.bottomRadius = 6360000 米——clouds.frag 坐标全程米：
+    // L369 height = length(position) - bottomRadius、L736 bottomRadius + minHeight 均 meter 单位。
+    // 注意：这与 Bruneton GLSL const ATMOSPHERE.bottom_radius=6360（km，经 METER_TO_LENGTH_UNIT）
+    // 不同——clouds 的 bottomRadius uniform 是 three-atmosphere TS 侧原始米值）
+    bottomRadius: 6360000,
     worldToECEFMatrix: Matrix4.IDENTITY,
     ecefToWorldMatrix: Matrix4.IDENTITY,
 

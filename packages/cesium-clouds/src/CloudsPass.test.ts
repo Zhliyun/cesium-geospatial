@@ -73,7 +73,9 @@ function createMockScene(): any {
       colorBufferFloat: false
     },
     camera: {
-      positionWC: new Cartesian3(6378137, 0, 0) // 地表相机，|r|≈6.378e6（真 Cartesian3，magnitude 用）
+      positionWC: new Cartesian3(6378137, 0, 0), // 地表相机（ECEF 米）
+      // positionCartographic.height = 测地高度（米）——clouds.frag 云层上下判定用（cameraHeight 闭包）
+      positionCartographic: { height: 500.0 }
     },
     primitives: {
       add: vi.fn(),
@@ -222,12 +224,13 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
-  it('每帧闭包：cameraHeight = |camera.positionWC|（地表 ≈6.378e6）', () => {
+  it('每帧闭包：cameraHeight = 测地高度（camera.positionCartographic.height，云层判定用）', () => {
     vi.clearAllMocks()
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     const h = um.cameraHeight() as number
-    expect(h).toBeCloseTo(6378137, -3)
+    // mock scene 相机 positionCartographic.height = 500（米，低空飞行）——非地心距 6.378e6
+    expect(h).toBe(500.0)
     pass.destroy()
   })
 
@@ -247,6 +250,18 @@ describe('createCloudsPass', () => {
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const bridge = pass.getColorBridge()
     expect(bridge).toEqual({ _texture: expect.any(Object), _target: 0x0de1 })
+    pass.destroy()
+  })
+
+  it('bottomRadius 默认 6360000（米——clouds.frag L369 height=length(position)-bottomRadius 为 meter 单位）', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    // 非 6360（km）——clouds bottomRadius uniform 是 three-atmosphere TS 侧米值，
+    // 与 Bruneton GLSL const ATMOSPHERE.bottom_radius（km）单位不同
+    expect(um.bottomRadius()).toBe(6360000)
+    // 云层高度也是米（minHeight=750 低积云）
+    expect(um.minHeight()).toBe(750)
     pass.destroy()
   })
 

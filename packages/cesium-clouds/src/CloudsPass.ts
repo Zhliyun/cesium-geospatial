@@ -248,10 +248,16 @@ export function createCloudsPass(
   // 每帧可变量（sun/altitude/cameraHeight/resolution）走闭包读 state/scene；静态量取 params。
   // ATMOSPHERE / densityProfile 已由 CloudsMaterial.ts const 注入，不在此声明。
   // viewMatrix/cameraNear/cameraFar 已由 CloudsMaterial.ts #define 重定向到 czm_*，不在此声明。
-  const cameraHeight = (): number => Cartesian3.magnitude(scene.camera.positionWC)
+  // cameraHeight：测地高度（米，ellipsoid 起算）——clouds.frag L745 与 minHeight/maxHeight（米）
+  // 比较（云层上下判定）。用 camera.positionCartographic.height（Cesium 内置换算，勿用
+  // |positionWC| 地心距——赤道海平面地心距 6.378e6 ≠ 测地高 0，会错走「相机在云上方」分支）。
+  const cameraHeight = (): number => scene.camera.positionCartographic.height
+  // resolution scratch：闭包持 module-scratch Cartesian2（避免每帧分配，仿 lensflare texelSizeForSourceScale）。
+  const resolutionScratch = new Cartesian2()
   const resolution = (): Cartesian2 => {
-    const ctx = (scene as unknown as { context: CesiumContext }).context
-    return new Cartesian2(ctx.drawingBufferWidth, ctx.drawingBufferHeight)
+    resolutionScratch.x = context.drawingBufferWidth
+    resolutionScratch.y = context.drawingBufferHeight
+    return resolutionScratch
   }
 
   const uniformMap: { [name: string]: () => unknown } = {
