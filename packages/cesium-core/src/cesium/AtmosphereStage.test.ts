@@ -122,6 +122,45 @@ describe('uniform 接线一致性', () => {
   })
 })
 
+// 水下相机防护（2026-08-15 bug：里海视角 camera=54.2518,37.3749,-12,... 天空黑、云正常）：
+// Bruneton 参数化定义域 r >= bottom_radius（GetScatteringTextureUvwzFromRMuMuSNu assert，
+// release GLSL 静默越界 → rho/transmittance 采样非法 → 天空黑）。Cesium 允许相机入水
+// （里海水面 WGS84 椭球高约 -28m，拖动可到水下），须在进入大气计算前把相机沿径向
+// clamp 到地表——水下深度不含大气（光路从水面起算），物理等价。
+describe('水下相机防护（Bruneton 定义域 r>=bottom_radius）', () => {
+  const CLAMP_ANCHOR = 'ATMOSPHERE.bottom_radius / cameraRadius'
+
+  it.each([
+    ['atmosphere（B 路径全分支）', {}],
+    ['sky-only', { sky: true }]
+  ])('%s 的 main 包含相机径向 clamp', (_name, opts) => {
+    const s = buildAerialPerspectiveFragmentShader(opts)
+    expect(s).toContain(CLAMP_ANCHOR)
+  })
+
+  it('clamp 位于 reconstructRay 之后（视线方向仍由原始相机位置差分构造，clamp 平移不影响）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    const rayIdx = s.indexOf('reconstructRay(cameraPosition, rayDirection);')
+    const clampIdx = s.indexOf(CLAMP_ANCHOR)
+    expect(rayIdx).toBeGreaterThan(0)
+    expect(clampIdx).toBeGreaterThan(rayIdx)
+  })
+
+  // 第二根因：c = dot(o,o)-R² 是 4e7 量级 float32 减法，ULP 噪声 ±4km²（±16m 深度）——
+  // 贴地/水下相机的 hitBottom/tHitG 判定被舍入支配（-12m 实测落"球内"→GROUND 分支→黑）。
+  // 修复 = 因式分解 (r-R)(r+R) + max 钉非负（相机语义不在球内）。
+  it('球求交判别式用稳定因式分解（rayForwardHitsSphere 与 main cG 双处）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    const stableForm = 'max((rO - R) * (rO + R), 0.0)'
+    const stableFormG = 'max((rCamG - bottomR) * (rCamG + bottomR), 0.0)'
+    expect(s).toContain(stableForm)
+    expect(s).toContain(stableFormG)
+    // 原始 dot 形式不得残留在这两处（防回归）
+    expect(s).not.toContain('float c = dot(o, o) - R * R;')
+    expect(s).not.toContain('float cG = dot(cameraPosition, cameraPosition) - bottomR * bottomR;')
+  })
+})
+
 describe('buildAtmosphereUniforms', () => {
   it('cosSunAngularRadius = cos(SUN_ANGULAR_RADIUS)', () => {
     const uniforms = buildAtmosphereUniforms(stubLuts, validateAtmosphereOptions({}), makeState())

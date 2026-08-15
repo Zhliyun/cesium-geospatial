@@ -118,9 +118,16 @@ void reconstructRay(const vec3 cameraPosition, out vec3 rd) {
   rd = normalize((czm_inverseView * vec4(normalize(dirEC), 0.0)).xyz);
 }
 // 射线 o+t·d 与半径 R 的球是否存在 t>eps 的前向交点（源库 rayForwardHitsSphere）。
+// 【float32 稳定化】c = dot(o,o)-R² 是 4e7 量级减法，ULP 噪声 ±4km²（等效 ±16m 深度）——
+// 相机贴地/水下（已 clamp 到面）时 c 的符号被舍入支配：噪声偏负（"球内"）时天顶视线也判
+// 前向穿球（-b+s>0）→ lookingAtGround=true → GROUND 分支 tHitG≈水下深度 → inscatter≈0 →
+// 天空黑（2026-08-15 里海 -12m bug 第二根因）。改因式分解 (r-R)(r+R)（r 的量化误差
+// ±0.25m → c 误差 ±3km²）并用 max 钉死非负：本管线相机语义上不在球内（水下深度已在 main
+// clamp 到地表），c≥0 恒成立——天顶视线（b>0）s≤b → 无前向交点，稳定走 SKY。
 bool rayForwardHitsSphere(vec3 o, vec3 d, float R) {
   float b = dot(o, d);
-  float c = dot(o, o) - R * R;
+  float rO = length(o);
+  float c = max((rO - R) * (rO + R), 0.0);
   float disc = b * b - c;
   if (disc < 0.0) return false;
   float s = sqrt(disc);
@@ -343,6 +350,17 @@ void main() {
   vec3 cameraPosition = (czm_viewerPositionWC + altitudeCorrection) * METER_TO_LENGTH_UNIT;
   vec3 rayDirection;
   reconstructRay(cameraPosition, rayDirection);
+  // 【水下相机防护】Bruneton 参数化定义域 r >= bottom_radius（GetScatteringTextureUvwzFromRMuMuSNu
+  // assert r>=bottom，release GLSL 静默越界 → rho=SafeSqrt clamp 0 / transmittance x_r 越界 → 天空黑、
+  // 云正常——云层 750m+ 求交对相机入水稳健，仅大气天空/地面分支受害）。Cesium 允许相机入水
+  // （里海水面 WGS84 椭球高约 -28m，拖动可停在水下）。沿径向 clamp 到地表：水下深度不含大气
+  // （光路从水面起算），物理等价。reconstructRay 的 camera 是 const（视线方向由近平面差分），
+  // 先重建视线再平移——clamp 的米级平移对视线方向影响 ~1e-8 可忽略；后续 sky/ground 全部
+  // 大气计算（含 lookingAtGround 判定）统一消费 clamp 后的 cameraPosition。
+  float cameraRadius = length(cameraPosition);
+  if (cameraRadius < ATMOSPHERE.bottom_radius) {
+    cameraPosition *= ATMOSPHERE.bottom_radius / cameraRadius;
+  }
   vec3 radialOut = normalize(cameraPosition);
   // 视线与径向（天顶方向）余弦：垂直俯视 |muLook|→1，掠射 |muLook|→0。平滑、不读 depth、无循环依赖
   //（Phase 1.2 5-tap 视角自适应门控用；绝不用 mask/sceneDist 门控——判定信号本身在抖会造边界条纹）。
@@ -432,8 +450,11 @@ void main() {
   float fragmentAngle = length(dFdx(rayDirection) + dFdy(rayDirection)) / length(rayDirection);
 
   // 椭球面交点判别（ground inscatter 距离 tHitG 用，所有地面像素统一）。
+  // cG 同 rayForwardHitsSphere 的 float32 稳定化（因式分解 + max 钉非负——相机语义不在球内，
+  // 水下已 clamp 到面；原 dot(o,o)-R² 的 ±4km² 舍入噪声会让贴地像素的 discG/tHitG 噪声翻转）。
   float bG = dot(cameraPosition, rayDirection);
-  float cG = dot(cameraPosition, cameraPosition) - bottomR * bottomR;
+  float rCamG = length(cameraPosition);
+  float cG = max((rCamG - bottomR) * (rCamG + bottomR), 0.0);
   float discG = bG * bG - cG;
 
   // —— DUAL inscatter：平滑基线 + depth 前景雾，mask 过渡带终点在地平线 → 分界线与地平线重合 ——
