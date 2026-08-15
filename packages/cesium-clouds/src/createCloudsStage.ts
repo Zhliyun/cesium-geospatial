@@ -298,12 +298,15 @@ export function createCloudsStage(
         state.altitudeCorrection
       )
 
-      // 太阳方向：inertial 系位置 → ICRF-to-Fixed → ECEF，单位化
+      // 太阳方向：inertial 系位置 → central-body-fixed → ECEF，单位化。
+      // 【ICRF 竞态修复 2026-08-16】与 AtmosphereStage 同款切换
+      // computeIcrfToFixedMatrix → computeIcrfToCentralBodyFixedMatrix（XYS 懒加载竞态 +
+      // 网络依赖 → GMST fallback 恒有值；详见 AtmosphereStage.ts 同位注释）。
       const sunInertial = Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(
         time,
         sunInertialScratch
       )
-      const icrfToFixed = Transforms.computeIcrfToFixedMatrix(time, icrfScratch)
+      const icrfToFixed = Transforms.computeIcrfToCentralBodyFixedMatrix(time, icrfScratch)
       if (icrfToFixed != null && sunInertial != null) {
         const sunFixed = Matrix3.multiplyByVector(icrfToFixed, sunInertial, sunInertial)
         const sunMag = Cartesian3.magnitude(sunFixed)

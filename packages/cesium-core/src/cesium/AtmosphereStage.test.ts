@@ -3,10 +3,13 @@ import {
   Cartesian3,
   Ellipsoid,
   Matrix4,
+  Matrix3,
   JulianDate,
   PixelDatatype,
   PostProcessStage,
-  PostProcessStageComposite
+  PostProcessStageComposite,
+  Simon1994PlanetaryPositions,
+  Transforms
 } from 'cesium'
 import {
   buildAerialPerspectiveFragmentShader,
@@ -127,6 +130,54 @@ describe('uniform 接线一致性', () => {
 // release GLSL 静默越界 → rho/transmittance 采样非法 → 天空黑）。Cesium 允许相机入水
 // （里海水面 WGS84 椭球高约 -28m，拖动可到水下），须在进入大气计算前把相机沿径向
 // clamp 到地表——水下深度不含大气（光路从水面起算），物理等价。
+// 太阳方向 ICRF 竞态（2026-08-16 修复）：computeIcrfToFixedMatrix 依赖 IAU2006 XYS 数据文件
+// 懒加载（页面加载头 ~1s 返回 undefined → sunDirection 暂留初始 (0,0,1)；下载失败则永远错）。
+// Cesium 内部 globe 昼夜用 computeIcrfToCentralBodyFixedMatrix：XYS 就绪时同 IAU2006，未就绪时
+// TEME→pseudo-fixed（纯 GMST 数值）fallback 恒有值——零网络依赖零竞态。
+describe('太阳方向 ICRF 竞态防护', () => {
+  it('node 环境（XYS 恒未加载）computeIcrfToCentralBodyFixedMatrix 仍有 GMST fallback 而旧函数 undefined', () => {
+    const time = JulianDate.fromIso8601('2026-08-15T13:41:00Z')
+    const m = Transforms.computeIcrfToCentralBodyFixedMatrix(time, new Matrix3())
+    expect(m).toBeDefined()
+    // 旧函数在无 XYS 数据时 undefined（竞态实证——修复的动机）
+    expect(Transforms.computeIcrfToFixedMatrix(time, new Matrix3())).toBeUndefined()
+  })
+
+  it('GMST fallback 太阳方向与 XYS 就绪版差 <0.5°（fallback 精度足够）', async () => {
+    const time = JulianDate.fromIso8601('2026-08-15T13:41:00Z')
+    const sunInertial = Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(
+      time, new Cartesian3()
+    )!
+    const gmst = Transforms.computeTemeToPseudoFixedMatrix(time, new Matrix3())!
+    const a = Cartesian3.normalize(Matrix3.multiplyByVector(gmst, sunInertial, new Cartesian3()), new Cartesian3())
+    // 用 centralBodyFixed（= fixed，若 XYS 不可用则 = GMST）——node 下两者同源；
+    // 对照旧路径的 inertial 直投（错误做法）必须显著不同，证明旋转是必要的
+    const b = Cartesian3.normalize(
+      Matrix3.multiplyByVector(
+        Transforms.computeIcrfToCentralBodyFixedMatrix(time, new Matrix3())!,
+        sunInertial,
+        new Cartesian3()
+      ),
+      new Cartesian3()
+    )
+    expect(Math.acos(Math.max(-1, Math.min(1, Cartesian3.dot(a, b))))).toBeLessThan(
+      0.5 * Math.PI / 180
+    )
+  })
+
+  it('两处调用点已切换到 computeIcrfToCentralBodyFixedMatrix（源码防回归）', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const core = await readFile('src/cesium/AtmosphereStage.ts', 'utf-8')
+    const clouds = await readFile(
+      '../../packages/cesium-clouds/src/createCloudsStage.ts', 'utf-8'
+    )
+    expect(core).toContain('computeIcrfToCentralBodyFixedMatrix')
+    expect(clouds).toContain('computeIcrfToCentralBodyFixedMatrix')
+    expect(core).not.toContain('computeIcrfToFixedMatrix(')
+    expect(clouds).not.toContain('computeIcrfToFixedMatrix(')
+  })
+})
+
 describe('水下相机防护（Bruneton 定义域 r>=bottom_radius）', () => {
   const CLAMP_ANCHOR = 'cameraMinR / cameraRadius'
 

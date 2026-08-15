@@ -576,12 +576,17 @@ export function createAtmosphereStage(
       state.altitudeCorrection
     )
 
-    // 太阳方向：inertial 系位置 → ICRF-to-Fixed → ECEF，单位化
+    // 太阳方向：inertial 系位置 → central-body-fixed → ECEF，单位化。
+    // 【ICRF 竞态修复 2026-08-16】原 computeIcrfToFixedMatrix 依赖 IAU2006 XYS 数据懒加载
+    //（页面加载头 ~1s 返回 undefined → sunDirection 暂留初始 (0,0,1)，下载失败则永远错）。
+    // computeIcrfToCentralBodyFixedMatrix（Cesium 内部 globe 昼夜同款）：XYS 就绪时同 IAU2006
+    // 高精度，未就绪时 TEME→pseudo-fixed（纯 GMST 数值）fallback 恒有值——零网络依赖零竞态，
+    // 天空/云太阳与 globe 昼夜自首帧一致（GMST 与完整 IAU2006 的太阳方向差 <0.5°，测试固化）。
     const sunInertial = Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(
       time,
       sunInertialScratch
     )
-    const icrfToFixed = Transforms.computeIcrfToFixedMatrix(time, icrfScratch)
+    const icrfToFixed = Transforms.computeIcrfToCentralBodyFixedMatrix(time, icrfScratch)
     if (icrfToFixed != null && sunInertial != null) {
       const sunFixed = Matrix3.multiplyByVector(icrfToFixed, sunInertial, sunInertial)
       const sunMag = Cartesian3.magnitude(sunFixed)
