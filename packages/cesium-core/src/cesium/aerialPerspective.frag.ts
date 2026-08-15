@@ -355,13 +355,20 @@ void main() {
   // 【水下相机防护】Bruneton 参数化定义域 r >= bottom_radius（GetScatteringTextureUvwzFromRMuMuSNu
   // assert r>=bottom，release GLSL 静默越界 → rho=SafeSqrt clamp 0 / transmittance x_r 越界 → 天空黑、
   // 云正常——云层 750m+ 求交对相机入水稳健，仅大气天空/地面分支受害）。Cesium 允许相机入水
-  // （里海水面 WGS84 椭球高约 -28m，拖动可停在水下）。沿径向 clamp 到地表：水下深度不含大气
+  // （里海水面 WGS84 椭球高约 -28m，拖动可停在水下）。沿径向 clamp：水下深度不含大气
   // （光路从水面起算），物理等价。reconstructRay 的 camera 是 const（视线方向由近平面差分），
   // 先重建视线再平移——clamp 的米级平移对视线方向影响 ~1e-8 可忽略；后续 sky/ground 全部
   // 大气计算（含 lookingAtGround 判定）统一消费 clamp 后的 cameraPosition。
+  // 【clamp 下限 = 面上 10m（根因 4）】若精确 clamp 到面（h=0），cG=(r-R)(r+R)=0 → 贴地微俯视线的
+  // 椭球交点距离 tHitG 全塌 0（-bG-sG = |bG|-sqrt(bG²)=0）→ GROUND 基线 inscatter 距离 0 →
+  // 地平线/远水面无大气散射（用户 2026-08-16：54.2517,37.3744,-7,287.2,3.0 远处地平线黑）。
+  // 下限 10m：视觉不可分辨的高度，但 cG=0.01×12720≈127km² → 地平线微俯视线交点距离恢复
+  // 公里级（θ=0.05° 时 ~11km），地平线散射回归。
+  const float CAMERA_MIN_ALT_KM = 0.01;
   float cameraRadius = length(cameraPosition);
-  if (cameraRadius < ATMOSPHERE.bottom_radius) {
-    cameraPosition *= ATMOSPHERE.bottom_radius / cameraRadius;
+  float cameraMinR = ATMOSPHERE.bottom_radius + CAMERA_MIN_ALT_KM;
+  if (cameraRadius < cameraMinR) {
+    cameraPosition *= cameraMinR / cameraRadius;
   }
   vec3 radialOut = normalize(cameraPosition);
   // 视线与径向（天顶方向）余弦：垂直俯视 |muLook|→1，掠射 |muLook|→0。平滑、不读 depth、无循环依赖

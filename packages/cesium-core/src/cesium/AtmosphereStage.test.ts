@@ -128,7 +128,7 @@ describe('uniform 接线一致性', () => {
 // （里海水面 WGS84 椭球高约 -28m，拖动可到水下），须在进入大气计算前把相机沿径向
 // clamp 到地表——水下深度不含大气（光路从水面起算），物理等价。
 describe('水下相机防护（Bruneton 定义域 r>=bottom_radius）', () => {
-  const CLAMP_ANCHOR = 'ATMOSPHERE.bottom_radius / cameraRadius'
+  const CLAMP_ANCHOR = 'cameraMinR / cameraRadius'
 
   it.each([
     ['atmosphere（B 路径全分支）', {}],
@@ -167,6 +167,12 @@ describe('水下相机防护（Bruneton 定义域 r>=bottom_radius）', () => {
     expect(s).toContain('(-b - s > 1e-3) || (-b + s > 1e-3)')
     expect(s).not.toContain('(-b - s > 1e-6) || (-b + s > 1e-6)')
     expect(s).toContain('tHitG = max(tHitG, 0.0);')
+  })
+
+  it('clamp 下限 = 面上 10m（防地平线散射塌 0：h=0 时 cG=0 → tHitG 全塌 0 → 地平线无散射）', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    expect(s).toContain('CAMERA_MIN_ALT_KM = 0.01')
+    expect(s).toContain('float cameraMinR = ATMOSPHERE.bottom_radius + CAMERA_MIN_ALT_KM;')
   })
 })
 
