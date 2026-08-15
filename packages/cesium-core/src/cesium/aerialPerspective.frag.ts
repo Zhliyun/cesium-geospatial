@@ -118,12 +118,14 @@ void reconstructRay(const vec3 cameraPosition, out vec3 rd) {
   rd = normalize((czm_inverseView * vec4(normalize(dirEC), 0.0)).xyz);
 }
 // 射线 o+t·d 与半径 R 的球是否存在 t>eps 的前向交点（源库 rayForwardHitsSphere）。
-// 【float32 稳定化】c = dot(o,o)-R² 是 4e7 量级减法，ULP 噪声 ±4km²（等效 ±16m 深度）——
-// 相机贴地/水下（已 clamp 到面）时 c 的符号被舍入支配：噪声偏负（"球内"）时天顶视线也判
-// 前向穿球（-b+s>0）→ lookingAtGround=true → GROUND 分支 tHitG≈水下深度 → inscatter≈0 →
-// 天空黑（2026-08-15 里海 -12m bug 第二根因）。改因式分解 (r-R)(r+R)（r 的量化误差
-// ±0.25m → c 误差 ±3km²）并用 max 钉死非负：本管线相机语义上不在球内（水下深度已在 main
-// clamp 到地表），c≥0 恒成立——天顶视线（b>0）s≤b → 无前向交点，稳定走 SKY。
+// 【float32 稳定化 ×2】贴地/水下相机（已 clamp 到面，c 被 max 钉 0）时该判定两度被舍入支配：
+//   ① c = dot(o,o)-R² 是 4e7 量级减法，ULP 噪声 ±4km²（±16m）——符号噪声偏负（"球内"）时
+//     天顶视线也判前向穿球 → GROUND 分支 tHitG≈水下深度 → inscatter≈0 → 天空黑（-12m bug）。
+//     已改因式分解 (r-R)(r+R) + max 钉非负。
+//   ② c=0 时 disc=b²，sqrt(b²) 的舍入可比 b 大 1 ULP（b~2462km 时 ULP=0.00024km）——
+//     -b+s = +0.00024 > 旧阈值 1e-6 → hitBottom 假阳性，sqrt 舍入方向随像素间 b 值伪随机
+//     → ~69% 像素翻转 = 天空黑白雪花（-31m bug）。阈值 1e-6（1mm）→ 1e-3（1m）：
+//     1m 内的前向交点物理无意义（远小于任何地形尺度），ULP 噪声 0.00024 < 0.001 被稳定排除。
 bool rayForwardHitsSphere(vec3 o, vec3 d, float R) {
   float b = dot(o, d);
   float rO = length(o);
@@ -131,7 +133,7 @@ bool rayForwardHitsSphere(vec3 o, vec3 d, float R) {
   float disc = b * b - c;
   if (disc < 0.0) return false;
   float s = sqrt(disc);
-  return (-b - s > 1e-6) || (-b + s > 1e-6);
+  return (-b - s > 1e-3) || (-b + s > 1e-3);
 }
 // 相机是否在大气壳层（bottom < r < top），源库 cameraInAtmosphereShell。
 bool cameraInAtmosphereShell(vec3 o, float bottomR, float topR) {
@@ -468,6 +470,9 @@ void main() {
     float sG = sqrt(discG);
     tHitG = -bG - sG;
     if (tHitG <= 1e-6) tHitG = -bG + sG;
+    // sqrt(b²-c) 的舍入噪声同 rayForwardHitsSphere ②：贴地（c≈0）时 -bG+sG ≈ ±ULP(2462km)=±0.24m
+    // 抖动——钉非负防 scenePos 落到相机背后（d=length 反而正确但参数化怪）。
+    tHitG = max(tHitG, 0.0);
   }
   vec3 transmittance = vec3(1.0);
   vec3 inscatter = vec3(0.0);

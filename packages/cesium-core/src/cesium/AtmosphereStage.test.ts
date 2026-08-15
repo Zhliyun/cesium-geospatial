@@ -149,6 +149,8 @@ describe('水下相机防护（Bruneton 定义域 r>=bottom_radius）', () => {
   // 第二根因：c = dot(o,o)-R² 是 4e7 量级 float32 减法，ULP 噪声 ±4km²（±16m 深度）——
   // 贴地/水下相机的 hitBottom/tHitG 判定被舍入支配（-12m 实测落"球内"→GROUND 分支→黑）。
   // 修复 = 因式分解 (r-R)(r+R) + max 钉非负（相机语义不在球内）。
+  // 第三根因（-31m 黑白雪花）：c=0 时 sqrt(b²) 舍入可比 b 大 1 ULP（b~2462km 时 0.00024km），
+  // -b+s > 1e-6 旧阈值假阳性 → ~69% 像素 hitBottom 伪随机翻转。阈值 1e-6→1e-3（1m，物理无意义尺度）。
   it('球求交判别式用稳定因式分解（rayForwardHitsSphere 与 main cG 双处）', () => {
     const s = buildAerialPerspectiveFragmentShader({})
     const stableForm = 'max((rO - R) * (rO + R), 0.0)'
@@ -158,6 +160,13 @@ describe('水下相机防护（Bruneton 定义域 r>=bottom_radius）', () => {
     // 原始 dot 形式不得残留在这两处（防回归）
     expect(s).not.toContain('float c = dot(o, o) - R * R;')
     expect(s).not.toContain('float cG = dot(cameraPosition, cameraPosition) - bottomR * bottomR;')
+  })
+
+  it('前向交点阈值 1e-3（1m，排除 sqrt 舍入 ULP 假阳性）+ tHitG 钉非负', () => {
+    const s = buildAerialPerspectiveFragmentShader({})
+    expect(s).toContain('(-b - s > 1e-3) || (-b + s > 1e-3)')
+    expect(s).not.toContain('(-b - s > 1e-6) || (-b + s > 1e-6)')
+    expect(s).toContain('tHitG = max(tHitG, 0.0);')
   })
 })
 
