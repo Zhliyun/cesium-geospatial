@@ -368,6 +368,10 @@ async function main(): Promise<void> {
           // M3 BSM 云自阴影诊断基线：?cloudsShadow=0 跳过 ShadowPass（主 march fallback
           // 全 0 dummy → Beer=1 无自阴影；开/关对比云体积感用）
           ...(getString('cloudsShadow') === '0' ? { shadowPass: false } : {}),
+          // M4 temporal 开关（默认开）：?cloudsTemporal=0 云端回 M3（全分 march 无 resolve）；
+          // ?cloudsShadowTemporal=0 BSM 端回 M3（无 velocity 层/无 resolve）
+          ...(getString('cloudsTemporal') === '0' ? { temporal: false } : {}),
+          ...(getString('cloudsShadowTemporal') === '0' ? { shadowTemporal: false } : {}),
           // 云 overlay 曝光（默认 10 对齐 three 版 storybook 标定；偏灰调大/过曝调小）
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {})
         })
@@ -376,7 +380,7 @@ async function main(): Promise<void> {
           cloudsHandle
         if (cloudsHandle != null) {
           console.info(
-            '[phase3-clouds] M3 BSM 云自阴影已接线（?cloudsShadow=0 关闭对比；?cloudsDebug=4 可视化 BSM）'
+            '[phase3-clouds] M4 temporal 已接线（1/4 分 march + Bayer 重建；?cloudsTemporal=0/?cloudsShadowTemporal=0 诊断基线；?cloudsShadow=0 无自阴影）'
           )
         }
       } catch (err) {
