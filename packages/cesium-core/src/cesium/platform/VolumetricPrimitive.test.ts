@@ -10,8 +10,10 @@ import { describe, it, expect, vi } from 'vitest'
 // vi.mock('cesium')：VolumetricPrimitive 运行时 import Framebuffer + RenderState，需 mock。
 // Framebuffer mock：记 destroyAttachments + colorTextures 引用（断言 MRT 装配）+ destroy spy。
 // RenderState.fromCache mock：返回带 id 的缓存实例（断言 spike 坑#2 renderState.id 存在）。
-vi.mock('cesium', () => {
+vi.mock('cesium', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
   return {
+    ...actual, // M4：BoundingSphere/Cartesian3 保真（排序护甲球用真实现）
     Framebuffer: function (this: any, opts: any) {
       this.colorTextures = opts.colorTextures
       this.destroyAttachments = opts.destroyAttachments
@@ -207,5 +209,33 @@ describe('M4 viewport 选项', () => {
     prim.update(frameState)
     const rs = (frameState.commandList[0] as any).renderState as { opts: any }
     expect(rs.opts.viewport).toBeUndefined()
+  })
+})
+
+// M4 T8：backToFront 排序护甲——voxels pass 多 command（march+resolve）时 mergeSort 读
+// command.boundingVolume（undefined 炸，实测）；共享等距球 → 稳定排序保 push 顺序。
+describe('M4 boundingVolume 排序护甲', () => {
+  it('command.boundingVolume 存在（等距共享球，backToFront 不炸 + mergeSort 稳定）', () => {
+    const ctx = createMockContext()
+    const prim = createVolumetricPrimitive({
+      context: ctx,
+      fragmentShaderSource: 'void main(){}',
+      uniformMap: {},
+      mrtColorTextures: createMockTextures(),
+    })
+    const frameState = { commandList: [] as any[] }
+    prim.update(frameState)
+    const bv = (frameState.commandList[0] as any).boundingVolume
+    expect(bv).toBeDefined()
+    expect(typeof bv.distanceSquaredTo).toBe('function') // backToFront 消费接口
+    // 两实例共享同一球（等距 → mergeSort 比较恒 0 → 稳定保序）
+    const prim2 = createVolumetricPrimitive({
+      context: ctx,
+      fragmentShaderSource: 'void main(){}',
+      uniformMap: {},
+      mrtColorTextures: createMockTextures(),
+    })
+    prim2.update(frameState)
+    expect((frameState.commandList[1] as any).boundingVolume).toBe(bv)
   })
 })

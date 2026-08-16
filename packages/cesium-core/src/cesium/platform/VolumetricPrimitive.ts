@@ -18,7 +18,7 @@
 // globe depth 访问（spec 附录 F5）：私有 API scene._view.globeDepth.depthStencilTexture。
 // 调用方可通过 globeDepthTexture 闭包注入（隔离私有 API 访问，本类不直接耦合 scene._view）。
 
-import { Framebuffer, RenderState, BoundingRectangle } from 'cesium'
+import { Framebuffer, RenderState, BoundingRectangle, BoundingSphere, Cartesian3 } from 'cesium'
 import type { Context, DrawCommand, Texture } from 'cesium'
 
 // Pass.VOXELS=10（Renderer/Pass.js:27）。@private 不在公开 .d.ts，用字面量常量 + 源码行号注释
@@ -26,6 +26,13 @@ import type { Context, DrawCommand, Texture } from 'cesium'
 // （Scene.js:2756 performPass(GLOBE) → :2934 performVoxelsPass）→ globe depthTexture 在 VOXELS
 // 执行时已就绪。
 const PASS_VOXELS = 10
+
+// voxels pass 的 backToFront 排序（Scene.js performVoxelsPass → mergeSort）读 command.
+// boundingVolume——createViewportQuadCommand 不设它，单 command 时 mergeSort 不触发比较、
+// 多 command（M4：march + resolve 两实例）时 undefined.distanceSquaredTo 炸（实测 M4 T8 smoke）。
+// 共享排序球：两 command 到相机距离相等 → 比较结果恒 0 → mergeSort 稳定保 push 顺序
+//（march 先、resolve 后——本平台 add 顺序即渲染顺序的契约依据）。
+const VOXELS_SORT_BOUNDING_VOLUME = new BoundingSphere(Cartesian3.ZERO, 1.0)
 
 export interface VolumetricPrimitiveOptions {
   /** Cesium Context（从 scene.context 取）。 */
@@ -121,6 +128,9 @@ export function createVolumetricPrimitive(
     pass: options.pass ?? PASS_VOXELS,
     renderState,
   })
+  // backToFront 排序护甲（见 VOXELS_SORT_BOUNDING_VOLUME 注释）：等距共享球 → 多 command
+  // 稳定排序保 push 顺序（march 先 resolve 后）
+  ;(cmd as { boundingVolume?: BoundingSphere }).boundingVolume = VOXELS_SORT_BOUNDING_VOLUME
 
   // ── Destroyable 三件套（spike 坑#1）。destroy 幂等（防 PrimitiveCollection.remove 内部 destroy
   //    + 本 primitive.destroy 双调）。
