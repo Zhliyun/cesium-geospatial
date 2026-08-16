@@ -167,13 +167,19 @@ export interface CloudsParameters {
    */
   shadowMarch: CloudsShadowMarchParameters
 
-  // ── reprojection（M4，M2 dummy）──
-  /** reprojectionMatrix：M2 identity（velocity 0，outputDepthVelocity 写 0 但 M2 不消费）。 */
+  // ── reprojection（M4 接通：createCloudsStage preRender 每帧写入 jittered 上帧矩阵）──
+  /** reprojectionMatrix：(prevP+jitter)*prevV（hitClouds 分支 velocity 用，world/ECEF 路径）。 */
   reprojectionMatrix: Matrix4
-  /** viewReprojectionMatrix：M2 identity。 */
+  /** viewReprojectionMatrix：reprojectionMatrix*invCurV（scene/ground 分支 velocity 用，view 路径）。 */
   viewReprojectionMatrix: Matrix4
-  /** temporalJitter：M2 (0,0)；M4 Bayer 4×4 抖动。 */
+  /** temporalJitter：Bayer 4×4 偏移（低分 UV 单位，preRender 每帧写；非 temporal 恒 (0,0)）。 */
   temporalJitter: Cartesian2
+
+  // ── M4 云 resolve 参数（three CloudsResolveMaterial 默认；demo 验收调参用）──
+  /** variance clipping γ（默认 2——upscale 场景大 γ 效果好，拖影换边缘，three 注释同款）。 */
+  temporalVarianceGamma: number
+  /** temporal 混合 α（默认 0.1；upscale 分支不消费，TAA 分支用——编译对齐）。 */
+  temporalAlpha: number
 }
 
 /**
@@ -286,9 +292,16 @@ export function defaultCloudsParameters(): CloudsParameters {
       opticalDepthTailScale: 2
     },
 
-    // reprojection（M4，M2 dummy identity → velocity 0）
-    reprojectionMatrix: Matrix4.IDENTITY,
-    viewReprojectionMatrix: Matrix4.IDENTITY,
-    temporalJitter: new Cartesian2(0.0, 0.0)
+    // reprojection（M4：preRender 每帧经 temporalMath 覆写；此处默认值仅首帧前 fallback）。
+    // ⚠️ 勿用 Matrix4.IDENTITY 直接引用——那是 Object.freeze 的全局常量，preRender 的
+    // Matrix4.clone(result, …) 覆写会抛 TypeError（ESM 严格模式写冻结对象；同 M3 的
+    // shadowMatrices 坑）。new Matrix4() 构造即 identity 且可变。
+    reprojectionMatrix: new Matrix4(),
+    viewReprojectionMatrix: new Matrix4(),
+    temporalJitter: new Cartesian2(0.0, 0.0),
+
+    // M4 云 resolve（three CloudsResolveMaterial 默认）
+    temporalVarianceGamma: 2.0,
+    temporalAlpha: 0.1
   }
 }

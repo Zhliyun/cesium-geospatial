@@ -16,6 +16,18 @@
 //   - options.shadowPass=false（demo ?cloudsShadow=0）→ 诊断基线：不建 cascades/ShadowPass，
 //     state.shadow 恒 undefined → 主 march fallback dummy → Beer=1（无自阴影，M2 行为）
 //
+// M4 temporal 编排（plan D1/D2/D7）：
+//   - 云端（options.temporal≠false，demo ?cloudsTemporal=0 关）：march 1/4 分（CloudsPass
+//     temporalUpscale）→ CloudsResolvePass（第二个 VOXELS primitive，add 在 march 之后——
+//     同 pass 内 PrimitiveCollection 数组序即执行序）Bayer 4×4 全分重建 + velocity
+//     reprojection + variance clipping；overlay 的 u_cloudsBuffer 切读 resolve 输出
+//   - preRender 顺序：resolvePass.swapBuffers() 最前（等价 three render 后 swap）→
+//     params.frame++（march/BSM 生成端 frame uniform 已按各端 temporal 开关拆分绑定，
+//     单端关时不闪烁）→ Bayer jitter + reprojection 矩阵（temporalMath，ECEF 域 +
+//     preRender 完整视锥矩阵）→ BSM setCurrentMatrices（render 内部 prev=上帧、末尾存本帧）
+//   - BSM 端（options.shadowTemporal≠false）：ShadowPass temporalPass（velocity 层 +
+//     shadowResolve ping-pong，T5）；state.shadow.bsm = resolve 后 history（getter 自动）
+//
 // 集成（spec §4.3 + 附录 F4）：
 //   - CloudsPass 是 Primitive（非 PostProcessStage）→ cloudsBuffer（att0）必须用 bridge {_texture,_target}
 //     注入 overlay PostProcessStage uniform（不能用 uniform-name string，F4）
@@ -56,6 +68,12 @@ import {
   type CloudsFrameState,
   type CloudsPassOptions
 } from './CloudsPass'
+import { createCloudsResolvePass, type CloudsResolvePass } from './CloudsResolvePass'
+import {
+  computeTemporalJitter,
+  buildReprojectionMatrices,
+  type TemporalCameraSnapshot
+} from './temporalMath'
 import { CascadedShadowMaps } from './CascadedShadowMaps'
 import { createShadowPass, type ShadowPass } from './ShadowPass'
 import {
@@ -83,6 +101,17 @@ export interface CloudsStageOptions extends CloudsPassOptions {
    * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
    */
   shadowPass?: boolean
+  /**
+   * M4 云 temporal resolve 开关（默认 true）。true 时 march 降到 1/4 分 + CloudsResolvePass
+   * （Bayer 4×4 全分重建 + velocity reprojection + variance clipping）。false = 诊断基线
+   * （全分 march、无 resolve、overlay 直读 march att0——M2/M3 行为）。demo `?cloudsTemporal=0`。
+   */
+  temporal?: boolean
+  /**
+   * M4 BSM temporal resolve 开关（默认 true）。false = BSM 无 resolve（velocity 层不生成，
+   * M3 行为）。demo `?cloudsShadowTemporal=0`。
+   */
+  shadowTemporal?: boolean
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy。 */
@@ -157,7 +186,14 @@ export function createCloudsStage(
   if (options.clouds !== true) return undefined
 
   const ellipsoid = scene.globe.ellipsoid
-  const context = (scene as unknown as { context: Context }).context
+  // Cesium 公开 .d.ts 缺 drawingBufferWidth/Height（同 CloudsPass/ShadowPass 局部 augment 模式）
+  const context = (scene as unknown as {
+    context: Context & { drawingBufferWidth: number; drawingBufferHeight: number }
+  }).context
+
+  // ── M4 temporal 开关（默认开；URL 诊断基线可关）──
+  const temporal = options.temporal !== false
+  const shadowTemporal = options.shadowTemporal !== false
 
   // ── 业务参数同源（M3 T5 上提）：CloudsPass 与 ShadowPass/共享 uniform 段共用一份 ──
   // （若各自 defaultCloudsParameters() 会得两份独立对象——默认值恰好一致但参数化后漂移；
@@ -194,9 +230,11 @@ export function createCloudsStage(
   }
 
   // ── CloudsPass（custom Primitive pass=VOXELS + MRT + 全 business uniform）──
+  // M4 T6：temporal 时 temporalUpscale=true（march 1/4 分 + velocity 写 att1）
   const cloudsPass = createCloudsPass(scene, luts, weather, state, {
     ...options,
-    parameters: params
+    parameters: params,
+    temporalUpscale: temporal
   })
 
   // ── ShadowPass 生成端（options.shadowPass=false 跳过——诊断基线 Beer=1）──
@@ -223,8 +261,10 @@ export function createCloudsStage(
   // shadow uniformMap = 共享段（与主 march 同源闭包）+ BSM 专属（反投影矩阵 + shadowMarch 档
   // 平铺——Cesium uniformMap 不支持 struct；同名 maxIterationCount 等与主 march 档不同值，
   // 故 march 档不进共享段、各端自绑）。u_cascadeIndex 由 ShadowPass 内部注入（勿重复绑）。
+  // D7 frame 拆分：BSM 生成端的 stbn jitter 相位只在 shadowTemporal 开时递增（关 = M3 恒 0）。
   const shadowUniformMap: { [name: string]: () => unknown } = {
     ...buildSharedCloudsUniforms(scene, luts, weather, state, params, shadowTurbulenceDummy!),
+    frame: () => (shadowTemporal ? params.frame : 0),
     inverseShadowMatrices: () => inverseMatrices,
     // shadowMarch 档（qualityPresets.ts defaults.shadow：50/100/1000/1e-5/1e-5/1e-4/2）
     maxIterationCount: () => params.shadowMarch.maxIterationCount,
@@ -253,7 +293,9 @@ export function createCloudsStage(
         shaderOptions: {
           shapeDetail: options.shapeDetail ?? true,
           turbulence: options.turbulence ?? true
-        }
+        },
+        // M4：BSM temporal（velocity 层 + resolve ping-pong + prevMatrices 编排）
+        temporalPass: shadowTemporal
       })
     : undefined
 
@@ -264,6 +306,25 @@ export function createCloudsStage(
     shadowState.bsm = shadowPass?.bsmTexture
   }
 
+  // ── M4 云 resolve Pass（temporal 时；primitive add 在 march 之后——D1 执行顺序契约：
+  //    同 pass=VOXELS 内 PrimitiveCollection 数组序 → update 顺序 → commandList 序）──
+  const resolvePass: CloudsResolvePass | undefined = temporal
+    ? createCloudsResolvePass({
+        context,
+        width: context.drawingBufferWidth,
+        height: context.drawingBufferHeight,
+        pixelDatatype: resolveCloudsHdrDatatype(scene),
+        colorBuffer: cloudsPass.colorTexture,
+        depthVelocityBuffer: cloudsPass.depthVelocityTexture,
+        frame: () => params.frame,
+        varianceGamma: params.temporalVarianceGamma,
+        temporalAlpha: params.temporalAlpha
+      })
+    : undefined
+  if (resolvePass != null) {
+    ;(scene.primitives as unknown as { add: (p: unknown) => void }).add(resolvePass.primitive)
+  }
+
   // ── overlay PostProcessStage（cloudsBuffer bridge + tonemap 输出 mix）──
   // sampleMode NEAREST：保护云边缘锐利（cloudsBuffer 是 raymarch 像素对齐数据纹理，LINEAR 会糊边缘）。
   // pixelDatatype UNSIGNED_BYTE：overlay 输出 display ready（已 ACES+gamma），下游无 HDR 需求。
@@ -272,7 +333,10 @@ export function createCloudsStage(
     fragmentShader: OVERLAY_SHADER,
     uniforms: {
       // bridge 每帧重新取（防 resize 后 colorTex 引用变更；M2 不处理 resize 但接口留动态）。
-      u_cloudsBuffer: () => cloudsPass.getColorBridge(),
+      // M4：temporal 时读 resolve 输出（全分重建后的 cloudsBuffer）；否则 march att0 直读
+      //（swap 后的 resolveRef 即本帧输出——overlay 在 PostProcess 阶段取值）。
+      u_cloudsBuffer: () =>
+        resolvePass != null ? resolvePass.getResolvedBridge() : cloudsPass.getColorBridge(),
       // 云曝光（three 版 ToneMapping exposure=10 标定；URL ?cloudsExposure=N 可调）
       u_cloudsExposure: options.cloudsOverlayExposure ?? CLOUDS_OVERLAY_EXPOSURE_DEFAULT
     },
@@ -284,9 +348,19 @@ export function createCloudsStage(
 
   // ── preRender：每帧更新 sunDirection（Simon1994 + ICRF→Fixed）+ altitudeCorrection（密切球）──
   // 仿 AtmosphereStage.ts:568-604。state 更新后 CloudsPass uniformMap 闭包自动反映（同引用）。
+  // M4 temporal 状态：上帧相机快照（velocity reprojection 用；首帧 undefined → fallback 当前
+  // 矩阵，velocity=0——three previousProjectionMatrix ?? camera.projectionMatrix 同款）。
+  let prevCamera: TemporalCameraSnapshot | undefined
   const removePreRender = scene.preRender.addEventListener(
     (_scene: Scene, time: JulianDate) => {
       const camera = scene.camera
+
+      // ── M4 temporal：swap 最前（D2：swap 后 history=上帧输出、resolve=待写）+ frame 递增
+      //    （D7：单端全关时不递增；march/BSM 生成端的 frame uniform 已按各端开关拆分绑定）──
+      resolvePass?.swapBuffers()
+      if (temporal || shadowTemporal) {
+        params.frame++
+      }
 
       // 密切球再中心化（相机侧；shader 内 camera/scenePos 都用全量 altitudeCorrection）。
       // bottomRadius = ATMOSPHERE_BOTTOM_RADIUS_M（云层 minHeight=750m ≪ atmosphere bottom，密切球 recenter
@@ -312,6 +386,31 @@ export function createCloudsStage(
         const sunMag = Cartesian3.magnitude(sunFixed)
         if (Number.isFinite(sunMag) && sunMag > 1e-15) {
           Cartesian3.normalize(sunFixed, state.sunDirection)
+        }
+      }
+
+      // ── M4 temporal：Bayer jitter + reprojection 矩阵（march ray 重建偏移 + velocity 两分支消费）──
+      // 矩阵域 ECEF（worldToECEF=identity）；preRender 时刻 frustum.projectionMatrix 为完整视锥
+      //（multi-frustum 分段前，velocity 数学只用投影 xy 系数与 w → 分段无关，plan D5）。
+      // 写入 params 的既有 Matrix4 实例（clone 覆写不换引用——uniformMap 闭包持引用）。
+      if (temporal) {
+        computeTemporalJitter(
+          params.frame,
+          cloudsPass.marchWidth,
+          cloudsPass.marchHeight,
+          params.temporalJitter
+        )
+        const viewMatrix = camera.viewMatrix
+        const projectionMatrix = (camera.frustum as unknown as { projectionMatrix: Matrix4 })
+          .projectionMatrix
+        buildReprojectionMatrices(prevCamera, viewMatrix, projectionMatrix, camera.inverseViewMatrix, params.temporalJitter, {
+          reprojectionMatrix: params.reprojectionMatrix,
+          viewReprojectionMatrix: params.viewReprojectionMatrix
+        })
+        // 帧末存本帧快照（clone——Cesium camera 矩阵是 live 引用，必须拷贝）
+        prevCamera = {
+          viewMatrix: Matrix4.clone(viewMatrix, new Matrix4()),
+          projectionMatrix: Matrix4.clone(projectionMatrix, new Matrix4())
         }
       }
 
@@ -349,6 +448,10 @@ export function createCloudsStage(
           shadowIntervals[i].x = cascades.cascades[i].interval.x
           shadowIntervals[i].y = cascades.cascades[i].interval.y
         }
+        // M4：本帧矩阵先登记（render 内部 velocity 用 prevMatrices=上帧、末尾 prev ← 本帧）
+        if (shadowPass != null) {
+          shadowPass.setCurrentMatrices(shadowMatrices)
+        }
         shadowState.cameraNear = near
         shadowState.far = far
         shadowState.bsm = shadowPass.bsmTexture
@@ -365,9 +468,10 @@ export function createCloudsStage(
       if (destroyed) return
       destroyed = true
       removePreRender()
-      // 顺序：先 CloudsPass（消费端，撤 bsm 引用）后 ShadowPass（释放 bsmTexture——T3
-      // concern #4），最后生成端 turbulence dummy
+      // 顺序：先 CloudsPass（消费端，撤 bsm 引用）→ 云 resolve（march 后第二个 VOXELS 实例）→
+      // ShadowPass（释放 bsmTexture——T3 concern #4），最后生成端 turbulence dummy
       cloudsPass.destroy()
+      resolvePass?.destroy()
       shadowPass?.destroy()
       shadowTurbulenceDummy?.destroy()
       // overlay：PostProcessStageCollection.remove 成功则内部已 destroy，失败则手动 destroy

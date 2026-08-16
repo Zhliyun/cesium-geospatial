@@ -54,6 +54,9 @@ vi.mock('./CloudsPass', () => ({
   createCloudsPass: vi.fn(() => ({
     primitive: { destroy: vi.fn() },
     colorTexture: { _texture: { id: 'att0' }, _target: 0x0de1 },
+    depthVelocityTexture: { _texture: { id: 'att1' }, _target: 0x0de1 },
+    marchWidth: 480, // ceil(1920/4)——M4 temporal jitter 计算的 lowRes
+    marchHeight: 270,
     getColorBridge: vi.fn(() => ({ _texture: { id: 'att0' }, _target: 0x0de1 })),
     destroy: vi.fn()
   })),
@@ -62,13 +65,36 @@ vi.mock('./CloudsPass', () => ({
 }))
 
 // vi.mock('./ShadowPass')：编排验证 createShadowPass 调用参数 + render/destroy 生命周期
-// （ShadowPass 自身在 ShadowPass.test.ts 注入工厂直测）。
+// （ShadowPass 自身在 ShadowPass.test.ts 注入工厂直测）。M4：补 setCurrentMatrices 桩
+// （preRender cascades.update 后调）。
 vi.mock('./ShadowPass', () => ({
   createShadowPass: vi.fn(() => ({
     bsmTexture: { tag: 'bsm-tex' },
     render: vi.fn(),
+    setCurrentMatrices: vi.fn(),
     destroy: vi.fn()
   }))
+}))
+
+// vi.mock('./CloudsResolvePass')：M4 T7——resolve pass 自身在 CloudsResolvePass.test.ts 直测；
+// 这里桩隔离，记录 createCloudsResolvePass 调用参数 + swapBuffers/getResolvedBridge 生命周期。
+const resolvePassProbe = {
+  calls: [] as any[],
+  instances: [] as any[]
+}
+vi.mock('./CloudsResolvePass', () => ({
+  createCloudsResolvePass: vi.fn((opts: any) => {
+    resolvePassProbe.calls.push(opts)
+    const inst = {
+      primitive: { tag: 'resolve-prim', update: vi.fn(), isDestroyed: () => false, destroy: vi.fn() },
+      resolvedTexture: { _texture: { id: 'resolve' }, _target: 0x0de1 },
+      swapBuffers: vi.fn(),
+      getResolvedBridge: vi.fn(() => ({ _texture: { id: 'resolve' }, _target: 0x0de1 })),
+      destroy: vi.fn()
+    }
+    resolvePassProbe.instances.push(inst)
+    return inst
+  })
 }))
 
 import { createCloudsStage, type CloudsStageOptions } from './createCloudsStage'
@@ -89,6 +115,8 @@ function createMockScene(): any {
       positionWC: new Cartesian3(6378137, 0, 0),
       // ECEF world 系相机位姿（three camera.matrixWorld 等价；CascadedShadowMaps 真实现消费）
       inverseViewMatrix: Matrix4.clone(Matrix4.IDENTITY),
+      // M4 T7：viewMatrix（jitter reprojection 用；静止相机 mock 用 identity）
+      viewMatrix: Matrix4.clone(Matrix4.IDENTITY),
       // 完整视锥 near/far + 透视投影矩阵（preRender 时刻值；far 5e6 > maxRayDistance 2e5 →
       // BSM far 取小后 2e5，验决策 D6）
       frustum: {
@@ -422,4 +450,133 @@ describe('createCloudsStage M3 T5 BSM 编排', () => {
 // JulianDate mock（preRender 回调签名第 2 参；真实 JulianDate 太重，mock 最小）
 function JulianDateMock(): any {
   return { dayNumber: 2458849, secondsOfDay: 50000 }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M4 T7：temporal 编排——resolve pass 拓扑 / frame 递增与拆分 / jitter/reprojection / swap
+// ─────────────────────────────────────────────────────────────────────────────
+import { JulianDate, Cartesian2 } from 'cesium'
+import { beforeEach } from 'vitest'
+import { createCloudsResolvePass } from './CloudsResolvePass'
+
+function firePreRender(scene: any): void {
+  scene._listeners.preRender.forEach((cb: (...args: unknown[]) => void) =>
+    cb(scene, JulianDate.fromIso8601('2026-08-15T13:41:00Z'))
+  )
+}
+
+describe('M4 T7 temporal 编排', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resolvePassProbe.calls.length = 0
+    resolvePassProbe.instances.length = 0
+  })
+
+  it('temporal 默认开：resolve pass 创建（march 之后）+ overlay bridge 切 resolve', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    expect(createCloudsResolvePass).toHaveBeenCalledTimes(1)
+    // 执行顺序契约（plan D1）：march 先建（primitive add 先），resolve 后——同 pass=VOXELS 内
+    // 的 PrimitiveCollection 数组序即渲染序。createCloudsPass 被 mock（内部 add 不真跑），
+    // 用 invocationCallOrder 验时序 + resolve 的 primitive 确实 add
+    const marchOrder = (createCloudsPass as any).mock.invocationCallOrder.at(-1)
+    const resolveOrder = (createCloudsResolvePass as any).mock.invocationCallOrder.at(-1)
+    expect(resolveOrder).toBeGreaterThan(marchOrder)
+    expect(scene.primitives.add).toHaveBeenCalledWith(resolvePassProbe.instances[0].primitive)
+    // resolve pass 构造参数：全分尺寸 + march att0/att1 + frame 闭包 + three 默认参数
+    const opts = resolvePassProbe.calls[0]
+    expect(opts.width).toBe(1920)
+    expect(opts.height).toBe(1080)
+    expect(opts.colorBuffer._texture.id).toBe('att0')
+    expect(opts.depthVelocityBuffer._texture.id).toBe('att1')
+    expect(opts.varianceGamma).toBe(2)
+    // overlay bridge 切 resolve 输出
+    const bridge = handle!.overlayStage.uniforms.u_cloudsBuffer()
+    expect((bridge as any)._texture.id).toBe('resolve')
+    handle!.destroy()
+  })
+
+  it('frame 每帧递增 + temporalJitter 写入 params（Bayer 相位随帧变化）+ preRender 开头 swap', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const inst = resolvePassProbe.instances[0]
+    firePreRender(scene)
+    firePreRender(scene)
+    // swap 每帧一次（D2：preRender 开头，等价 three render 后 swap）
+    expect(inst.swapBuffers).toHaveBeenCalledTimes(2)
+    // jitter 非 0（Bayer offset≠格中心时）且相邻帧相位不同
+    const j1 = Cartesian2.clone(
+      (handle!.cloudsPass as any) && paramsOf(handle!)!.temporalJitter
+    )
+    firePreRender(scene)
+    const j2 = paramsOf(handle!)!.temporalJitter
+    expect(j2.x).not.toBeCloseTo(j1.x, 6)
+    handle!.destroy()
+  })
+
+  it('viewReprojectionMatrix = reprojectionMatrix * inverseView（链式正确）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    firePreRender(scene)
+    firePreRender(scene)
+    const p = paramsOf(handle!)!
+    const expected = Matrix4.multiply(
+      p.reprojectionMatrix,
+      scene.camera.inverseViewMatrix,
+      new Matrix4()
+    )
+    expect(Matrix4.equals(p.viewReprojectionMatrix, expected)).toBe(true)
+    handle!.destroy()
+  })
+
+  it('temporal=false：不建 resolvePass、march temporalUpscale=false、frame 仍递增（BSM 默认 temporal）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      temporal: false
+    })
+    expect(createCloudsResolvePass).not.toHaveBeenCalled()
+    expect(scene.primitives.add).not.toHaveBeenCalled() // createCloudsPass 被 mock 不真 add——resolve 才会 add，此处 0 次
+    // overlay bridge 回 march att0
+    const bridge = handle!.overlayStage.uniforms.u_cloudsBuffer()
+    expect((bridge as any)._texture.id).toBe('att0')
+    firePreRender(scene)
+    expect(paramsOf(handle!)!.frame).toBe(1) // shadowTemporal 默认 true → BSM jitter 需要
+    // temporalJitter 恒 0（不计算）
+    expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
+    handle!.destroy()
+  })
+
+  it('temporal=false + shadowTemporal=false：frame 不递增（D7 单端全关 = M3 行为）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      temporal: false,
+      shadowTemporal: false
+    })
+    firePreRender(scene)
+    firePreRender(scene)
+    expect(paramsOf(handle!)!.frame).toBe(0)
+    // ShadowPass 构造传 temporalPass=false（M3 编译分支）
+    const shadowOpts = (createShadowPass as any).mock.calls.at(-1)[0]
+    expect(shadowOpts.temporalPass).toBe(false)
+    handle!.destroy()
+  })
+
+  it('destroy：resolvePass.destroy 在 cloudsPass 之后调用（顺序编排）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const inst = resolvePassProbe.instances[0]
+    handle!.destroy()
+    expect(inst.destroy).toHaveBeenCalledTimes(1)
+    handle!.destroy()
+    expect(inst.destroy).toHaveBeenCalledTimes(1) // 幂等
+  })
+})
+
+// params 提取 helper（defaultCloudsParameters 引用持有——createCloudsStage 内部 options.parameters
+// 未传时新建；经 createCloudsPass mock 调用参数捕获）
+function paramsOf(handle: NonNullable<ReturnType<typeof createCloudsStage>>): any {
+  const call = (createCloudsPass as any).mock.calls.at(-1)
+  return call?.[4]?.parameters ?? call?.[4] ?? null
 }
