@@ -11,6 +11,18 @@
 // 一次全屏 draw。Plan B（layer attach 不可用）：2D FBO + glCopyTexSubImage3D——render() 内部
 // 替换，接口不变。
 //
+// M4 T5 temporal 扩展（temporalPass=true 默认）：
+//   - 生成端 bsmTexture depth = cascadeCount*2（前 N 层 BSM 值、后 N 层 velocity：
+//     rgba=(frontDepth, velocity.xy, _)，velocity 为 texel 单位——`(vUv-prevUv)*resolution`
+//     生成、`*texelSize` resolve 端转回 UV，对称）
+//   - 每 cascade 单 draw 双 out（FBO 双 attach att0=层 i、att1=层 N+i；glDrawBuffers 设一次）
+//   - render() 内联 resolve：shadowResolve.frag（ShadowResolveMaterial 单 cascade 化）逐
+//     cascade 写 resolve Texture3D 层 i → swap（resolve↔history）→ prevMatrices ← 本帧
+//   - 编排契约：调用方每帧 cascades.update 后 setCurrentMatrices(本帧矩阵)；render 内部
+//     velocity 用 prevMatrices（上帧），首帧 identity → prevClip 巨值 → resolve 端 prevUv
+//     越界 rejection 返 current（安全降级，与 three 首帧语义一致）
+//   - bsmTexture getter：temporal 时返回 swap 后的 history（= 本帧 resolve 输出）
+//
 // 「不传 framebuffer 保留外部裸 FBO」机制（已核 Cesium Context.js 源码）：FullscreenPass 的
 // DrawCommand 不带 framebuffer → Context.draw 取 `command._framebuffer ?? passState.framebuffer`
 // = undefined → beginDraw → bindFramebuffer(context, undefined)——当 `undefined ===
@@ -27,15 +39,19 @@ import {
   TextureMagnificationFilter,
   TextureWrap,
   RenderState,
-  BoundingRectangle
+  BoundingRectangle,
+  Matrix4,
+  Cartesian2
 } from 'cesium'
 import type { Context } from 'cesium'
 import { FullscreenPass } from '@cesium-geospatial/core'
 import { buildCloudsShadowFragmentShader, type ShadowMainOptions } from './ShadowMaterial'
+import { buildShadowResolveFragmentShader } from './ShadowResolveMaterial'
 
 // 裸 GL 常量（WebGL2RenderingContext enum 值）
 const GL_FRAMEBUFFER = 0x8d40
 const GL_COLOR_ATTACHMENT0 = 0x8ce0
+const GL_COLOR_ATTACHMENT1 = 0x8ce1
 const GL_FRAMEBUFFER_COMPLETE = 0x8cd5
 const GL_FRAMEBUFFER_BINDING = 0x8ca6
 
@@ -71,17 +87,34 @@ export interface ShadowPassOptions {
   uniformMap: { [name: string]: () => unknown }
   /** T2 组装器编译分支开关（缺省全开）。 */
   shaderOptions?: ShadowMainOptions
+  /**
+   * M4 temporal 开关（默认 true）：velocity 层双 attach + resolve ping-pong。
+   * false = M3 行为（单 attach、无 velocity、无 resolve）——诊断基线。
+   */
+  temporalPass?: boolean
+  /** 测试注入 resolve draw pass 工厂；缺省同 createDrawPass。 */
+  createResolveDrawPass?: ShadowDrawPassFactory
   /** 测试注入 draw pass 工厂；缺省 FullscreenPass。 */
   createDrawPass?: ShadowDrawPassFactory
 }
 
 /** BSM 生成端 Pass 句柄（T4 消费 bsmTexture；T5 preRender 调 render）。 */
 export interface ShadowPass {
-  /** BSM 纹理（mapSize²×cascadeCount，sampler3D）——消费端 clouds.frag shadowBuffer uniform 直传。 */
+  /**
+   * BSM 纹理（mapSize²×depth，sampler3D）——消费端 clouds.frag shadowBuffer uniform 直传。
+   * temporal 时返回 swap 后的 history resolve 纹理（本帧 resolve 输出）；否则生成端 current。
+   */
   readonly bsmTexture: Texture3D
-  /** 生成一帧 BSM：N×(attach layer i → u_cascadeIndex=i → 全屏 draw)。preRender 调。 */
+  /** 生成一帧 BSM（temporal 时含 resolve + swap）。preRender 调。 */
   render(): void
-  /** 释放：裸 FBO + drawPass + bsmTexture。幂等。 */
+  /**
+   * M4：登记本帧 cascade 矩阵（cascades.update 后、render 前调）。
+   * render 内部 velocity 用上帧矩阵（prevMatrices），末尾 prev ← 本帧。
+   */
+  setCurrentMatrices(matrices: Matrix4[]): void
+  /** velocity 层 z 起点（= cascadeCount；temporalPass=false 时无效）。 */
+  readonly velocityLayerOffset: number
+  /** 释放：裸 FBO + drawPass + resolveDrawPass + 全部 Texture3D。幂等。 */
   destroy(): void
 }
 
@@ -128,7 +161,8 @@ function allocZeroedTexels(texelCount: number, pixelDatatype: number): Uint16Arr
 }
 
 /**
- * 创建 BSM 生成端 Pass（Texture3D + 裸 FBO + 逐 cascade 全屏 draw）。
+ * 创建 BSM 生成端 Pass（Texture3D + 裸 FBO + 逐 cascade 全屏 draw；temporal 时含 velocity
+ * 层 + resolve ping-pong）。
  *
  * @param options 见 ShadowPassOptions。
  */
@@ -137,31 +171,48 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
   const cascadeCount = options.cascadeCount
   const mapSize = options.mapSize
   const pixelDatatype = options.pixelDatatype ?? PixelDatatype.HALF_FLOAT
+  const temporalPass = options.temporalPass ?? true
   const gl = (context as unknown as { _gl: WebGL2RenderingContext })._gl
 
   // ── BSM 纹理（immutable storage——有 source 时 Cesium 走 texStorage3D，可逐层 attach）──
-  // LINEAR + CLAMP_TO_EDGE：消费端 sampleShadowOpticalDepth 三线性插值；R 维同样 clamp
-  // （Sampler.wrapR，3D 纹理第三维）。flipY=false——flipY=true 时 Cesium Texture3D 会
-  // console.warn 不支持。
-  const bsmTexture = new Texture3D({
-    context,
-    source: {
-      width: mapSize,
-      height: mapSize,
-      depth: cascadeCount,
-      arrayBufferView: allocZeroedTexels(mapSize * mapSize * cascadeCount * 4, pixelDatatype)
-    },
-    pixelFormat: PixelFormat.RGBA,
-    pixelDatatype,
-    sampler: new Sampler({
-      minificationFilter: TextureMinificationFilter.LINEAR,
-      magnificationFilter: TextureMagnificationFilter.LINEAR,
-      wrapS: TextureWrap.CLAMP_TO_EDGE,
-      wrapT: TextureWrap.CLAMP_TO_EDGE,
-      wrapR: TextureWrap.CLAMP_TO_EDGE
-    }),
-    flipY: false
-  })
+  // temporal 时 depth = cascadeCount*2（前 N 层 BSM 值、后 N 层 velocity：rgb=(frontDepth,
+  // velocity.xy, _)——velocity 为 texel 单位，`(vUv-prevUv)*resolution` 生成、`*texelSize`
+  // resolve 端转回 UV，对称）。LINEAR + CLAMP_TO_EDGE（消费端三线性插值，R 维同 clamp）；
+  // flipY=false（flipY=true 时 Cesium Texture3D 会 console.warn）。
+  const mkTex3D = (depth: number): Texture3D =>
+    new Texture3D({
+      context,
+      source: {
+        width: mapSize,
+        height: mapSize,
+        depth,
+        arrayBufferView: allocZeroedTexels(mapSize * mapSize * depth * 4, pixelDatatype)
+      },
+      pixelFormat: PixelFormat.RGBA,
+      pixelDatatype,
+      sampler: new Sampler({
+        minificationFilter: TextureMinificationFilter.LINEAR,
+        magnificationFilter: TextureMagnificationFilter.LINEAR,
+        wrapS: TextureWrap.CLAMP_TO_EDGE,
+        wrapT: TextureWrap.CLAMP_TO_EDGE,
+        wrapR: TextureWrap.CLAMP_TO_EDGE
+      }),
+      flipY: false
+    })
+  const layerDepth = temporalPass ? cascadeCount * 2 : cascadeCount
+  const bsmTexture = mkTex3D(layerDepth)
+
+  // ── M4 temporal：resolve ping-pong（两张 depth=N Texture3D）+ prevMatrices ──
+  let resolveTex: Texture3D | undefined = temporalPass ? mkTex3D(cascadeCount) : undefined
+  let historyTex: Texture3D | undefined = temporalPass ? mkTex3D(cascadeCount) : undefined
+  // prevMatrices：velocity 投影用上帧 cascade 矩阵（首帧 identity → prevClip 巨值 →
+  // resolve 端 prevUv 越界 rejection 返 current，安全降级——three 首帧同语义）
+  const prevMatrices: Matrix4[] = Array.from({ length: cascadeCount }, () =>
+    Matrix4.clone(Matrix4.IDENTITY)
+  )
+  const currentMatrices: Matrix4[] = Array.from({ length: cascadeCount }, () =>
+    Matrix4.clone(Matrix4.IDENTITY)
+  )
 
   // ── 裸 GL FBO（Cesium Framebuffer 不支持 attach Texture3D 单层——走 glFramebufferTextureLayer）──
   const fbo = gl.createFramebuffer()
@@ -169,13 +220,25 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
   // ── uniformMap：业务 uniform 展开 + u_cascadeIndex 注入覆盖（T2 shader 侧声明 uniform int；
   // render() 每 draw 前切值，同 shader 复用 ShaderProgram 缓存）。mutable 闭包。
   let cascadeIndex = 0
+  // velocity 的 texel 单位换算基底（前者 mapSize、后者 1/mapSize，对称）
+  const resolutionScratch = new Cartesian2(mapSize, mapSize)
+  const shadowTexelSize = new Cartesian2(1 / mapSize, 1 / mapSize)
   const uniformMap: { [name: string]: () => unknown } = {
     ...options.uniformMap,
-    u_cascadeIndex: () => cascadeIndex
+    u_cascadeIndex: () => cascadeIndex,
+    ...(temporalPass
+      ? {
+          resolution: () => resolutionScratch,
+          reprojectionMatrices: () => prevMatrices
+        }
+      : {})
   }
 
-  // ── draw pass（缺省 FullscreenPass；shader 用 T2 组装器）──
-  const fragmentShaderSource = buildCloudsShadowFragmentShader(options.shaderOptions)
+  // ── draw pass（缺省 FullscreenPass；shader 用 T2 组装器——temporalPass 传入编译分支）──
+  const fragmentShaderSource = buildCloudsShadowFragmentShader({
+    ...(options.shaderOptions ?? {}),
+    temporalPass
+  })
   const drawPass = (options.createDrawPass ?? defaultCreateDrawPass)(
     context,
     fragmentShaderSource,
@@ -183,21 +246,66 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
     mapSize
   )
 
+  // ── M4 resolve draw pass（temporal 时；shader 用 T3 ShadowResolveMaterial 单 cascade 化）──
+  // three ShadowResolveMaterial 默认：varianceGamma=1、temporalAlpha=0.01（BSM 单像素闪烁
+  // 显眼 → 极慢混合）
+  const resolveUniformMap: { [name: string]: () => unknown } = temporalPass
+    ? {
+        inputBuffer: () => bsmTexture, // 生成端 current（含 velocity 层）
+        historyBuffer: () => historyTex,
+        texelSize: () => shadowTexelSize,
+        varianceGamma: () => 1,
+        temporalAlpha: () => 0.01,
+        u_cascadeIndex: () => cascadeIndex
+      }
+    : {}
+  const resolveDrawPass =
+    temporalPass && resolveTex != null && historyTex != null
+      ? (options.createResolveDrawPass ?? defaultCreateDrawPass)(
+          context,
+          buildShadowResolveFragmentShader({ cascadeCount }),
+          resolveUniformMap,
+          mapSize
+        )
+      : undefined
+
   // Texture3D raw WebGLTexture handle（裸 FBO attach 用；私有 _texture，cast 访问）
   const rawTex = (bsmTexture as unknown as { _texture: WebGLTexture })._texture
 
   let destroyed = false
   return {
-    bsmTexture,
+    velocityLayerOffset: cascadeCount,
+    get bsmTexture(): Texture3D {
+      // temporal：resolve/history 已在 render 末尾 swap——historyTex = 本帧 resolve 输出
+      return (temporalPass && historyTex != null ? historyTex : bsmTexture) as Texture3D
+    },
+    setCurrentMatrices(matrices: Matrix4[]): void {
+      for (let i = 0; i < cascadeCount; i++) {
+        Matrix4.clone(matrices[i], currentMatrices[i])
+      }
+    },
     render(): void {
       if (destroyed) return
       // save：外部 FBO 绑定（可能 null=default framebuffer）——finally 恢复
       const prevFbo = gl.getParameter(GL_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null
       gl.bindFramebuffer(GL_FRAMEBUFFER, fbo)
       try {
+        if (temporalPass) {
+          // 生成段双 draw buffer（att0=BSM 层 i、att1=velocity 层 N+i——同一 draw 双 out）
+          gl.drawBuffers([GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1])
+        }
         for (let i = 0; i < cascadeCount; i++) {
           // 逐层 attach（TEXTURE_3D layer attach；level 0——BSM 无 mipmap）
           gl.framebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rawTex, 0, i)
+          if (temporalPass) {
+            gl.framebufferTextureLayer(
+              GL_FRAMEBUFFER,
+              GL_COLOR_ATTACHMENT1,
+              rawTex,
+              0,
+              cascadeCount + i
+            )
+          }
           // 完整性只在 i===0 查一次（三层同 texture 同格式，一层完整则全完整）。
           // 不完整 → warn + return（降级：消费端 fallback dummy Beer=1——无自阴影，不炸）。
           if (i === 0 && gl.checkFramebufferStatus(GL_FRAMEBUFFER) !== GL_FRAMEBUFFER_COMPLETE) {
@@ -206,6 +314,23 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
           }
           cascadeIndex = i // 先切 uniform 再 draw（同 draw 内 uniformMap 闭包读到本层值）
           drawPass.execute(context)
+        }
+        // ── M4 resolve：逐 cascade 写 resolveTex 层 i（恢复单 draw buffer）──
+        if (temporalPass && resolveDrawPass != null && resolveTex != null && historyTex != null) {
+          gl.drawBuffers([GL_COLOR_ATTACHMENT0])
+          const rawResolve = (resolveTex as unknown as { _texture: WebGLTexture })._texture
+          for (let i = 0; i < cascadeCount; i++) {
+            gl.framebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rawResolve, 0, i)
+            cascadeIndex = i
+            resolveDrawPass.execute(context)
+          }
+          // swap（resolve↔history）+ prevMatrices ← 本帧（下帧 velocity 用）
+          const nextResolve = historyTex
+          historyTex = resolveTex
+          resolveTex = nextResolve
+          for (let i = 0; i < cascadeCount; i++) {
+            Matrix4.clone(currentMatrices[i], prevMatrices[i])
+          }
         }
       } finally {
         // restore：外部 FBO 绑定 + viewport 回 drawingBuffer（RenderState.viewport=mapSize
@@ -219,9 +344,12 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
       if (destroyed) return
       destroyed = true
       drawPass.destroy()
+      resolveDrawPass?.destroy()
       gl.deleteFramebuffer(fbo)
       // Texture3D destroy（augment 类型未声明 destroy，cast 调用——同 CloudsPass 惯例）
       ;(bsmTexture as unknown as { destroy(): void }).destroy()
+      ;(resolveTex as unknown as { destroy(): void } | undefined)?.destroy()
+      ;(historyTex as unknown as { destroy(): void } | undefined)?.destroy()
     }
   }
 }

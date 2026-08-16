@@ -29,7 +29,8 @@ const gl = {
   ),
   checkFramebufferStatus: vi.fn(() => 36053), // GL_FRAMEBUFFER_COMPLETE = 0x8cd5
   getParameter: vi.fn(() => ({ tag: 'prevFbo' })),
-  viewport: vi.fn()
+  viewport: vi.fn(),
+  drawBuffers: vi.fn() // M4 T5：temporal 生成段双 draw buffer（gl mock 补）
 }
 
 // vi.mock('cesium')：部分 mock（importOriginal 保真 math 类——core index 经 altitudeCorrection.ts
@@ -41,12 +42,14 @@ vi.mock('cesium', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   class Texture3DMock {
     static lastOptions: unknown
+    static allOptions: unknown[] = [] // M4 T5：temporal 下多张 Texture3D（bsm 2N + resolve A/B）——需按序断言
     static instances: Texture3DMock[] = []
     _texture = { tag: 'tex3d' }
     _target = 32879 // GL_TEXTURE_3D = 0x806F
     destroyed = false
     constructor(opts: unknown) {
       Texture3DMock.lastOptions = opts
+      Texture3DMock.allOptions.push(opts)
       Texture3DMock.instances.push(this)
     }
     destroy() {
@@ -132,6 +135,7 @@ describe('createShadowPass', () => {
     glCalls.length = 0
     attachments.length = 0
     ;(Texture3D as unknown as { instances: unknown[] }).instances = []
+    ;(Texture3D as unknown as { allOptions: unknown[] }).allOptions = []
   })
 
   it('装配：Texture3D mapSize²×cascadeCount RGBA + 缺省 HALF_FLOAT Uint16Array 预置全 0 + flipY false + FBO 创建', () => {
@@ -141,6 +145,7 @@ describe('createShadowPass', () => {
       cascadeCount: 3,
       mapSize: 512,
       uniformMap: { frame: () => 0 },
+      temporalPass: false,  // M3 基线（M4 temporal 用例见下方独立 describe）
       createDrawPass: () => ({ execute: () => {}, destroy: () => {} })
     })
     const opts = (Texture3D as unknown as { lastOptions: any }).lastOptions
@@ -175,6 +180,7 @@ describe('createShadowPass', () => {
       mapSize: 8,
       pixelDatatype: 0x1406, // FLOAT
       uniformMap: { frame: () => 0 },
+      temporalPass: false,  // M3 基线（M4 temporal 用例见下方独立 describe）
       createDrawPass: () => ({ execute: () => {}, destroy: () => {} })
     })
     const opts = (Texture3D as unknown as { lastOptions: any }).lastOptions
@@ -191,6 +197,7 @@ describe('createShadowPass', () => {
       cascadeCount: 3,
       mapSize: 8,
       uniformMap: { frame: () => 0 },
+      temporalPass: false,  // M3 基线（M4 temporal 用例见下方独立 describe）
       createDrawPass: () => ({ execute: () => {}, destroy: () => {} })
     })
     pass.render()
@@ -212,6 +219,7 @@ describe('createShadowPass', () => {
       cascadeCount: 3,
       mapSize: 8,
       uniformMap: { frame: () => 0 },
+      temporalPass: false,  // M3 基线（M4 temporal 用例见下方独立 describe）
       createDrawPass: mkStubFactory(record)
     })
     pass.render()
@@ -234,6 +242,7 @@ describe('createShadowPass', () => {
       cascadeCount: 3,
       mapSize: 8,
       uniformMap: { frame: () => 0 },
+      temporalPass: false,  // M3 基线（M4 temporal 用例见下方独立 describe）
       createDrawPass: mkStubFactory(record)
     })
     pass.render()
@@ -251,6 +260,7 @@ describe('createShadowPass', () => {
       cascadeCount: 3,
       mapSize: 64,
       uniformMap: { frame: frameClosure },
+      temporalPass: false,  // M3 基线（M4 temporal 用例见下方独立 describe）
       createDrawPass: mkStubFactory(record)
     })
     expect(record.fragmentShaderSource).toContain('#define SHADOW')
@@ -271,6 +281,7 @@ describe('createShadowPass', () => {
       cascadeCount: 3,
       mapSize: 8,
       uniformMap: { frame: () => 0 },
+      temporalPass: false,  // M3 基线（M4 temporal 用例见下方独立 describe）
       createDrawPass: mkStubFactory(record)
     })
     expect(() => pass.render()).not.toThrow()
@@ -291,6 +302,7 @@ describe('createShadowPass', () => {
       cascadeCount: 3,
       mapSize: 8,
       uniformMap: { frame: () => 0 },
+      temporalPass: false,  // M3 基线（M4 temporal 用例见下方独立 describe）
       createDrawPass: mkStubFactory(record)
     })
     pass.destroy()
@@ -301,5 +313,139 @@ describe('createShadowPass', () => {
     expect(() => pass.destroy()).not.toThrow()
     expect(gl.deleteFramebuffer).toHaveBeenCalledTimes(1)
     expect(record.destroyMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M4 T5：temporal 扩展——velocity 层双 attach + resolve 逐 cascade + ping-pong + prevMatrices
+// ─────────────────────────────────────────────────────────────────────────────
+import { Matrix4, Cartesian3 } from 'cesium'
+import type { ShadowDrawPassFactory } from './ShadowPass'
+
+describe('M4 T5 ShadowPass temporal', () => {
+  const N = 3
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    glCalls.length = 0
+    attachments.length = 0
+    ;(Texture3D as unknown as { instances: unknown[] }).instances = []
+    ;(Texture3D as unknown as { allOptions: unknown[] }).allOptions = []
+  })
+
+  function mkTemporalOpts() {
+    const genCalls: string[] = []
+    const resCalls: string[] = []
+    const genRecord = mkRecord()
+    const resRecord = mkRecord()
+    // draw 时采样 reprojectionMatrices 快照（render 结束后 prevMatrices 已被覆写——
+    // 「draw 用了什么」才是断言对象）
+    const repSamples: Matrix4[][] = []
+    return {
+      opts: {
+        context: createMockContext(),
+        cascadeCount: N,
+        mapSize: 512,
+        pixelDatatype: 0x140b,
+        uniformMap: {},
+        temporalPass: true,
+        createDrawPass: (_c: unknown, fs: string, um: any, vp: number) => {
+          genRecord.fragmentShaderSource = fs
+          genRecord.uniformMap = um
+          genRecord.viewportSize = vp
+          return {
+            execute: () => {
+              genCalls.push('gen')
+              repSamples.push((um.reprojectionMatrices() as Matrix4[]).map((m) => Matrix4.clone(m)))
+            },
+            destroy: genRecord.destroy
+          }
+        },
+        createResolveDrawPass: (_c: unknown, fs: string, um: any, vp: number) => {
+          resRecord.fragmentShaderSource = fs
+          resRecord.uniformMap = um
+          resRecord.viewportSize = vp
+          return { execute: () => resCalls.push('res'), destroy: resRecord.destroy }
+        }
+      } as any,
+      genCalls,
+      resCalls,
+      genRecord,
+      resRecord,
+      repSamples
+    }
+  }
+
+  it('temporalPass：bsmTexture 生成端 depth=2N（velocity 层）+ resolve A/B 各 depth=N + 生成 N 次 + resolve N 次 + velocity 层 attach', () => {
+    const { opts, genCalls, resCalls } = mkTemporalOpts()
+    const pass = createShadowPass(opts)
+    const all = (Texture3D as any).allOptions
+    expect(all[0].source.depth).toBe(2 * N) // bsmTexture（生成端，velocity 层在后半）
+    expect(all[1].source.depth).toBe(N) // resolve A
+    expect(all[2].source.depth).toBe(N) // resolve B（history）
+    pass.render()
+    expect(genCalls.length).toBe(N)
+    expect(resCalls.length).toBe(N)
+    // velocity 层 attach（att1 层 N+i）：attachments 记录里出现 layer 3/4/5
+    const layers = (gl.framebufferTextureLayer as any).mock.calls.map((c: any[]) => c[4])
+    expect(layers).toContain(N)
+    expect(layers).toContain(N + 1)
+    expect(layers).toContain(N + 2)
+    pass.destroy()
+  })
+
+  it('setCurrentMatrices → render：draw 用上帧矩阵（首帧 identity 降级，render 后 prev ← 本帧）', () => {
+    const { opts, repSamples } = mkTemporalOpts()
+    const pass = createShadowPass(opts)
+    const m1 = [
+      Matrix4.fromTranslation(new Cartesian3(1, 0, 0)),
+      Matrix4.fromTranslation(new Cartesian3(2, 0, 0)),
+      Matrix4.fromTranslation(new Cartesian3(3, 0, 0))
+    ]
+    pass.setCurrentMatrices(m1)
+    // 首帧 render：draw 时 reprojectionMatrices = identity（prevMatrices 初始值 → prevClip
+    // 巨值 → resolve 端 prevUv 越界 rejection，安全降级）
+    pass.render()
+    expect(repSamples.length).toBe(N) // 3 cascade 各采样一次
+    expect(Matrix4.equals(repSamples[0][0], Matrix4.IDENTITY)).toBe(true)
+    // 第二帧 render：draw 时读到 m1（首帧 render 末尾 prev ← 本帧）
+    pass.render()
+    expect(repSamples.length).toBe(2 * N)
+    expect(Matrix4.equals(repSamples[N][0], m1[0])).toBe(true)
+    pass.destroy()
+  })
+
+  it('resolution uniform = (mapSize, mapSize)（velocity texel 单位换算）+ resolve shader 组装注入', () => {
+    const { opts, genRecord, resRecord } = mkTemporalOpts()
+    const pass = createShadowPass(opts)
+    const res = genRecord.uniformMap.resolution() as { x: number; y: number }
+    expect(res.x).toBe(512)
+    expect(res.y).toBe(512)
+    // resolve 端 shader 含 u_cascadeIndex 单 cascade 桥 + sampler3D
+    expect(resRecord.fragmentShaderSource).toContain('uniform int u_cascadeIndex;')
+    expect(resRecord.fragmentShaderSource).toContain('uniform sampler3D inputBuffer;')
+    expect(resRecord.uniformMap.temporalAlpha()).toBe(0.01)
+    expect(resRecord.uniformMap.varianceGamma()).toBe(1)
+    pass.destroy()
+  })
+
+  it('temporalPass=false：M3 行为——depth=N + 无 resolve draw（零回归）', () => {
+    const genCalls: string[] = []
+    const resCalls: string[] = []
+    const opts = {
+      context: createMockContext(),
+      cascadeCount: N,
+      mapSize: 512,
+      uniformMap: {},
+      temporalPass: false,
+      createDrawPass: (() => ({ execute: () => genCalls.push('gen'), destroy: () => {} })) as any,
+      createResolveDrawPass: (() => ({ execute: () => resCalls.push('res'), destroy: () => {} })) as any
+    } as any
+    const pass = createShadowPass(opts)
+    expect((Texture3D as any).lastOptions.source.depth).toBe(N)
+    pass.render()
+    expect(genCalls).toEqual(['gen', 'gen', 'gen'])
+    expect(resCalls).toEqual([])
+    pass.destroy()
   })
 })
