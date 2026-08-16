@@ -20,7 +20,9 @@ import {
 import { buildCloudsMainFragmentShader } from './CloudsMaterial'
 import { compileFragment } from './glslangUtil'
 
-const OPTS: ShadowMainOptions = {}
+// M4 T3 后 temporalPass 默认 true——M3 基线断言需显式关（velocity 段加回属 M4 新用例，
+// 见 shadowResolve.compile.test.ts 生成端 describe）
+const OPTS: ShadowMainOptions = { temporalPass: false }
 
 // 共用：glslang 编译失败时打印前 80 行辅助定位（同 cloudsMain.compile.test.ts）
 function compileOrFail(src: string, label: string): void {

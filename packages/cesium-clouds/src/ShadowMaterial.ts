@@ -12,9 +12,11 @@
 //      （Cesium ViewportQuadVS 只输出 v_textureCoordinates，声明需 shader 自带——同
 //      CloudsMaterial.ts 桥接）
 //   2. MRT out 数组 → 单 out vec4 outputColor（每 draw 一个 cascade，u_cascadeIndex uniform）
-//   3. 删 outputDepthVelocity 声明块 + cascade() velocity 参数与 TEMPORAL_PASS 段 +
-//      reprojectionMatrices uniform（M4 temporal 接通时按 three 原文加回）
-//   4. main 的 unroll 循环 → 单 cascade(u_cascadeIndex, mipLevels[u_cascadeIndex], outputColor)
+//   3. 删 outputDepthVelocity 声明块（#if CASCADE_COUNT == 1..4 冗余段，含注释行）
+//   4. 删 reprojectionMatrices uniform + cascade() velocity 出参与 TEMPORAL_PASS 段
+//      （M4 T3 已按 three 原文加回：temporalPass=true 默认——velocity 单 out loc1 +
+//      reprojectionMatrices[CASCADE_COUNT] + velocity 段原文；false 时与 M3 相同）
+//   5. main 的 unroll 循环 → 单 cascade(u_cascadeIndex, mipLevels[u_cascadeIndex], outputColor[, velocity])
 // shadow.frag 不引用任何 czm_*（无需 CZM_STUBS）。
 //
 // 后处理（resolveCloudsIncludes 之后，非 surgery）：densityProfile struct uniform → const
@@ -39,6 +41,11 @@ export interface ShadowMainOptions {
    * TURBULENCE 分支开关（sampleMedia 走 turbulenceTexture 卷曲位移）。默认 true。
    */
   turbulence?: boolean
+  /**
+   * TEMPORAL_PASS 编译分支开关（默认 true，M4）：velocity 输出（out loc1，texel 单位）
+   * + reprojectionMatrices uniform。false = M3 行为（单 out、无 velocity）——诊断基线。
+   */
+  temporalPass?: boolean
 }
 
 // shadow 生成管线固定 define（不含 options 分支）。SHADOW 让 sampleWeather 走
@@ -60,7 +67,8 @@ type ResolvedShadowMainOptions = Required<ShadowMainOptions>
 
 const DEFAULTS: ResolvedShadowMainOptions = {
   shapeDetail: true,
-  turbulence: true
+  turbulence: true,
+  temporalPass: true
 }
 
 // 构造 M3 运行期 define 集（基础管线 define + options 编译分支开关）。
@@ -68,7 +76,8 @@ function buildDefines(o: ResolvedShadowMainOptions): string {
   return [
     ...SHADOW_DEFINES_BASE,
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',
-    o.turbulence ? '#define TURBULENCE' : ''
+    o.turbulence ? '#define TURBULENCE' : '',
+    o.temporalPass ? '#define TEMPORAL_PASS' : ''
   ].filter((s) => s.length > 0).join('\n')
 }
 
@@ -76,7 +85,14 @@ function buildDefines(o: ResolvedShadowMainOptions): string {
 // `in vec2 vUv;` / out 数组 / velocity 块 / reprojectionMatrices 各一处；cascade 签名与
 // TEMPORAL_PASS 段、main unroll 循环各一段。正则不匹配时应打印手术前后源对照调试（改正则，
 // 不改 .glsl）。
-function surgeryShadowFrag(source: string): string {
+//
+// M4 T3：temporalPass=true（默认）时 velocity 相关段按 three 原文保留（单 cascade 化）：
+//   - reprojectionMatrices[CASCADE_COUNT] uniform 保留（velocity 投影到上帧 cascade 矩阵）
+//   - cascade() 签名保留 velocity 出参（单 draw 双 out：BSM 值 loc0 + velocity loc1）
+//   - TEMPORAL_PASS 段保留（velocity 数学原文——`reprojectionMatrices[cascadeIndex]` 的
+//     参数在单 cascade draw 时即 u_cascadeIndex 值，无需改写）
+//   - main 调用带 velocity 出参 + loc1 out 单声明注入（替代原文 out 数组）
+function surgeryShadowFrag(source: string, temporalPass: boolean): string {
   let src = source
   // 1) varying 桥接。注释放声明上一行——保证 `in vec2 v_textureCoordinates;\n` 逐字存在
   //    （shadowMain.compile.test.ts 防哑过用例以该精确串删声明验证 glslang 真抓错）。
@@ -89,24 +105,36 @@ function surgeryShadowFrag(source: string): string {
     /layout\(location = 0\) out vec4 outputColor\[CASCADE_COUNT\];\n/,
     'layout(location = 0) out vec4 outputColor;\n'
   )
-  // 3) 删 outputDepthVelocity 声明块（#if CASCADE_COUNT == 1..4 冗余段，含注释行）
+  // 3) 删 outputDepthVelocity 声明块（#if CASCADE_COUNT == 1..4 冗余段，含注释行）——
+  //    temporalPass 时由手术 6 注入单 out 声明替代（velocity 是 vec3 非 vec4 数组）
   src = src.replace(/\n\/\/ Redundant notation for prettier\.\n#if CASCADE_COUNT == 1\n[\s\S]*?#endif \/\/ CASCADE_COUNT\n/, '\n')
-  // 4) 删 reprojectionMatrices uniform（TEMPORAL_PASS 专用，M4 加回）
-  src = src.replace(/uniform mat4 reprojectionMatrices\[CASCADE_COUNT\];\n/, '')
-  // 5) cascade() 签名去掉 velocity 出参 + 体内 TEMPORAL_PASS 段删除
+  // 4) 删 reprojectionMatrices uniform（TEMPORAL_PASS 专用；temporalPass 时保留）
+  if (!temporalPass) {
+    src = src.replace(/uniform mat4 reprojectionMatrices\[CASCADE_COUNT\];\n/, '')
+  }
+  // 5) cascade() 签名：temporalPass 保留 velocity 出参（原文），否则去掉（M3 行为）
   src = src.replace(
     /  const float mipLevel,\n  out vec4 outputColor,\n  out vec3 outputDepthVelocity\n\) \{/,
-    '  const float mipLevel,\n  out vec4 outputColor\n) {'
+    temporalPass
+      ? '  const float mipLevel,\n  out vec4 outputColor,\n  out vec3 outputDepthVelocity\n) {'
+      : '  const float mipLevel,\n  out vec4 outputColor\n) {'
   )
-  src = src.replace(/\n  #ifdef TEMPORAL_PASS\n[\s\S]*?#else \/\/ TEMPORAL_PASS\n  outputDepthVelocity = vec3\(0\.0\);\n  #endif \/\/ TEMPORAL_PASS\n/, '\n')
+  if (!temporalPass) {
+    // M3 删法：TEMPORAL_PASS 段整体移除
+    src = src.replace(/\n  #ifdef TEMPORAL_PASS\n[\s\S]*?#else \/\/ TEMPORAL_PASS\n  outputDepthVelocity = vec3\(0\.0\);\n  #endif \/\/ TEMPORAL_PASS\n/, '\n')
+  }
   // 6) main 单 cascade 调用（unroll 循环 → u_cascadeIndex）。main 内 `#pragma unroll_loop_*`
   //    随整段替换消失；marchClouds 内普通 for 循环不受 unrollLoops 影响。
+  //    temporalPass 时：loc1 out 单声明（velocity）+ 调用带出参。
   src = src.replace(
     /void main\(\) \{\n  #pragma unroll_loop_start\n[\s\S]*?#pragma unroll_loop_end\n\}/,
-    'uniform int u_cascadeIndex;  // 每 draw 换值（同 shader 复用 ShaderProgram 缓存）\n' +
-    'void main() {\n' +
-    '  cascade(u_cascadeIndex, mipLevels[u_cascadeIndex], outputColor);\n' +
-    '}'
+    (temporalPass ? 'layout(location = 1) out vec3 outputDepthVelocity;\n' : '') +
+      'uniform int u_cascadeIndex;  // 每 draw 换值（同 shader 复用 ShaderProgram 缓存）\n' +
+      'void main() {\n' +
+      (temporalPass
+        ? '  cascade(u_cascadeIndex, mipLevels[u_cascadeIndex], outputColor, outputDepthVelocity);\n'
+        : '  cascade(u_cascadeIndex, mipLevels[u_cascadeIndex], outputColor);\n') +
+      '}'
   )
   return src
 }
@@ -120,7 +148,7 @@ function surgeryShadowFrag(source: string): string {
  */
 export function buildCloudsShadowFragmentShader(options: ShadowMainOptions = {}): string {
   const o: ResolvedShadowMainOptions = { ...DEFAULTS, ...options }
-  const merged = [buildDefines(o), surgeryShadowFrag(glslIndex.shadowFrag)].join('\n\n')
+  const merged = [buildDefines(o), surgeryShadowFrag(glslIndex.shadowFrag, o.temporalPass)].join('\n\n')
   let resolved = resolveCloudsIncludes(merged)
 
   // densityProfile struct uniform → const 注入（T5 补，与 CloudsMaterial.ts:391-395 同款）：
