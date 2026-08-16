@@ -233,3 +233,21 @@ describe('M3 T4 BSM 消费 surgery', () => {
     )
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M4 T6：ray 重建 jitter surgery 断言
+// ─────────────────────────────────────────────────────────────────────────────
+describe('M4 T6 jitter surgery', () => {
+  it('ray 重建消费 temporalJitter（gl_FragCoord + temporalJitter * resolution，近/远两处）', () => {
+    const src = buildCloudsMainFragmentShader({})
+    const n = (
+      src.match(/czm_windowToEyeCoordinates\(vec4\(gl_FragCoord\.xy \+ temporalJitter \* resolution/g) ?? []
+    ).length
+    expect(n).toBe(2)
+  })
+
+  it('vViewPosition 保持 normalize（与 three 未归一化版共线——投影 w 除法抵消标量差）', () => {
+    const src = buildCloudsMainFragmentShader({})
+    expect(src).toContain('vViewPosition = normalize(dirEC)')
+  })
+})

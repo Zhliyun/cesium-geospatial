@@ -13,9 +13,13 @@
 //   4. createVolumetricPrimitive 装配（globeDepthTexture 闭包隔离私有 API scene._view.globeDepth）
 //   5. 持 primitive + MRT textures + uniformMap + cloudsBuffer(att0) bridge getter + destroy
 //
-// czm 桥接（spec §4.2）：reprojectionMatrix/viewReprojectionMatrix = identity（M4 dummy velocity=0）；
+// czm 桥接（spec §4.2 + M4）：reprojectionMatrix/viewReprojectionMatrix = preRender 组装的
+// jittered 上帧矩阵（T7 createCloudsStage 经 temporalMath 写入 params，M2 期是 identity dummy）；
 // cameraNear/cameraFar/viewMatrix 经 CloudsMaterial.ts #define 重定向到 czm_*（无需 uniformMap）；
-// cameraPosition 经桥接 = czm_viewerPositionWC。temporalJitter = (0,0)（M4 Bayer）。
+// cameraPosition 经桥接 = czm_viewerPositionWC。temporalJitter = Bayer 偏移（T7 写入 params；
+// 非 temporal 恒 (0,0)）。M4 T6：temporalUpscale=true 时 march 低分（ceil(w/4)）——MRT 尺寸/
+// resolution（lowRes*4）/targetUvScale/mipLevelScale=0.25/FBO viewport 全部切低分语义，
+// depthVelocity 写 att1 供 CloudsResolvePass。
 //
 // dummy 决策（M2 vs M3/M4/M5/M6 hook 标注）：
 //   - shadowBuffer（M3 BSM 已接通，T4）：state.shadow.bsm = ShadowPass.bsmTexture（sampler3D，
@@ -46,6 +50,7 @@ import {
   TextureWrap,
   Cartesian2,
   Cartesian3,
+  BoundingRectangle,
   type Scene,
   type Context
 } from 'cesium'
@@ -123,6 +128,12 @@ export interface CloudsFrameState {
 export interface CloudsPassOptions extends CloudsMainOptions {
   /** 业务参数覆盖（缺省取 defaultCloudsParameters）。M6 qualityPresets 用。 */
   parameters?: CloudsParameters
+  /**
+   * M4 temporal upscale 开关（默认 false = M3 全分零回归）。true 时 march 降到
+   * ceil(w/4)×ceil(h/4)（plan D3）：MRT 尺寸/resolution（=lowRes*4）/targetUvScale/
+   * mipLevelScale=0.25/viewport 全部切低分语义，velocity 写 att1 供 CloudsResolvePass。
+   */
+  temporalUpscale?: boolean
 }
 
 /**
@@ -219,8 +230,17 @@ export function buildSharedCloudsUniforms(
 export interface CloudsPass {
   /** att0 color Tex bridge（{_texture,_target}，注入 overlay PostProcessStage uniform）。 */
   getColorBridge(): { _texture: unknown; _target: number }
-  /** att0 color Tex（直接引用，调试/probe 用）。 */
+  /** att0 color Tex（直接引用，调试/probe 用；temporal 时为低分）。 */
   readonly colorTexture: Texture
+  /**
+   * att1 depthVelocity Tex（M4 temporal：低分，velocity reprojection 数据——CloudsResolvePass
+   * 构造消费；非 temporal 时同尺寸写 0 不消费，M2 行为）。
+   */
+  readonly depthVelocityTexture: Texture
+  /** march FBO 宽（temporal 时 = ceil(drawingBuffer/4)，T7 算 jitter 的 lowRes）。 */
+  readonly marchWidth: number
+  /** march FBO 高（同上）。 */
+  readonly marchHeight: number
   /** VolumetricPrimitive（已 add 到 scene.primitives；destroy 时摘除）。 */
   readonly primitive: VolumetricPrimitive
   /** 释放：摘 primitive + destroy MRT 3 texture + dummy texture（FBO 由 primitive.destroy 释放）。幂等。 */
@@ -258,6 +278,12 @@ export function createCloudsPass(
   const params = options.parameters ?? defaultCloudsParameters()
   const width = context.drawingBufferWidth || 256
   const height = context.drawingBufferHeight || 256
+  // M4 T6（plan D3）：temporal 时 march 降到 ceil(w/4)（three CloudsPass.setSize 的
+  // temporalUpscale 分支同款）；ceil 保证 4 的整倍数上取，march 的 resolution = lowRes*4
+  //（4 对齐「全分等效」）可能略超 drawingBuffer → targetUvScale < 1 修正 depth 采样域。
+  const temporalUpscale = options.temporalUpscale === true
+  const marchWidth = temporalUpscale ? Math.ceil(width / 4) : width
+  const marchHeight = temporalUpscale ? Math.ceil(height / 4) : height
 
   // ── HDR pixel datatype 检测（内联，对齐 core resolvePostHdrDatatype）──
   // colorTex 需 HDR 承载线性云 radiance（applyAerialPerspective 输出线性 >1 段）；depthVel/shadowLen
@@ -274,8 +300,8 @@ export function createCloudsPass(
   const mkMrtTex = (): Texture =>
     new Texture({
       context,
-      width,
-      height,
+      width: marchWidth,
+      height: marchHeight,
       pixelFormat: PixelFormat.RGBA,
       pixelDatatype,
       sampler: mrtSampler
@@ -355,21 +381,38 @@ export function createCloudsPass(
   // |positionWC| 地心距——赤道海平面地心距 6.378e6 ≠ 测地高 0，会错走「相机在云上方」分支）。
   const cameraHeight = (): number => scene.camera.positionCartographic.height
   // resolution scratch：闭包持 module-scratch Cartesian2（避免每帧分配，仿 lensflare texelSizeForSourceScale）。
-  const resolutionScratch = new Cartesian2()
+  // M4 T6（plan D3/D10）：temporal 时 resolution = lowRes*4（4 对齐全分等效——three 语义：
+  // 噪声种子 gl_FragCoord+jitter*resolution 的量纲基底、ray 重建 jitter 偏移基底）；
+  // 非 temporal = drawingBuffer（M2 语义）。
+  const resolutionFullW = temporalUpscale ? marchWidth * 4 : width
+  const resolutionFullH = temporalUpscale ? marchHeight * 4 : height
+  const resolutionScratch = new Cartesian2(resolutionFullW, resolutionFullH)
   const resolution = (): Cartesian2 => {
-    resolutionScratch.x = context.drawingBufferWidth
-    resolutionScratch.y = context.drawingBufferHeight
+    resolutionScratch.x = resolutionFullW
+    resolutionScratch.y = resolutionFullH
     return resolutionScratch
   }
+
+  // M4 T6：temporal 时 targetUvScale = lowRes*4/drawingBuffer（低分 UV → 全分 depth 纹理
+  // 子区域；ceil 后 *4 可能 > 全分故 <1——three CloudsMaterial.setSize 同款修正）、
+  // mipLevelScale = 0.25（低分 march 采样 weather 提 mip 2 级）。
+  const targetUvScaleTemporal = new Cartesian2(
+    (marchWidth * 4) / width,
+    (marchHeight * 4) / height
+  )
 
   const uniformMap: { [name: string]: () => unknown } = {
     ...buildSharedCloudsUniforms(scene, luts, weather, state, params, dummyTurbulence),
 
+    // D7 frame 拆分：march 的 stbn 噪声相位只在 temporal 开时跟随 params.frame 递增
+    //（无 resolve 平滑时逐帧换相位 = 回归闪烁；M3 行为 = 恒 0）
+    frame: () => (temporalUpscale ? params.frame : 0),
+
     // 相机/场景（每帧闭包；cameraHeight/resolution/targetUvScale/mipLevelScale 为 clouds.frag 专有）
     cameraHeight,
     resolution,
-    targetUvScale: () => params.targetUvScale,
-    mipLevelScale: () => params.mipLevelScale,
+    targetUvScale: () => (temporalUpscale ? targetUvScaleTemporal : params.targetUvScale),
+    mipLevelScale: () => (temporalUpscale ? 0.25 : params.mipLevelScale),
 
     // 主 raymarch
     maxIterationCount: () => params.maxIterationCount,
@@ -410,13 +453,16 @@ export function createCloudsPass(
   }
 
   // ── VolumetricPrimitive 装配（M1 基建）──
+  // M4 T6：temporal 时 viewport 必须显式 = 低分尺寸（RenderState 不设 viewport 时 GL
+  // viewport 保持 drawingBuffer 全分，低分 FBO 下 gl_FragCoord 越界写被裁）
   const fragmentShaderSource = buildCloudsMainFragmentShader(options)
   const primitive = createVolumetricPrimitive({
     context,
     fragmentShaderSource,
     uniformMap,
     mrtColorTextures: mrtTextures,
-    globeDepthTexture
+    globeDepthTexture,
+    viewport: temporalUpscale ? new BoundingRectangle(0, 0, marchWidth, marchHeight) : undefined
   })
   const primitives = scene.primitives as unknown as {
     add: (p: VolumetricPrimitive) => void
@@ -434,6 +480,9 @@ export function createCloudsPass(
   return {
     primitive,
     colorTexture: colorTex,
+    depthVelocityTexture: depthVelTex,
+    marchWidth,
+    marchHeight,
     getColorBridge: colorBridge,
     destroy(): void {
       if (destroyed) return

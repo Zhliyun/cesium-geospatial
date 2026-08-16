@@ -18,7 +18,7 @@
 // globe depth 访问（spec 附录 F5）：私有 API scene._view.globeDepth.depthStencilTexture。
 // 调用方可通过 globeDepthTexture 闭包注入（隔离私有 API 访问，本类不直接耦合 scene._view）。
 
-import { Framebuffer, RenderState } from 'cesium'
+import { Framebuffer, RenderState, BoundingRectangle } from 'cesium'
 import type { Context, DrawCommand, Texture } from 'cesium'
 
 // Pass.VOXELS=10（Renderer/Pass.js:27）。@private 不在公开 .d.ts，用字面量常量 + 源码行号注释
@@ -43,6 +43,12 @@ export interface VolumetricPrimitiveOptions {
   globeDepthTexture?: () => Texture | undefined
   /** 可选：pass 值（默认 VOXELS=10）。云主 march 走 VOXELS（globe 后 PostProcess 前执行）。 */
   pass?: number
+  /**
+   * 可选：FBO viewport（M4 T6）。**低分 FBO 必须设**——RenderState 不设 viewport 时 GL
+   * viewport 保持当前值（= drawingBuffer 全分），低分 FBO 下 gl_FragCoord 越界写被裁。
+   * 缺省 undefined = 不设（全分 FBO 恰与 drawingBuffer 相等，M2 行为）。
+   */
+  viewport?: BoundingRectangle
 }
 
 export interface VolumetricPrimitive {
@@ -97,9 +103,11 @@ export function createVolumetricPrimitive(
   //    （Context.js:1412 cmd._framebuffer 优先 passState.framebuffer）。
   //    renderState 必须显式设（spike 坑#2）：cmd 进 pass 调度后，DerivedCommand getDepthOnlyRenderState
   //    访问 renderState.id 做缓存查找；undefined → "reading 'id'" 炸。MRT FBO 无 depth attachment
-  //    → depthTest off + depthMask false。
+  //    → depthTest off + depthMask false。viewport：M4 T6 低分 FBO 必须显式（undefined = 不动
+  //    GL viewport，全分 FBO 的 M2 行为）。
   //    globeDepthTexture 闭包透传到 uniformMap（调用方通过 options 注入私有 API 隔离）。
   const renderState = RenderState.fromCache({
+    viewport: options.viewport,
     depthTest: { enabled: false },
     depthMask: false,
   })

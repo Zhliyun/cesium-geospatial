@@ -174,3 +174,38 @@ describe('createVolumetricPrimitive', () => {
     expect(frameState.commandList).toHaveLength(0)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M4 T6：viewport 选项（低分 FBO 必须显式——GL viewport 默认保持 drawingBuffer）
+// ─────────────────────────────────────────────────────────────────────────────
+describe('M4 viewport 选项', () => {
+  it('viewport 透传 RenderState.fromCache（低分 march FBO 用）', () => {
+    const ctx = createMockContext()
+    const viewport = { x: 0, y: 0, width: 480, height: 270 }
+    const prim = createVolumetricPrimitive({
+      context: ctx,
+      fragmentShaderSource: 'void main(){}',
+      uniformMap: {},
+      mrtColorTextures: createMockTextures(),
+      viewport: viewport as any,
+    })
+    const frameState = { commandList: [] as any[] }
+    prim.update(frameState)
+    const rs = (frameState.commandList[0] as any).renderState as { opts: any }
+    expect(rs.opts.viewport).toEqual(viewport)
+  })
+
+  it('缺省不设 viewport（全分 FBO 的 M2 行为：undefined 透传 fromCache）', () => {
+    const ctx = createMockContext()
+    const prim = createVolumetricPrimitive({
+      context: ctx,
+      fragmentShaderSource: 'void main(){}',
+      uniformMap: {},
+      mrtColorTextures: createMockTextures(),
+    })
+    const frameState = { commandList: [] as any[] }
+    prim.update(frameState)
+    const rs = (frameState.commandList[0] as any).renderState as { opts: any }
+    expect(rs.opts.viewport).toBeUndefined()
+  })
+})

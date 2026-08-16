@@ -22,8 +22,10 @@
 //        u_shadowCameraNear（BSM split 完整视锥 near，≠ czm_currentFrustum.x 分段值）。
 //        未就绪时 CloudsPass fallback 1×1×3 全 0 dummy → sampleShadowOpticalDepth 返 0
 //        → Beer-Lambert 1（无自阴影，flat lighting 降级）
-//      - M4 temporal：不摘 reprojectionMatrix/viewReprojectionMatrix（T2 提供 identity）→ velocity
-//        非 0 但 outputDepthVelocity 在 M2 未被消费（M4 resolve 接通）
+//      - M4 temporal（T6 已接通）：reprojectionMatrix/viewReprojectionMatrix = preRender 组装
+//        的 jittered 上帧矩阵（createCloudsStage 经 T1 temporalMath 算好写入 params）；ray 重建
+//        消费 temporalJitter（Bayer 偏移，非 temporal 时恒 0 无偏移）；outputDepthVelocity
+//        写 march 低分 MRT att1（CloudsResolvePass 消费做 velocity reprojection）
 //      - M5 god rays：不 define SHADOW_LENGTH → marchShadowLength/outputShadowLength(loc2) 不编译；
 //        applyAerialPerspective 用 shadowLength=0 调 GetSkyRadianceToPoint（无 god rays）
 //      - HAZE / GROUND_BOUNCE：不 define → 不编译
@@ -181,11 +183,15 @@ uniform float u_shadowCameraNear;
 //     得密切球局部系坐标——worldToECEFMatrix 在 Cesium 退化为单位，故无需变换）
 //   - vRayDirection = czm_windowToEyeCoordinates 近/远平面差分 → czm_inverseView 转 ECEF
 //     （仿 core aerialPerspective.frag.ts reconstructRay，避免 ndc + inverseProjection 在仰视
-//     净空 / log-depth 下退化）
+//     净空 / log-depth 下退化）。M4 T6：窗口坐标加 Bayer jitter（temporalJitter*resolution
+//     = 全分像素单位偏移 ±2px = ±0.5 低分 texel；与 depth 采样 UV / 噪声种子三处原文 jitter
+//     语义对齐——three 版 jitter 走 inverseProjectionMatrix 注入，本重建路径等价改为
+//     gl_FragCoord 偏移；temporalJitter=0 时零偏移，非 temporal 全分行为不变）
 //   - vCameraDirection = czm_inverseView * vec4(0,0,-1,0)（相机正前方向 ECEF，clouds.vert L72 等价；
 //     getRayDistanceToScene L817 用，M6 depth 接通时生效）
-//   - vViewPosition = view-space 单位视线方向（M2 reprojection dummy；M4 temporal 接通时按 three
-//     inverseProjection*ndc 量纲精修——见 clouds.vert L70）
+//   - vViewPosition = normalize(dirEC)——view-space 单位视线方向（M4：与 three 未归一化版
+//     （(inverseProjectionMatrix*ndc).xyz）共线——velocity 投影 viewReprojectionMatrix *
+//     (vViewPosition*frontDepth) 经 prevClip.w 除法抵消标量差，语义等价）
 //   - vGroundIrradiance/vCloudsIrradiance = 零（ACCURATE_SUN_SKY_LIGHT define 绕过 varying 读取）
 const BRIDGE_VARYINGS_GLSL = `
 // —— Cesium → three 桥接：varying 重建（替代 clouds.frag 原 7 个 in，clouds.vert 算）——
@@ -212,13 +218,14 @@ void cloudsBridge_reconstructVaryings() {
   vCameraPosition = czm_viewerPositionWC;
 
   // 视线方向（view space）：czm_windowToEyeCoordinates 近/远平面差分（仿 core reconstructRay）。
-  vec4 eyeNear = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, 0.0, 1.0));
-  vec4 eyeFar = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, 1.0, 1.0));
+  // M4 T6：窗口坐标加 Bayer jitter（temporalJitter*resolution 单位 = 全分像素）。
+  vec4 eyeNear = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy + temporalJitter * resolution, 0.0, 1.0));
+  vec4 eyeFar = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy + temporalJitter * resolution, 1.0, 1.0));
   if (abs(eyeNear.w) > 1e-10) eyeNear /= eyeNear.w;
   if (abs(eyeFar.w) > 1e-10) eyeFar /= eyeFar.w;
   vec3 dirEC = eyeFar.xyz - eyeNear.xyz;
   if (dot(dirEC, dirEC) < 1e-20) dirEC = eyeFar.xyz;
-  vViewPosition = normalize(dirEC);  // view-space 单位方向（M2 reprojection dummy；M4 量纲精修）
+  vViewPosition = normalize(dirEC);  // view-space 单位方向（与 three 未归一化版共线——见文件头注释）
   vRayDirection = (czm_inverseView * vec4(dirEC, 0.0)).xyz;  // ECEF 视线方向
 
   // 相机正前方向（view -Z → ECEF）——clouds.vert L72 等价。getRayDistanceToScene 用（M6 接通）。

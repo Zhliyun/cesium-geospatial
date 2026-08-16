@@ -408,3 +408,69 @@ describe('createCloudsPass', () => {
 function scene2(): any {
   return createMockScene()
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M4 T6：temporalUpscale 低分模式
+// ─────────────────────────────────────────────────────────────────────────────
+import { defaultCloudsParameters } from './cloudsDefaultParameters'
+
+describe('M4 T6 temporalUpscale 低分模式', () => {
+  const st = (): CloudsFrameState => ({
+    sunDirection: new Cartesian3(0, 0, 1),
+    altitudeCorrection: new Cartesian3()
+  })
+
+  it('temporalUpscale=true：MRT 尺寸 ceil(w/4) + resolution=lowRes*4 + targetUvScale/mipLevelScale 切低分语义', () => {
+    vi.clearAllMocks()
+    const params = defaultCloudsParameters()
+    params.frame = 5 // D7：temporal 开时 march frame 跟随 params.frame
+    const pass = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
+      temporalUpscale: true,
+      parameters: params
+    })
+    expect(pass.marchWidth).toBe(480) // ceil(1920/4)
+    expect(pass.marchHeight).toBe(270) // ceil(1080/4)
+    expect(pass.colorTexture.width).toBe(480)
+    expect(pass.depthVelocityTexture.height).toBe(270)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    const res = um.resolution() as Cartesian2
+    expect(res.x).toBe(1920) // lowRes*4（恰整除 → = drawingBuffer）
+    expect(res.y).toBe(1080)
+    const tus = um.targetUvScale() as Cartesian2
+    expect(tus.x).toBe(1)
+    expect(tus.y).toBe(1)
+    expect(um.mipLevelScale()).toBe(0.25)
+    expect(um.frame()).toBe(5)
+    pass.destroy()
+  })
+
+  it('temporalUpscale=true 且高不整除（1081）：resolution=lowRes*4=1084 + targetUvScale=1084/1081', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    scene.context.drawingBufferHeight = 1081
+    const pass = createCloudsPass(scene, createMockLuts(), createMockWeather(), st(), {
+      temporalUpscale: true
+    })
+    expect(pass.marchHeight).toBe(271) // ceil(1081/4)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect((um.resolution() as Cartesian2).y).toBe(1084)
+    expect((um.targetUvScale() as Cartesian2).y).toBeCloseTo(1084 / 1081)
+    pass.destroy()
+  })
+
+  it('temporalUpscale 默认 false（M3 零回归）：MRT 全分 + resolution=drawingBuffer + mipLevelScale=1 + frame 恒 0', () => {
+    vi.clearAllMocks()
+    const params = defaultCloudsParameters()
+    params.frame = 5 // params.frame 已递增——非 temporal 时 march uniform 应读 0（D7 拆分）
+    const pass = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
+      parameters: params
+    })
+    expect(pass.marchWidth).toBe(1920)
+    expect(pass.colorTexture.height).toBe(1080)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect((um.resolution() as Cartesian2).x).toBe(1920)
+    expect(um.mipLevelScale()).toBe(1.0)
+    expect(um.frame()).toBe(0)
+    pass.destroy()
+  })
+})
