@@ -24,6 +24,8 @@ import {
   Math as CesiumMath,
   PixelDatatype,
   PixelFormat,
+  Texture,
+  type Context,
   type Scene,
   type Camera,
   type Ellipsoid
@@ -313,14 +315,17 @@ export function buildAtmosphereUniforms(
   }
 }
 
-// M5 atmosphere 路径：clouds shadowLength bridge → atmosphere uniform 表增量（有桥才绑——
-// PostProcessStage uniforms 表的 value 闭包每帧调，桥闭包返回 undefined 时段不渲染云影=0）。
+// M5 atmosphere 路径：clouds shadowLength bridge → atmosphere uniform 表增量。
+// ⚠️ Cesium UniformSampler.set 读 value._target——闭包返回 undefined 会炸（实测：atmosphere
+// 先建、clouds 后异步就绪的首帧窗口）。故包装为「桥 undefined 时回退 1×1 黑 dummy」——采样
+// 得 0 = 无云影，与不 define 的零回归语义一致。
 function appendCloudsShadowLengthUniform(
   uniforms: Record<string, unknown>,
-  bridge: (() => { _texture: unknown; _target: number } | undefined) | undefined
+  bridge: (() => { _texture: unknown; _target: number } | undefined) | undefined,
+  dummyBridge: () => { _texture: unknown; _target: number }
 ): void {
   if (bridge != null) {
-    uniforms.u_cloudsShadowLength = bridge
+    uniforms.u_cloudsShadowLength = () => bridge() ?? dummyBridge()
   }
 }
 
@@ -399,7 +404,18 @@ export function createAtmosphereStage(
       }),
       uniforms: (() => {
         const u = buildAtmosphereUniforms(luts, resolved, state)
-        appendCloudsShadowLengthUniform(u, options.cloudsShadowLengthBridge)
+        // dummy 1×1 黑（shadowLength=0）——桥未就绪帧的回退。惰性构造：真 GL 环境的 uniform
+        // 闭包每帧调（首次构造 dummy），node 测试不调闭包（maximumTextureSize=0 会炸）
+        let cloudsShadowDummy: Texture | undefined
+        appendCloudsShadowLengthUniform(u, options.cloudsShadowLengthBridge, () => {
+          cloudsShadowDummy ??= new Texture({
+            context: (scene as unknown as { context: Context }).context,
+            source: { width: 1, height: 1, arrayBufferView: new Uint8Array([0, 0, 0, 255]) },
+            pixelFormat: PixelFormat.RGBA,
+            pixelDatatype: PixelDatatype.UNSIGNED_BYTE
+          })
+          return cloudsShadowDummy as unknown as { _texture: unknown; _target: number }
+        })
         return u
       })(),
       pixelFormat: PixelFormat.RGBA,
