@@ -372,6 +372,8 @@ async function main(): Promise<void> {
           // ?cloudsTemporal=1 显式开启体验 1/4 分 march + Bayer 重建的帧率优势）
           ...(getString('cloudsTemporal') === '1' ? { temporal: true } : {}),
           ...(getString('cloudsShadowTemporal') === '1' ? { shadowTemporal: true } : {}),
+          // M5 云 god rays 开关（默认开）：?cloudsLightShafts=0 诊断基线（无云间体积光柱）
+          ...(getString('cloudsLightShafts') === '0' ? { lightShafts: false } : {}),
           // 云 overlay 曝光（默认 10 对齐 three 版 storybook 标定；偏灰调大/过曝调小）
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {})
         })
@@ -380,7 +382,7 @@ async function main(): Promise<void> {
           cloudsHandle
         if (cloudsHandle != null) {
           console.info(
-            '[phase3-clouds] 体积云已接线（M3 稳定行为；?cloudsTemporal=1 开 1/4 分 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影）'
+            '[phase3-clouds] 体积云已接线（M3 稳定行为 + M5 云 god rays；?cloudsLightShafts=0 关光柱对比；?cloudsTemporal=1 开 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影）'
           )
         }
       } catch (err) {
