@@ -20,6 +20,7 @@
 import {
   Texture,
   Sampler,
+  BoundingRectangle,
   TextureMinificationFilter,
   TextureMagnificationFilter,
   TextureWrap,
@@ -108,12 +109,18 @@ export function createCloudsResolvePass(
   }
 
   const fragmentShaderSource = buildCloudsResolveFragmentShader({ temporalUpscale: true })
+  // ⚠️ viewport 必须显式 = 全分：RenderState.viewport 为 undefined 时 Cesium 不动 GL viewport
+  //（保持上一个 draw 遗留值）——resolve 跟在低分 march 后执行会继承 march 的低分 viewport，
+  // 只在全分纹理左下角 1/16 区域写入（实测 M4：resolveTex 其余全 0、云整体消失）。
+  // M2/M3 时代 march 全分时此处「碰巧」正确（遗留 viewport=drawingBuffer）。
+  const fullViewport = new BoundingRectangle(0, 0, options.width, options.height)
   const mkPrim = (tex: Texture): VolumetricPrimitive =>
     createVolumetricPrimitive({
       context,
       fragmentShaderSource,
       uniformMap,
-      mrtColorTextures: [tex]
+      mrtColorTextures: [tex],
+      viewport: fullViewport
     })
   let resolvePrim = mkPrim(resolveTex)
   let primB = mkPrim(historyTex)

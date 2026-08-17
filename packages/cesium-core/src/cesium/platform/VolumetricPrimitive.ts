@@ -30,8 +30,16 @@ const PASS_VOXELS = 10
 // voxels pass 的 backToFront 排序（Scene.js performVoxelsPass → mergeSort）读 command.
 // boundingVolume——createViewportQuadCommand 不设它，单 command 时 mergeSort 不触发比较、
 // 多 command（M4：march + resolve 两实例）时 undefined.distanceSquaredTo 炸（实测 M4 T8 smoke）。
-// 共享排序球：两 command 到相机距离相等 → 比较结果恒 0 → mergeSort 稳定保 push 顺序
+// 共享排序球：所有 command 到相机距离相等 → 比较结果恒 0 → mergeSort 稳定保 push 顺序
 //（march 先、resolve 后——本平台 add 顺序即渲染顺序的契约依据）。
+//
+// ⚠️ 球心必须每帧跟随相机（update 内写 center）：createPotentiallyVisibleSet 对**有**
+// boundingVolume 的 command 用 computePlaneDistances 做 frustum 段区间分配（insertIntoBin：
+// far < 段.near 即丢弃）——固定地心球在相机身后（plane distance 负）→ 与任何段不相交 →
+// command 全灭（实测 M4：云整体消失，VOXELS 桶 indices 恒 0）。相机中心球（r=1）区间
+// [-1,+1] 恒交第一段：恰好一次/帧（顺带消除 multi-frustum 每段重复执行的浪费），且
+// march/resolve 共享同一球保持等距排序稳定。M2/M3 无 boundingVolume 走 else 分支
+//（用相机 near/far 全段插入）——那时的「正常」是此差异的掩盖。
 const VOXELS_SORT_BOUNDING_VOLUME = new BoundingSphere(Cartesian3.ZERO, 1.0)
 
 export interface VolumetricPrimitiveOptions {
@@ -138,7 +146,15 @@ export function createVolumetricPrimitive(
   const primitive: VolumetricPrimitive = {
     update(frameState: unknown): void {
       if (destroyed) return
-      ;(frameState as { commandList: { push: (c: DrawCommand) => void } }).commandList.push(cmd)
+      // 排序球心跟随相机（见 VOXELS_SORT_BOUNDING_VOLUME 注释——固定球心会被段区间分配剔除）
+      const fs = frameState as {
+        commandList: { push: (c: DrawCommand) => void }
+        camera?: { positionWC: Cartesian3 }
+      }
+      if (fs.camera != null) {
+        Cartesian3.clone(fs.camera.positionWC, VOXELS_SORT_BOUNDING_VOLUME.center)
+      }
+      fs.commandList.push(cmd)
     },
     isDestroyed(): boolean {
       return destroyed

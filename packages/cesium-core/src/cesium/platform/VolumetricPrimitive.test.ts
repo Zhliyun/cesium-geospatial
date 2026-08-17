@@ -239,3 +239,27 @@ describe('M4 boundingVolume 排序护甲', () => {
     expect((frameState.commandList[1] as any).boundingVolume).toBe(bv)
   })
 })
+
+// M4 追加（云消失根因修复）：createPotentiallyVisibleSet 对有 boundingVolume 的 command 做
+// 段区间分配（insertIntoBin：far < 段.near 即丢）——固定地心球 plane distance 负 → 全灭。
+// 球心必须每帧跟随相机（[-1,+1] 恒交第一段，且 march/resolve 等距排序稳定）。
+describe('M4 排序球跟随相机（段区间分配护甲）', () => {
+  it('update 时球心写为 frameState.camera.positionWC（共享球原地覆写）', () => {
+    const ctx = createMockContext()
+    const prim = createVolumetricPrimitive({
+      context: ctx,
+      fragmentShaderSource: 'void main(){}',
+      uniformMap: {},
+      mrtColorTextures: createMockTextures(),
+    })
+    const frameState = { commandList: [] as any[], camera: { positionWC: { x: 100, y: 200, z: 300 } } }
+    prim.update(frameState)
+    const bv = (frameState.commandList[0] as any).boundingVolume
+    expect(bv.center).toEqual({ x: 100, y: 200, z: 300 })
+    // 第二帧相机移动 → 同一球原地更新（两 command 恒等距）
+    frameState.camera.positionWC = { x: 400, y: 500, z: 600 }
+    frameState.commandList.length = 0
+    prim.update(frameState)
+    expect((frameState.commandList[0] as any).boundingVolume.center).toEqual({ x: 400, y: 500, z: 600 })
+  })
+})
