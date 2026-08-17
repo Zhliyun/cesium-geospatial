@@ -89,4 +89,5 @@ phase2a 方向：把末端内联 ACES 拆为「atmosphere stage 输出线性 HDR
 
 - **spec → plan → results**：`docs/superpowers/specs/<date>-<topic>-design.md`（设计，常经多专家 workflow 评审）→ `docs/superpowers/plans/<date>-<topic>.md`（实现计划）→ `plans/<date>-<topic>-results.md`（结果）。`.superpowers/sdd/` 存任务 brief/report 与评审 diff。动手前先看对应 spec。
 - **调试方法论**：递进式编号 debug-probe shader（`u_debugMode` 1→2→3→5→6）隔离单个失效物理量，而非盲改。
+- **渲染异常先清 vite 缓存再排查**：vite 对 workspace 包（symlink）的模块级编译产物缓存（`apps/demo/node_modules/.vite`）在多次改代码+HMR 后会与源码不一致（重启也可能不生效）——曾把缓存不一致导致的「云球壳 91km 高空偏移」误判为渲染 bug（2026-08-17 假警报，`pickEllipsoid` 实测云几何本正确、清缓存即恢复）。**看到渲染/行为异常先 `pkill -f vite && rm -rf apps/demo/node_modules/.vite && pnpm dev`，清缓存后仍在的异常才是真 bug。** 另：低对比画面（高空云海/均匀天空）上像素拟合与 AI 目测都不可靠，几何位置判断须用 `camera.pickEllipsoid` 等 Cesium 精确投影佐证。
 - 所有代码注释、文档、对话用**中文**（遵循全局规范）。
