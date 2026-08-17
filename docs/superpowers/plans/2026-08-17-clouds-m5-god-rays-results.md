@@ -68,7 +68,7 @@ M6 地形交互 + 质量预设 + 集成（云投影地面 B 路径 hack / `getRa
 - BSM 内容排查：级联 0/1/2 有数据（BSM debug），但 march 投影位置采到的 meanExtinction ~0.0004-0.02（与画面 70-80% 厚云不符）——**BSM 光深比预期小 3-4 个数量级，指向 M3 BSM 移植的深层问题**（级联投影/密度采样/resolve 链路之一），与 atmosphere 路径无关。
 - 附注：M3 验收的「云自阴影全过」走 Beer/powder 相对明暗，弱 BSM 也能出体积感；god rays 需要绝对光深量级，问题才暴露。
 
-**遗留任务（新建专门迭代）**：BSM 光深量级调查——trace 已把断点缩到 `readShadowOpticalDepth` 的输入侧（sh.g 极小 / march 路径 texel 采样）。修复后 M5 god rays 重新验收。
+**遗留任务（新建专门迭代）**：~~BSM 光深量级调查~~ → **已定位根因并修复（2026-08-18，commit 69ee488）**：CascadedShadowMaps 的 `lookAtMatrix` 里 Matrix3 构造参数序错（Cesium 构造参数是 **row-major 传入**，代码误当列主序——basis 向量填错行列）→ light 旋转矩阵被**转置** → 级联盒中心偏离视锥 ~189km → march 采样 UV 全越界 → `sampleShadowOpticalDepth` 恒 0 → shadowLength≈0.35m。修复后 att2 恢复 **0.6-1+km**，`?cloudsGodRays=20` 产生 25% 像素的可见调制。轴对齐的旧测试场景（rot=identity，转置不变）掩盖了它三个里程碑；新增「生产朝向（任意 ECEF 机位+任意太阳）级联盒罩视锥」回归用例。注意：**M3 验收的「自阴影明暗」视觉部分来自错误位置的云影**（统计相似的云纹理恰好有明暗层次），修复后自阴影采样位置才真正正确。
 
 **本阶段方法论修正**（探针验证的坑，记忆见 memory）：
 - **agent-browser `open` 同 URL 不触发 reload**（query 全同只 no-op）——多组「逐位一致」的对照全是假象；URL 对照实验必须加随机参数（`&_r=N`）强制导航。
