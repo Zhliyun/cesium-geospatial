@@ -110,6 +110,15 @@ export interface CloudsParameters {
   minSecondaryStepSize: number
   secondaryStepScale: number
 
+  // ── 云 god rays（M5，SHADOW_LENGTH——marchShadowLength 沿视线累加 BSM 光深；three qualityPresets.ts
+  //    defaults.clouds 逐字）──
+  /** shadowLength march 最大步数（three：500）。 */
+  maxShadowLengthIterationCount: number
+  /** shadowLength march 最小步长（米，three：50）。 */
+  minShadowLengthStepSize: number
+  /** shadowLength march 最大距离（米，three：2e5——主 march maxRayDistance 同域）。 */
+  maxShadowLengthRayDistance: number
+
   // ── scatter 视觉（CloudsMaterial.ts 默认）──
   skyLightScale: number
   groundBounceScale: number
@@ -230,6 +239,11 @@ export function defaultCloudsParameters(): CloudsParameters {
     maxIterationCountToGround: 3,
     minSecondaryStepSize: 100,
     secondaryStepScale: 2,
+
+    // 云 god rays（M5，three defaults.clouds 逐字）
+    maxShadowLengthIterationCount: 500,
+    minShadowLengthStepSize: 50,
+    maxShadowLengthRayDistance: 2e5,
 
     // scatter 视觉（CloudsMaterial.ts:212-215）
     skyLightScale: 1.0,

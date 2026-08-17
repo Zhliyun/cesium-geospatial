@@ -132,19 +132,19 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
-  it('MRT：2 texture（color/depthVelocity）传入 createVolumetricPrimitive.mrtColorTextures（M2 无 SHADOW_LENGTH；drawBuffers 数须=shader out 数）', () => {
+  it('MRT：lightShafts 显式关时 2 texture（drawBuffers 数须=shader out 数；M5 默认开为 3——见 M5 T2 用例）', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
     const pass = createCloudsPass(
       scene,
       createMockLuts(),
       createMockWeather(),
-      state
+      state,
+      { lightShafts: false }
     )
     const callOpts = (createVolumetricPrimitive as any).mock.calls[0][0]
-    // M2 shader 只 location 0/1 两个 out（SHADOW_LENGTH 不 define）→ FBO 必须 2 attachment，
-    // 3 attachment 触发 GL_INVALID_OPERATION "missing fragment shader outputs"（实测）。
-    // M5 define SHADOW_LENGTH 加 shadowLenTex 成 3。
+    // lightShafts=false → shader 只 location 0/1 两个 out（SHADOW_LENGTH 不 define）→ FBO 必须
+    // 2 attachment（M2 坑：attachment 数 ≠ out 数触发 GL_INVALID_OPERATION）。
     expect(callOpts.mrtColorTextures).toHaveLength(2)
     pass.destroy()
   })
@@ -471,6 +471,43 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     expect((um.resolution() as Cartesian2).x).toBe(1920)
     expect(um.mipLevelScale()).toBe(1.0)
     expect(um.frame()).toBe(0)
+    pass.destroy()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M5 T2：SHADOW_LENGTH MRT/参数（云 god rays）
+// ─────────────────────────────────────────────────────────────────────────────
+describe('M5 T2 SHADOW_LENGTH MRT/参数', () => {
+  const st5 = (): CloudsFrameState => ({
+    sunDirection: new Cartesian3(0, 0, 1),
+    altitudeCorrection: new Cartesian3()
+  })
+
+  it('lightShafts 默认开：MRT 3 attachment（含 shadowLengthTexture 全分）+ uniformMap 三参数（three defaults 逐字）', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st5(), {
+      parameters: defaultCloudsParameters()
+    })
+    expect(pass.shadowLengthTexture).toBeDefined()
+    expect(pass.shadowLengthTexture!.width).toBe(1920) // 全分（temporal 默认关）
+    expect(pass.shadowLengthTexture!.height).toBe(1080)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um.maxShadowLengthIterationCount()).toBe(500)
+    expect(um.minShadowLengthStepSize()).toBe(50)
+    expect(um.maxShadowLengthRayDistance()).toBe(2e5)
+    pass.destroy()
+  })
+
+  it('lightShafts=false：MRT 2 attachment、shadowLengthTexture undefined（零回归）', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st5(), {
+      lightShafts: false
+    })
+    expect(pass.shadowLengthTexture).toBeUndefined()
+    // mrtColorTextures 只有 2 张（attachment 数 = out 数，M2 坑）
+    const mrt = (createVolumetricPrimitive as any).mock.calls[0][0].mrtColorTextures
+    expect(mrt.length).toBe(2)
     pass.destroy()
   })
 })

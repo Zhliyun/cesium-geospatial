@@ -28,8 +28,8 @@
 //     cascade 选择 near/far 同步换 u_shadowCameraNear/state.shadow.far（BSM split 完整视锥域）
 //   - reprojectionMatrix/viewReprojectionMatrix（M4 temporal）：identity → velocity 非 0 但
 //     outputDepthVelocity 在 M2 未被消费
-//   - SHADOW_LENGTH（M5 god rays）：CloudsMaterial 不 define → marchShadowLength/outputShadowLength(loc2)
-//     不编译；applyAerialPerspective 用 shadowLength=0 调 GetSkyRadianceToPoint（无 god rays）
+//   - SHADOW_LENGTH（M5 god rays 已接通，默认开）：MRT att2 shadowLengthTex + 三参数绑定；
+//     applyAerialPerspective 以 marchShadowLength 产物调 GetSkyRadianceToPoint（云间光柱）
 //   - depthBuffer（M6 提前接通，2026-08-14）：globeDepth.depthStencilTexture（log-depth 编码，
 //     CloudsMaterial surgery 把 three reverseLogDepth 版 getRayDistanceToScene 换 czm_reverseLogDepthWindow
 //     反演）→ 云被地形截断/遮挡；未就绪时 fallback 1×1 val=1.0 dummy（远截断降级）
@@ -237,6 +237,11 @@ export interface CloudsPass {
    * 构造消费；非 temporal 时同尺寸写 0 不消费，M2 行为）。
    */
   readonly depthVelocityTexture: Texture
+  /**
+   * MRT att2 shadowLength Tex（M5 god rays，lightShafts 开时存在；temporal 关时无消费者——
+   * three 喂 atmosphereShadowLength 的路径 spec 不做，预留 M6/后续）。
+   */
+  readonly shadowLengthTexture: Texture | undefined
   /** march FBO 宽（temporal 时 = ceil(drawingBuffer/4)，T7 算 jitter 的 lowRes）。 */
   readonly marchWidth: number
   /** march FBO 高（同上）。 */
@@ -307,13 +312,16 @@ export function createCloudsPass(
       sampler: mrtSampler
     })
   const colorTex = mkMrtTex() // att0：云 color（RGB linear HDR）+ transmittance（A）
-  const depthVelTex = mkMrtTex() // att1：depthVelocity（M4 temporal 接通；M2 写 0 不消费）
-  // M2 只 attach 2（color + depthVelocity）：FBO drawBuffers 数必须匹配 shader out 数——
-  // M2 不 define SHADOW_LENGTH，shader 只有 location 0/1 两个 out；3 attachment + 2 out 触发
-  // GL_INVALID_OPERATION "Active draw buffers with missing fragment shader outputs"（实测）。
-  // M5 define SHADOW_LENGTH 时 shader 加 location 2 out（outputShadowLength），届时加 shadowLenTex
-  // 成 3 attachment。
-  const mrtTextures = [colorTex, depthVelTex]
+  const depthVelTex = mkMrtTex() // att1：depthVelocity（M4 temporal 接通；temporal 关时写 0 不消费）
+  // M5 T2：lightShafts（默认开）时 define SHADOW_LENGTH → shader 有 location 2 out
+  //（outputShadowLength），MRT 配第 3 attachment。FBO drawBuffers 数必须匹配 shader out 数
+  //（M2 坑：2 out + 3 attachment 触发 GL_INVALID_OPERATION "missing fragment shader outputs"
+  // ——反方向 3 out + 2 attachment 同炸）。att2 无消费者（three 喂 atmosphereShadowLength 的
+  // 路径 spec 明确不做）——RGBA 同 mkMrtTex（out float 写 R 通道合法，类型统一避 RED+HALF_FLOAT
+  // 组合坑）。
+  const lightShafts = options.lightShafts !== false
+  const shadowLenTex = lightShafts ? mkMrtTex() : undefined
+  const mrtTextures = lightShafts ? [colorTex, depthVelTex, shadowLenTex!] : [colorTex, depthVelTex]
 
   // ── dummy texture（fallback：state.shadow 未就绪项）──
   // shadowBuffer 用 Texture3D（sampler3D）：Cesium createUniform 不认 sampler2DArray（type 36289，
@@ -430,6 +438,12 @@ export function createCloudsPass(
     minSecondaryStepSize: () => params.minSecondaryStepSize,
     secondaryStepScale: () => params.secondaryStepScale,
 
+    // 云 god rays（M5，SHADOW_LENGTH define 时 shader 才声明消费；不 define 时绑了是未声明
+    // uniform，Cesium 静默忽略——lightShafts 开关无需分支绑定）
+    maxShadowLengthIterationCount: () => params.maxShadowLengthIterationCount,
+    minShadowLengthStepSize: () => params.minShadowLengthStepSize,
+    maxShadowLengthRayDistance: () => params.maxShadowLengthRayDistance,
+
     // BSM（M3：state.shadow 由 createCloudsStage preRender 填；未就绪 fallback 全 0 dummy → Beer=1）
     shadowBuffer: () => state.shadow?.bsm ?? dummyShadowBuffer,
     shadowTexelSize: () => state.shadow?.texelSize ?? params.shadowTexelSize,
@@ -481,6 +495,7 @@ export function createCloudsPass(
     primitive,
     colorTexture: colorTex,
     depthVelocityTexture: depthVelTex,
+    shadowLengthTexture: shadowLenTex,
     marchWidth,
     marchHeight,
     getColorBridge: colorBridge,
@@ -490,6 +505,7 @@ export function createCloudsPass(
       primitives.remove(primitive)
       primitive.destroy() // 释放 MRT FBO（GL framebuffer handle），destroyAttachments=false 不连带 texture
       mrtTextures.forEach((t) => t.destroy())
+      shadowLenTex?.destroy()
       dummyDepthBuffer.destroy()
       dummyTurbulence.destroy()
       // dummyShadowBuffer Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用）。
