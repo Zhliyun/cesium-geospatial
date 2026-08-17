@@ -51,3 +51,28 @@ three-geospatial storybook `clouds-clouds--basic`（lightShafts 默认 on）实�
 ## 下一步
 
 M6 地形交互 + 质量预设 + 集成（云投影地面 B 路径 hack / `getRayDistanceToScene` 已通 / qualityPresets / resize / M6 参数化三处同步清单——见 plan 与 memory）。
+
+---
+
+## atmosphere 路径（T4，用户拍板追加；2026-08-17 深挖收尾）
+
+**实装**（commit b67eaf1，core 277 + clouds 143 全绿）：
+- att2（march shadowLength，m→km）经 `cloudsShadowLengthBridge` 喂 atmosphere stage 天空分支 `GetSkyRadiance` 的 shadow_length 参数（桥未就绪帧回退 1×1 黑 dummy，零回归）。
+- `u_cloudsGodRaysGain`（默认 1 物理精确；demo `?cloudsGodRays=N`）采样后相乘——atmosphere 路径增益通道。
+
+**消费端正确性**：常量 50km 探针 → 天空变暗 31%（Bruneton shadow_length 分支、桥、采样、uniform 全通）。
+
+**效果结论：任何现实增益下不可见——根因是 BSM 光深量级，非 atmosphere 路径**（强制 reload 对照实验，-30,45 海面 70-80% 积云云下机位）：
+- trace 探针（TEMP `DEBUG_SHOW_SHADOW_TRACE`，复刻 march 循环）实测：视线 4km 路径上 od max ≈ **0.01**，平均 ~1e-4 量级 → shadowLength 累积 ≈ **0.35m**（不是此前记的 0.35-0.5km——旧测值来自 no-op reload 污染的页面，作废）。
+- 对照 gain 10000 → 3.5km 等效影长 → 亮度调制 <1.5%（<差分阈值 8/255）→ 零差分；gain 20/100 同理。
+- BSM 内容排查：级联 0/1/2 有数据（BSM debug），但 march 投影位置采到的 meanExtinction ~0.0004-0.02（与画面 70-80% 厚云不符）——**BSM 光深比预期小 3-4 个数量级，指向 M3 BSM 移植的深层问题**（级联投影/密度采样/resolve 链路之一），与 atmosphere 路径无关。
+- 附注：M3 验收的「云自阴影全过」走 Beer/powder 相对明暗，弱 BSM 也能出体积感；god rays 需要绝对光深量级，问题才暴露。
+
+**遗留任务（新建专门迭代）**：BSM 光深量级调查——trace 已把断点缩到 `readShadowOpticalDepth` 的输入侧（sh.g 极小 / march 路径 texel 采样）。修复后 M5 god rays 重新验收。
+
+**本阶段方法论修正**（探针验证的坑，记忆见 memory）：
+- **agent-browser `open` 同 URL 不触发 reload**（query 全同只 no-op）——多组「逐位一致」的对照全是假象；URL 对照实验必须加随机参数（`&_r=N`）强制导航。
+- **eval `camera.setView` 会冻结画面更新**（eval 只改 uniform/enabled 无此问题）；相机定位走 URL 参数 reload。
+- **core 包（vite workspace 源链接）改动必须 pkill vite + rm apps/demo/node_modules/.vite + 重启**，HMR/reload 拿不到新代码。
+- Cesium 碰撞检测每帧 `_adjustHeightForTerrain` 会把地下相机推高（-53.5,77 机位 800m→2010m）——跨页差分前必须用 eval 读回 `positionCartographic.height` 确认稳定，或选海面机位。
+- FPS 面板是分区统计恒定 ~1.6% 暗像素的来源；AI 视觉分析在均匀低对比画面上会产生「云」幻觉——数值佐证是硬要求（memory 教训的第三次验证）。
