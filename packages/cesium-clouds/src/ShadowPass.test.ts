@@ -16,14 +16,21 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 const glCalls: string[] = []
 const attachments: { layer: number; tex: unknown }[] = []
 let fboSeq = 0 // M4：生成端 fbo0 / resolve 端 fbo1 可区分（beforeEach 重置）
+// 绑定状态机（回归用：execute 重置绑定为 null 时 attach 前必须已重绑——2026-08-18 滚轮缩放
+// 用户验收实测 bug：FullscreenPass.execute 在部分帧把 FRAMEBUFFER 绑定重置 null，i>=1 的
+// framebufferTextureLayer 报 "no framebuffer bound" 且该层 BSM draw 落空）。
+let currentBinding: unknown = null
+const attachBindings: unknown[] = []
 const gl = {
   createFramebuffer: vi.fn(() => ({ tag: 'fbo' + fboSeq++ })),
   deleteFramebuffer: vi.fn(),
-  bindFramebuffer: vi.fn((_t: number, fbo: unknown) =>
+  bindFramebuffer: vi.fn((_t: number, fbo: unknown) => {
+    currentBinding = fbo
     glCalls.push(`bind:${(fbo as { tag: string } | null)?.tag ?? 'null'}`)
-  ),
+  }),
   framebufferTextureLayer: vi.fn(
     (_t: number, _a: number, tex: unknown, _l: number, layer: number) => {
+      attachBindings.push(currentBinding)
       glCalls.push(`attach:${layer}`)
       attachments.push({ layer, tex })
     }
@@ -135,6 +142,8 @@ describe('createShadowPass', () => {
     vi.clearAllMocks()
     glCalls.length = 0
     attachments.length = 0
+    currentBinding = null
+    attachBindings.length = 0
     ;(Texture3D as unknown as { instances: unknown[] }).instances = []
     ;(Texture3D as unknown as { allOptions: unknown[] }).allOptions = []
     fboSeq = 0
@@ -210,6 +219,38 @@ describe('createShadowPass', () => {
     expect(glCalls[glCalls.length - 1]).toBe('bind:prevFbo')
     // finally 恢复 viewport 到 drawingBuffer（RenderState.viewport=mapSize 在 execute 内 apply）
     expect(gl.viewport).toHaveBeenCalledWith(0, 0, 1920, 1080)
+    pass.destroy()
+  })
+
+  // 回归（2026-08-18 用户验收滚轮缩放报 "framebufferTextureLayer: no framebuffer bound"）：
+  // FullscreenPass.execute 在部分帧（multi-frustum 分段渲染）把 FRAMEBUFFER 绑定重置为 null，
+  // 旧实现循环外只 bind 一次 → i>=1 的 attach 落在 null 上（报错 + 该层 BSM draw 落空）。
+  // 修复：每次 attach 前防御性重绑 fbo。本用例用「execute 即重置绑定为 null」的 stub 模拟。
+  it('render() 防御重绑：execute 重置 FRAMEBUFFER 为 null 时，每层 attach 前绑定仍是 fbo', () => {
+    const context = createMockContext()
+    const pass = createShadowPass({
+      context,
+      cascadeCount: 3,
+      mapSize: 8,
+      uniformMap: { frame: () => 0 },
+      temporalPass: false,
+      // stub execute：模拟 Cesium 把绑定重置为 null（用户验收实测行为）
+      createDrawPass: () => ({
+        execute: () => {
+          currentBinding = null
+        },
+        destroy: () => {}
+      })
+    })
+    pass.render()
+    // 3 层 attach 全部发生在「绑定 = ShadowPass 内部创建的 fbo」上——
+    // 没有防御重绑时 i=1,2 会落在 null（execute 重置后）
+    expect(attachments.map(a => a.layer)).toEqual([0, 1, 2])
+    expect(attachBindings).toHaveLength(3)
+    for (const b of attachBindings) {
+      expect(b).not.toBeNull()
+      expect((b as { tag: string }).tag).toMatch(/^fbo\d+$/)
+    }
     pass.destroy()
   })
 

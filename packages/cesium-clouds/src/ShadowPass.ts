@@ -302,6 +302,11 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
           gl.drawBuffers([GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1])
         }
         for (let i = 0; i < cascadeCount; i++) {
+          // 每次 attach 前重绑 fbo（防御）：drawPass.execute 在某些帧（滚轮缩放/multi-frustum
+          // 分段，Cesium passState.framebuffer 状态机路径不同）会把 FRAMEBUFFER 绑定重置为
+          // null——不补绑则 i>=1 的 framebufferTextureLayer 报 "no framebuffer bound" 且该层
+          // BSM draw 落空（2026-08-18 用户验收实测，每帧恰好 i=1,2 两次 NULL）。
+          gl.bindFramebuffer(GL_FRAMEBUFFER, fbo)
           // 逐层 attach（TEXTURE_3D layer attach；level 0——BSM 无 mipmap）
           gl.framebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rawTex, 0, i)
           if (temporalPass) {
@@ -334,6 +339,8 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
           gl.bindFramebuffer(GL_FRAMEBUFFER, resolveFbo)
           const rawResolve = (resolveTex as unknown as { _texture: WebGLTexture })._texture
           for (let i = 0; i < cascadeCount; i++) {
+            // 同上防御：resolveDrawPass.execute 可能重置 FBO 绑定，每次 attach 前重绑
+            gl.bindFramebuffer(GL_FRAMEBUFFER, resolveFbo)
             gl.framebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rawResolve, 0, i)
             if (i === 0 && gl.checkFramebufferStatus(GL_FRAMEBUFFER) !== GL_FRAMEBUFFER_COMPLETE) {
               console.warn('[clouds] BSM resolve FBO 不完整，跳过 resolve（保持 current 直通）')
