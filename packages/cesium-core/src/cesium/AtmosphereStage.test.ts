@@ -252,6 +252,17 @@ describe('buildAtmosphereUniforms', () => {
     expect(unwrap(u2, 'u_debugMode')).toBe(2)
   })
 
+  it('M5 u_cloudsGodRaysGain 默认 1（物理精确），可覆盖', () => {
+    const u1 = buildAtmosphereUniforms(stubLuts, validateAtmosphereOptions({}), makeState())
+    expect(unwrap(u1, 'u_cloudsGodRaysGain')).toBe(1)
+    const u2 = buildAtmosphereUniforms(
+      stubLuts,
+      validateAtmosphereOptions({ cloudsGodRaysGain: 20 }),
+      makeState()
+    )
+    expect(unwrap(u2, 'u_cloudsGodRaysGain')).toBe(20)
+  })
+
   it('LUT 接线：transmittance/scattering/irradiance 来自 luts，single_mie 传 scattering 占位', () => {
     const uniforms = buildAtmosphereUniforms(stubLuts, validateAtmosphereOptions({}), makeState())
     expect(unwrap(uniforms, 'transmittance_texture')).toBe(stubLuts.transmittance)
@@ -286,6 +297,8 @@ describe('validateAtmosphereOptions', () => {
       // limb outer glow（太空视角大气边缘扩散辉光）：默认 intensity 1.0（线性域独立加 finalColor）/ decay 30km
       limbGlowIntensity: 1.0,
       limbGlowDecayKm: 30.0,
+      // M5 云 god rays 光柱增益默认 1（物理精确 subtle 对齐 three）
+      cloudsGodRaysGain: 1.0,
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,

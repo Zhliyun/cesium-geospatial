@@ -255,6 +255,8 @@ async function main(): Promise<void> {
       // ?limbGlow=N 调强度（0=关），?limbDecay=N 调扩散范围 km。验收视角：camera=93.9439,31.6997,61883,89.2,-19.0
       ...(getNumber('limbGlow') != null ? { limbGlowIntensity: getNumber('limbGlow')! } : {}),
       ...(getNumber('limbDecay') != null ? { limbGlowDecayKm: getNumber('limbDecay')! } : {}),
+      // M5 云 god rays 光柱增益：默认 1 物理精确（subtle 对齐 three）；?cloudsGodRays=20 艺术放大出可见光柱
+      ...(getNumber('cloudsGodRays') != null ? { cloudsGodRaysGain: getNumber('cloudsGodRays')! } : {}),
       // depthTemporal EMA（Task 12）：默认 EMA 开 + low preset；?temporalEma=0 关闭，?temporalQuality=high 弱平滑
       temporalEma: getString('temporalEma') !== '0',
       temporalLowAlpha: temporalPreset.lowAlpha,

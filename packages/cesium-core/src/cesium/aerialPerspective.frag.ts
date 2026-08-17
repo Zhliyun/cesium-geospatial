@@ -44,6 +44,13 @@ export interface AerialPerspectiveFragOptions {
    * 光柱视觉主体在本路径（three 的 atmosphereShadowLength 喂大气系统同款机制）。
    */
   cloudsShadowLength?: boolean
+  /**
+   * M5 云 god rays 增益（默认 1）：marchShadowLength 物理值域 0.35-0.5km（光深加权影长，
+   * hitClouds 时被 clamp 到云前表面），而 GetSkyRadiance 的 shadow_length 机制需数十 km
+   * 影长才有可见调制（它调制 single scattering × 视线透射率 T，短距 T≈1）——gain=1 物理精确
+   * 但 subtle（对齐 three 同款量级）；>1 艺术放大出可见放射状光柱（demo ?cloudsGodRays=）。
+   */
+  cloudsGodRaysGain?: number
 }
 
 type ResolvedOptions = Required<AerialPerspectiveFragOptions>
@@ -66,7 +73,8 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'u_distanceScale',
   'u_inscatterScale',
   'u_limbGlowIntensity',
-  'u_limbGlowDecayKm'
+  'u_limbGlowDecayKm',
+  'u_cloudsGodRaysGain' // M5 光柱增益（无条件绑定；CLOUDS_SHADOW_LENGTH 未 define 时 shader 无此 uniform，Cesium 静默忽略）
 ]
 
 // Cesium PostProcessStage 内建纹理 uniform——必须由 shader 显式声明（Cesium 仅提供 uniform 值，
@@ -334,6 +342,9 @@ function buildMainFn(o: ResolvedOptions): string {
     // M5 atmosphere 路径：视线云影长度调制天空 inscatter（太阳周围放射光柱）。
     // clouds march att2 已 *METER_TO_LENGTH_UNIT（m→km），与本函数 shadow_length 参数域一致。
     float cloudsShadowLength = texture(u_cloudsShadowLength, v_textureCoordinates).r;
+    // M5 atmosphere 路径：云影长度增益（march 物理值域 0.35-0.5km，Bruneton shadow_length 机制
+    // 需数十 km 才可见调制——gain=1 物理精确但 subtle 对齐 three；艺术放大出可见光柱）
+    cloudsShadowLength *= u_cloudsGodRaysGain;
 #else
     const float cloudsShadowLength = 0.0;
 #endif
@@ -606,6 +617,7 @@ export function buildAerialPerspectiveFragmentShader(
     sky: true,
     hdrDepthTemporal: false,
     cloudsShadowLength: false,
+    cloudsGodRaysGain: 1.0,
     ...options
   }
 
@@ -620,6 +632,7 @@ export function buildAerialPerspectiveFragmentShader(
   // M5 云 god rays atmosphere 路径：天空分支采样的视线云影长度（clouds march MRT att2，km 域）
   if (o.cloudsShadowLength) {
     uniforms.push('uniform sampler2D u_cloudsShadowLength;')
+    uniforms.push('uniform float u_cloudsGodRaysGain;') // M5 光柱艺术增益（1=物理精确）
   }
 
   // LOG_DEPTH_GLSL：czm_reverseLogDepthWindow（main depth 反演用）+ 配套反演辅助（logDepth.ts）。

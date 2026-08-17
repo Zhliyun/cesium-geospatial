@@ -263,4 +263,15 @@ describe('M5 atmosphere 路径（cloudsShadowLength 编译分支）', () => {
     )
     expect(src).toContain('const float cloudsShadowLength = 0.0;')
   })
+
+  it('god rays 增益：CLOUDS_SHADOW_LENGTH 开时声明 u_cloudsGodRaysGain 且采样值相乘（默认 1 物理精确）', () => {
+    const src = buildAerialPerspectiveFragmentShader({ cloudsShadowLength: true })
+    expect(src).toContain('uniform float u_cloudsGodRaysGain;')
+    expect(src).toContain('cloudsShadowLength *= u_cloudsGodRaysGain;')
+  })
+
+  it('god rays 增益：CLOUDS_SHADOW_LENGTH 关时不声明 u_cloudsGodRaysGain（分支外无残留）', () => {
+    const src = buildAerialPerspectiveFragmentShader({})
+    expect(src).not.toContain('uniform float u_cloudsGodRaysGain;')
+  })
 })

@@ -236,6 +236,8 @@ export function validateAtmosphereOptions(
     // limb outer glow 默认（太空视角大气边缘扩散辉光）：intensity 1.0 线性域（独立加 finalColor，不 ×inscatterScale）、decay 30km 扩散范围，URL ?limbGlow/?limbDecay 调
     limbGlowIntensity: options.limbGlowIntensity ?? 1.0,
     limbGlowDecayKm: options.limbGlowDecayKm ?? 30.0,
+    // M5 云 god rays 增益默认 1（物理精确 subtle 对齐 three；demo ?cloudsGodRays= 艺术放大出可见光柱）
+    cloudsGodRaysGain: options.cloudsGodRaysGain ?? 1.0,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
@@ -309,6 +311,8 @@ export function buildAtmosphereUniforms(
     u_inscatterScale: options.inscatterScale,
     u_limbGlowIntensity: options.limbGlowIntensity,
     u_limbGlowDecayKm: options.limbGlowDecayKm,
+    // M5 云 god rays 增益：CLOUDS_SHADOW_LENGTH 未 define 时 shader 无此 uniform，Cesium 静默忽略（同 clouds 三参数先例）
+    u_cloudsGodRaysGain: options.cloudsGodRaysGain,
     // u_ditherScale 不传：aerialPerspective.frag 回退到 363e441（input dithering 用固定 1.5/255，无 uniform）。
     // display dithering 的 u_ditherScale 仍在 tonomapStage 消费（?ditherScale= 仍有效）。
     cosSunAngularRadius: Math.cos(SUN_ANGULAR_RADIUS)
