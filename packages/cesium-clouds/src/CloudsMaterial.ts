@@ -219,8 +219,15 @@ void cloudsBridge_reconstructVaryings() {
 
   // 视线方向（view space）：czm_windowToEyeCoordinates 近/远平面差分（仿 core reconstructRay）。
   // M4 T6：窗口坐标加 Bayer jitter（temporalJitter*resolution 单位 = 全分像素）。
-  vec4 eyeNear = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy + temporalJitter * resolution, 0.0, 1.0));
-  vec4 eyeFar = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy + temporalJitter * resolution, 1.0, 1.0));
+  // ⚠️ 低分 march 域换算（2026-08-17 抖动根因修复）：gl_FragCoord 是**低分 FBO viewport 域**
+  // （0..lowRes），而 czm_windowToEyeCoordinates 的窗口→NDC 反算按 czm_viewport（全分
+  // drawingBuffer 域）——不换算会把低分坐标当全分坐标，NDC 系统性偏 4×（ray 方向错、
+  // velocity 恒定非 0 → history 错位采样 → 静止时 AABB clip 拉锯 = 云整体抖动）。
+  // 换算式：全分窗口 = gl_FragCoord / targetUvScale（targetUvScale = lowRes*4/全分，非
+  // temporal 时 (1,1) 恒等——M2/M3 行为不变）。jitter 项已是全分像素单位，不随换算缩放。
+  vec2 windowCoord = gl_FragCoord.xy / targetUvScale + temporalJitter * resolution;
+  vec4 eyeNear = czm_windowToEyeCoordinates(vec4(windowCoord, 0.0, 1.0));
+  vec4 eyeFar = czm_windowToEyeCoordinates(vec4(windowCoord, 1.0, 1.0));
   if (abs(eyeNear.w) > 1e-10) eyeNear /= eyeNear.w;
   if (abs(eyeFar.w) > 1e-10) eyeFar /= eyeFar.w;
   vec3 dirEC = eyeFar.xyz - eyeNear.xyz;

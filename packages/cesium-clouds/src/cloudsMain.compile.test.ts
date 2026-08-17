@@ -238,12 +238,12 @@ describe('M3 T4 BSM 消费 surgery', () => {
 // M4 T6：ray 重建 jitter surgery 断言
 // ─────────────────────────────────────────────────────────────────────────────
 describe('M4 T6 jitter surgery', () => {
-  it('ray 重建消费 temporalJitter（gl_FragCoord + temporalJitter * resolution，近/远两处）', () => {
+  it('ray 重建消费 temporalJitter + 低分域换算（gl_FragCoord / targetUvScale + jitter，一处 windowCoord 近/远共用）', () => {
     const src = buildCloudsMainFragmentShader({})
-    const n = (
-      src.match(/czm_windowToEyeCoordinates\(vec4\(gl_FragCoord\.xy \+ temporalJitter \* resolution/g) ?? []
-    ).length
-    expect(n).toBe(2)
+    // 2026-08-17 抖动修复：低分 march 的 gl_FragCoord 必须除以 targetUvScale 换算到全分窗口域
+    expect(src).toContain('vec2 windowCoord = gl_FragCoord.xy / targetUvScale + temporalJitter * resolution;')
+    expect(src).toContain('czm_windowToEyeCoordinates(vec4(windowCoord, 0.0, 1.0))')
+    expect(src).toContain('czm_windowToEyeCoordinates(vec4(windowCoord, 1.0, 1.0))')
   })
 
   it('vViewPosition 保持 normalize（与 three 未归一化版共线——投影 w 除法抵消标量差）', () => {
