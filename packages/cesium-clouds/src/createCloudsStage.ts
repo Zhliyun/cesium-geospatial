@@ -124,6 +124,12 @@ export interface CloudsStageHandle {
   readonly cloudsPass: CloudsPass
   /** cloudsBuffer overlay PostProcessStage（add 到 scene.postProcessStages 末尾）。 */
   readonly overlayStage: PostProcessStage
+  /** ShadowPass（BSM 生成端；options.shadowPass=false 时 undefined）。调试/探针采样用。 */
+  readonly shadowPass?: ShadowPass
+  /** BSM 帧状态（级联矩阵/分段/near/far——preRender 每帧覆写；数值调试只读用）。 */
+  readonly shadowState: CloudsShadowFrameState
+  /** CascadedShadowMaps 实例（级联 split/frusta/bbox 中间量调试用）。 */
+  readonly cascades: CascadedShadowMaps
   /** 释放：摘 preRender listener + CloudsPass.destroy + overlay stage destroy。幂等。 */
   destroy(): void
 }
@@ -468,6 +474,12 @@ export function createCloudsStage(
   return {
     cloudsPass,
     overlayStage,
+    // ShadowPass 引用（调试/探针采样 BSM 用；shadowPass=false 时 undefined）
+    shadowPass,
+    // BSM 帧状态（matrices/intervals/cameraNear/far——级联投影数值调试用）
+    shadowState,
+    // CascadedShadowMaps 实例（frusta/bbox 中间量调试用）
+    cascades,
     destroy(): void {
       if (destroyed) return
       destroyed = true

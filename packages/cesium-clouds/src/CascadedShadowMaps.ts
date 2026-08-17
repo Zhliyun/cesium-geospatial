@@ -169,11 +169,14 @@ function lookAtMatrix(
   }
   Cartesian3.normalize(xAxis, xAxis)
   const yAxis = Cartesian3.cross(zAxis, xAxis, new Cartesian3())
-  // basis 列 = (x,y,z)（Cesium Matrix3 构造参数按列主序：col0=xAxis, col1=yAxis, col2=zAxis）
+  // basis 列 = (x,y,z)。⚠️ Cesium Matrix3/4 构造参数是 row-major 传入（参数名 columnNRowM，
+  // 第一组三个 = 第 0 行的三列）——「列=basis」矩阵的正确参数序是逐行写各 basis 的分量
+  //（M3 初版把 xAxis 填在第 0 组=第 0 行 → 旋转矩阵被转置；极点轴对齐场景 rot=identity
+  // 转置不变被掩盖，2026-08-18 BSM 光深排查实锤：生产朝向下级联盒中心偏 189km、UV 全越界）。
   const rot = new Matrix3(
-    xAxis.x, xAxis.y, xAxis.z,
-    yAxis.x, yAxis.y, yAxis.z,
-    zAxis.x, zAxis.y, zAxis.z
+    xAxis.x, yAxis.x, zAxis.x,
+    xAxis.y, yAxis.y, zAxis.y,
+    xAxis.z, yAxis.z, zAxis.z
   )
   return Matrix4.fromRotationTranslation(rot, eye, result)
 }
