@@ -215,7 +215,14 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
   )
 
   // ── 裸 GL FBO（Cesium Framebuffer 不支持 attach Texture3D 单层——走 glFramebufferTextureLayer）──
+  // ⚠️ M4 feedback loop 修复（2026-08-17 实测 GL_INVALID_OPERATION "Feedback loop formed"）：
+  // 生成端与 resolve 端**必须分用两个 FBO**。生成端 att1 挂 velocity 层（bsmTexture 层 N+i），
+  // 若 resolve 沿用同一 FBO，att1 残留的 bsmTexture 与 resolve shader 采样的 inputBuffer
+  //（= bsmTexture）构成环——Chrome 检出后**静默吞掉该 draw**（BSM resolve 从未真正执行，
+  // historyTex 恒全 0）。resolveFBO 只 attach att0，结构上无环；drawBuffers 也是 FBO 级
+  // 状态（各自记忆，无需每帧切换）。
   const fbo = gl.createFramebuffer()
+  const resolveFbo: WebGLFramebuffer | null = temporalPass ? gl.createFramebuffer() : null
 
   // ── uniformMap：业务 uniform 展开 + u_cascadeIndex 注入覆盖（T2 shader 侧声明 uniform int；
   // render() 每 draw 前切值，同 shader 复用 ShaderProgram 缓存）。mutable 闭包。
@@ -315,12 +322,23 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
           cascadeIndex = i // 先切 uniform 再 draw（同 draw 内 uniformMap 闭包读到本层值）
           drawPass.execute(context)
         }
-        // ── M4 resolve：逐 cascade 写 resolveTex 层 i（恢复单 draw buffer）──
-        if (temporalPass && resolveDrawPass != null && resolveTex != null && historyTex != null) {
-          gl.drawBuffers([GL_COLOR_ATTACHMENT0])
+        // ── M4 resolve：切 resolveFBO（只挂 att0——生成端 att1 的 velocity 层若残留即成
+        //    feedback loop，见 fbo 创建处注释），逐 cascade 写 resolveTex 层 i ──
+        if (
+          temporalPass &&
+          resolveDrawPass != null &&
+          resolveTex != null &&
+          historyTex != null &&
+          resolveFbo != null
+        ) {
+          gl.bindFramebuffer(GL_FRAMEBUFFER, resolveFbo)
           const rawResolve = (resolveTex as unknown as { _texture: WebGLTexture })._texture
           for (let i = 0; i < cascadeCount; i++) {
             gl.framebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rawResolve, 0, i)
+            if (i === 0 && gl.checkFramebufferStatus(GL_FRAMEBUFFER) !== GL_FRAMEBUFFER_COMPLETE) {
+              console.warn('[clouds] BSM resolve FBO 不完整，跳过 resolve（保持 current 直通）')
+              break // finally 恢复 prevFbo
+            }
             cascadeIndex = i
             resolveDrawPass.execute(context)
           }
@@ -346,6 +364,7 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
       drawPass.destroy()
       resolveDrawPass?.destroy()
       gl.deleteFramebuffer(fbo)
+      if (resolveFbo != null) gl.deleteFramebuffer(resolveFbo)
       // Texture3D destroy（augment 类型未声明 destroy，cast 调用——同 CloudsPass 惯例）
       ;(bsmTexture as unknown as { destroy(): void }).destroy()
       ;(resolveTex as unknown as { destroy(): void } | undefined)?.destroy()

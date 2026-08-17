@@ -15,8 +15,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 // ── gl mock：记录所有与 FBO 相关的调用（WebGL2RenderingContext 子集）──
 const glCalls: string[] = []
 const attachments: { layer: number; tex: unknown }[] = []
+let fboSeq = 0 // M4：生成端 fbo0 / resolve 端 fbo1 可区分（beforeEach 重置）
 const gl = {
-  createFramebuffer: vi.fn(() => ({ tag: 'fbo' })),
+  createFramebuffer: vi.fn(() => ({ tag: 'fbo' + fboSeq++ })),
   deleteFramebuffer: vi.fn(),
   bindFramebuffer: vi.fn((_t: number, fbo: unknown) =>
     glCalls.push(`bind:${(fbo as { tag: string } | null)?.tag ?? 'null'}`)
@@ -136,6 +137,7 @@ describe('createShadowPass', () => {
     attachments.length = 0
     ;(Texture3D as unknown as { instances: unknown[] }).instances = []
     ;(Texture3D as unknown as { allOptions: unknown[] }).allOptions = []
+    fboSeq = 0
   })
 
   it('装配：Texture3D mapSize²×cascadeCount RGBA + 缺省 HALF_FLOAT Uint16Array 预置全 0 + flipY false + FBO 创建', () => {
@@ -166,7 +168,7 @@ describe('createShadowPass', () => {
     expect(samplerOpts.wrapS).toBe(33071)
     expect(samplerOpts.wrapT).toBe(33071)
     // 裸 FBO 创建
-    expect(gl.createFramebuffer).toHaveBeenCalledTimes(1)
+    expect(gl.createFramebuffer).toHaveBeenCalledTimes(1) // 非 temporal 单 FBO（fbo0）
     // bsmTexture 直返 Texture3D 实例（T4 消费端 clouds.frag shadowBuffer uniform 直传）
     expect(pass.bsmTexture).toBeInstanceOf(Texture3D)
     pass.destroy()
@@ -204,7 +206,7 @@ describe('createShadowPass', () => {
     // 「保存」= getParameter(GL_FRAMEBUFFER_BINDING) 读外部绑定（非 bind 调用，不进 glCalls）
     expect(gl.getParameter).toHaveBeenCalledWith(0x8ca6) // GL_FRAMEBUFFER_BINDING
     // bind 序列：进入 fbo → … → 恢复 prevFbo（首尾）
-    expect(glCalls[0]).toBe('bind:fbo')
+    expect(glCalls[0]).toMatch(/^bind:fbo/)
     expect(glCalls[glCalls.length - 1]).toBe('bind:prevFbo')
     // finally 恢复 viewport 到 drawingBuffer（RenderState.viewport=mapSize 在 execute 内 apply）
     expect(gl.viewport).toHaveBeenCalledWith(0, 0, 1920, 1080)
@@ -331,6 +333,7 @@ describe('M4 T5 ShadowPass temporal', () => {
     attachments.length = 0
     ;(Texture3D as unknown as { instances: unknown[] }).instances = []
     ;(Texture3D as unknown as { allOptions: unknown[] }).allOptions = []
+    fboSeq = 0
   })
 
   function mkTemporalOpts() {
@@ -446,6 +449,65 @@ describe('M4 T5 ShadowPass temporal', () => {
     pass.render()
     expect(genCalls).toEqual(['gen', 'gen', 'gen'])
     expect(resCalls).toEqual([])
+    pass.destroy()
+  })
+})
+
+describe('M4 feedback loop 修复（生成端/resolve 端分用 FBO）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    glCalls.length = 0
+    attachments.length = 0
+    ;(Texture3D as unknown as { instances: unknown[] }).instances = []
+    ;(Texture3D as unknown as { allOptions: unknown[] }).allOptions = []
+    fboSeq = 0
+  })
+
+  it('resolve draw 时 bind 的是独立 FBO（fbo1≠fbo0）——生成端 att1 的 bsmTexture 不残留成环', () => {
+    vi.clearAllMocks()
+    glCalls.length = 0
+    attachments.length = 0
+    ;(Texture3D as unknown as { instances: unknown[] }).instances = []
+    ;(Texture3D as unknown as { allOptions: unknown[] }).allOptions = []
+    const record = mkRecord()
+    const resRecord = mkRecord()
+    const genExec: number[] = []
+    const resExec: number[] = []
+    const pass = createShadowPass({
+      context: createMockContext(),
+      cascadeCount: 3,
+      mapSize: 512,
+      uniformMap: {},
+      temporalPass: true,
+      createDrawPass: (_c: unknown, fs: string, um: any, vp: number) => {
+        record.uniformMap = um
+        return { execute: () => genExec.push(1), destroy: record.destroy }
+      },
+      createResolveDrawPass: (_c: unknown, fs: string, um: any, vp: number) => {
+        resRecord.uniformMap = um
+        return { execute: () => resExec.push(1), destroy: resRecord.destroy }
+      }
+    } as any)
+    pass.render()
+    // 两个 FBO 创建
+    expect(gl.createFramebuffer).toHaveBeenCalledTimes(2)
+    // bind 序列：生成段 bind fbo0（attach att0+att1）→ resolve 段 bind fbo1（只 attach att0）
+    const binds = glCalls.filter((c) => c.startsWith('bind:'))
+    expect(binds).toContain('bind:fbo0')
+    expect(binds).toContain('bind:fbo1')
+    const iGen = binds.indexOf('bind:fbo0')
+    const iRes = binds.indexOf('bind:fbo1')
+    expect(iRes).toBeGreaterThan(iGen)
+    // resolve 段（bind:fbo1 之后）没有 att1 的 framebufferTextureLayer 调用
+    const allCalls = glCalls
+    const after = allCalls.slice(allCalls.indexOf('bind:fbo1'))
+    const attachAfter = attachments.length
+    // att1 的 attach 参数（第 2 参 = 0x8ce1）在 resolve 段不出现
+    const att1InResolve = (gl.framebufferTextureLayer as any).mock.calls.filter(
+      (c: any[]) => c[1] === 0x8ce1 && genExec.length > 0
+    )
+    // att1 attach 次数 = 3（仅生成段），非 6（若 resolve 段误用生成 FBO 会重复/残留）
+    expect(att1InResolve.length).toBe(3)
     pass.destroy()
   })
 })
