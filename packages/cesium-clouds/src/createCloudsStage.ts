@@ -102,14 +102,18 @@ export interface CloudsStageOptions extends CloudsPassOptions {
    */
   shadowPass?: boolean
   /**
-   * M4 云 temporal resolve 开关（默认 true）。true 时 march 降到 1/4 分 + CloudsResolvePass
-   * （Bayer 4×4 全分重建 + velocity reprojection + variance clipping）。false = 诊断基线
-   * （全分 march、无 resolve、overlay 直读 march att0——M2/M3 行为）。demo `?cloudsTemporal=0`。
+   * M4 云 temporal resolve 开关（**默认 false**——2026-08-17 用户验收：静止云明显高频抖动
+   * （连拍逐对差分 12-16% 持续），根因是 velocity 含云前点 Bayer 相位跳动分量 + gamma=2
+   * 宽 AABB 下 history 错位值不被裁住，收敛锁建立不起来。修复需精化 velocity（相位差
+   * 纯化）或自适应 AABB，留专门迭代。true（demo `?cloudsTemporal=1`）= 1/4 分 march +
+   * CloudsResolvePass（Bayer 重建 + velocity reprojection + variance clipping）——帧率
+   * 优势明显（120fps vs 全分卡死），代价是当前抖动。false = M2/M3 稳定行为（全分 march、
+   * 无 resolve、overlay 直读 march att0）。
    */
   temporal?: boolean
   /**
-   * M4 BSM temporal resolve 开关（默认 true）。false = BSM 无 resolve（velocity 层不生成，
-   * M3 行为）。demo `?cloudsShadowTemporal=0`。
+   * M4 BSM temporal resolve 开关（**默认 false**，同上——抖动排查期间保守默认；BSM 端
+   * 机制已验证可用，生成端 jitter + 0.01 慢收敛）。demo `?cloudsShadowTemporal=1` 开。
    */
   shadowTemporal?: boolean
 }
@@ -191,9 +195,9 @@ export function createCloudsStage(
     context: Context & { drawingBufferWidth: number; drawingBufferHeight: number }
   }).context
 
-  // ── M4 temporal 开关（默认开；URL 诊断基线可关）──
-  const temporal = options.temporal !== false
-  const shadowTemporal = options.shadowTemporal !== false
+  // ── M4 temporal 开关（默认关——收敛抖动待修，见 CloudsStageOptions 注释；URL 显式开）──
+  const temporal = options.temporal === true
+  const shadowTemporal = options.shadowTemporal === true
 
   // ── 业务参数同源（M3 T5 上提）：CloudsPass 与 ShadowPass/共享 uniform 段共用一份 ──
   // （若各自 defaultCloudsParameters() 会得两份独立对象——默认值恰好一致但参数化后漂移；

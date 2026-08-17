@@ -472,9 +472,9 @@ describe('M4 T7 temporal 编排', () => {
     resolvePassProbe.instances.length = 0
   })
 
-  it('temporal 默认开：resolve pass 创建（march 之后）+ overlay bridge 切 resolve', () => {
+  it('temporal 显式开：resolve pass 创建（march 之后）+ overlay bridge 切 resolve', () => {
     const scene = createMockScene()
-    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
     expect(createCloudsResolvePass).toHaveBeenCalledTimes(1)
     // 执行顺序契约（plan D1）：march 先建（primitive add 先），resolve 后——同 pass=VOXELS 内
     // 的 PrimitiveCollection 数组序即渲染序。createCloudsPass 被 mock（内部 add 不真跑），
@@ -498,7 +498,7 @@ describe('M4 T7 temporal 编排', () => {
 
   it('frame 每帧递增 + temporalJitter 写入 params（Bayer 相位随帧变化）+ preRender 开头 swap', () => {
     const scene = createMockScene()
-    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
     const inst = resolvePassProbe.instances[0]
     firePreRender(scene)
     firePreRender(scene)
@@ -516,7 +516,7 @@ describe('M4 T7 temporal 编排', () => {
 
   it('viewReprojectionMatrix = reprojectionMatrix * inverseView（链式正确）', () => {
     const scene = createMockScene()
-    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
     firePreRender(scene)
     firePreRender(scene)
     const p = paramsOf(handle!)!
@@ -532,16 +532,15 @@ describe('M4 T7 temporal 编排', () => {
   it('temporal=false：不建 resolvePass、march temporalUpscale=false、frame 仍递增（BSM 默认 temporal）', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
-      clouds: true,
-      temporal: false
+      clouds: true
     })
-    expect(createCloudsResolvePass).not.toHaveBeenCalled()
+    expect(createCloudsResolvePass).not.toHaveBeenCalled() // 默认 temporal=false（2026-08-17 抖动回退）
     expect(scene.primitives.add).not.toHaveBeenCalled() // createCloudsPass 被 mock 不真 add——resolve 才会 add，此处 0 次
     // overlay bridge 回 march att0
     const bridge = handle!.overlayStage.uniforms.u_cloudsBuffer()
     expect((bridge as any)._texture.id).toBe('att0')
     firePreRender(scene)
-    expect(paramsOf(handle!)!.frame).toBe(1) // shadowTemporal 默认 true → BSM jitter 需要
+    expect(paramsOf(handle!)!.frame).toBe(0) // shadowTemporal 也默认 false → frame 不递增（全 M3 行为）
     // temporalJitter 恒 0（不计算）
     expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
     handle!.destroy()
@@ -565,7 +564,7 @@ describe('M4 T7 temporal 编排', () => {
 
   it('destroy：resolvePass.destroy 在 cloudsPass 之后调用（顺序编排）', () => {
     const scene = createMockScene()
-    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
     const inst = resolvePassProbe.instances[0]
     handle!.destroy()
     expect(inst.destroy).toHaveBeenCalledTimes(1)
