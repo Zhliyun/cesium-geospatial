@@ -103,8 +103,8 @@ describe('M2 T1 buildCloudsMainFragmentShader —— three clouds.frag → Cesiu
     expect(src).toMatch(/in vec2 v_textureCoordinates;/)
   })
 
-  it('M2 不 define SHADOW_LENGTH / HAZE（M5/M6 hook 点预留）', () => {
-    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+  it('M2 不 define SHADOW_LENGTH / HAZE（M5 默认开后此用例为显式关基线）', () => {
+    const src = buildCloudsMainFragmentShader({ ...M2_OPTIONS, lightShafts: false })
     // SHADOW_LENGTH 不 define → marchShadowLength / outputShadowLength(loc2) 不编译
     expect(src).not.toMatch(/#define SHADOW_LENGTH/)
     // HAZE 不 define → approximateHaze / getHazeRayNearFar 不编译
@@ -249,5 +249,41 @@ describe('M4 T6 jitter surgery', () => {
   it('vViewPosition 保持 normalize（与 three 未归一化版共线——投影 w 除法抵消标量差）', () => {
     const src = buildCloudsMainFragmentShader({})
     expect(src).toContain('vViewPosition = normalize(dirEC)')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M5 T1：SHADOW_LENGTH（lightShafts）编译分支——云 god rays
+// ─────────────────────────────────────────────────────────────────────────────
+describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
+  it('默认开：#define SHADOW_LENGTH + loc2 out + marchShadowLength + 三 uniform 声明', () => {
+    const src = buildCloudsMainFragmentShader({})
+    expect(src).toContain('#define SHADOW_LENGTH')
+    expect(src).toContain('layout(location = 2) out float outputShadowLength;')
+    expect(src).toContain('float marchShadowLength(')
+    expect(src).toContain('uniform int maxShadowLengthIterationCount;')
+    expect(src).toContain('uniform float minShadowLengthStepSize;')
+    expect(src).toContain('uniform float maxShadowLengthRayDistance;')
+    // applyAerialPerspective 消费 shadowLength（GetSkyRadianceToPoint 3 参——higher-order 分支）
+    expect(src).toContain('applyAerialPerspective(cameraPosition, frontPosition, shadowLength, color);')
+  })
+
+  it('lightShafts=false：无 #define SHADOW_LENGTH（M4 后行为零回归；原文 ifdef 块文本恒在——编译期裁剪由 glslang 用例兜底）', () => {
+    const src = buildCloudsMainFragmentShader({ lightShafts: false })
+    expect(src).not.toContain('#define SHADOW_LENGTH')
+    const { ok } = compileFragment(buildStandaloneCloudsShaderForValidation({ lightShafts: false }))
+    expect(ok).toBe(true)
+  })
+
+  it('glslang：lightShafts 开真编译（out 3 + marchShadowLength + shadow_length 分支）', () => {
+    const src = buildStandaloneCloudsShaderForValidation({ lightShafts: true })
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(
+        `glslang 编译失败:\n${output}\n` +
+          src.split('\n').slice(0, 60).map((l, i) => `${i + 1}: ${l}`).join('\n')
+      )
+    }
+    expect(ok).toBe(true)
   })
 })

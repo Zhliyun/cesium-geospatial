@@ -26,8 +26,10 @@
 //        的 jittered 上帧矩阵（createCloudsStage 经 T1 temporalMath 算好写入 params）；ray 重建
 //        消费 temporalJitter（Bayer 偏移，非 temporal 时恒 0 无偏移）；outputDepthVelocity
 //        写 march 低分 MRT att1（CloudsResolvePass 消费做 velocity reprojection）
-//      - M5 god rays：不 define SHADOW_LENGTH → marchShadowLength/outputShadowLength(loc2) 不编译；
-//        applyAerialPerspective 用 shadowLength=0 调 GetSkyRadianceToPoint（无 god rays）
+//      - M5 god rays（T1 已接通，默认开）：define SHADOW_LENGTH → marchShadowLength 沿视线
+//        累加 BSM 光深 → applyAerialPerspective(camera, frontPos, shadowLength) 的
+//        GetSkyRadianceToPoint 3 参 higher-order 分支 → 云间体积光柱；
+//        outputShadowLength(loc2) 写 MRT att2（无消费者——three 喂 atmosphere 的路径 spec 不做）
 //      - HAZE / GROUND_BOUNCE：不 define → 不编译
 //      - ACCURATE_SUN_SKY_LIGHT：define → getCloudsSunSkyIrradiance 走 bruneton runtime 直算，
 //        绕过 vGroundIrradiance/vCloudsIrradiance varying（fragment 重建下避免顶点预计算）
@@ -67,6 +69,13 @@ export interface CloudsMainOptions {
    *   'shadowMap'（BSM 可视化，M3）。默认 null 正常渲染。
    */
   debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | null
+  /**
+   * M5 云 god rays 开关（默认 true，对齐 three defaults.lightShafts）：define SHADOW_LENGTH →
+   * marchShadowLength 沿视线累加 BSM 光深 → applyAerialPerspective 以 shadow_length 调
+   * GetSkyRadianceToPoint（higher-order 分支只遮 single，防过暗）→ 云前表面大气散射被云影
+   * 调制 = 朝太阳方向的云间体积光柱。false = 诊断基线（无该编译分支）。demo ?cloudsLightShafts=0。
+   */
+  lightShafts?: boolean
 }
 
 type ResolvedCloudsMainOptions = Required<CloudsMainOptions>
@@ -75,7 +84,8 @@ const DEFAULTS: ResolvedCloudsMainOptions = {
   shapeDetail: true,
   turbulence: true,
   accurateSunSkyLight: true,
-  debugShow: null
+  debugShow: null,
+  lightShafts: true
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include
@@ -127,7 +137,8 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     o.debugShow === 'uv' ? '#define DEBUG_SHOW_UV' : '',
     o.debugShow === 'frontDepth' ? '#define DEBUG_SHOW_FRONT_DEPTH' : '',
     o.debugShow === 'sampleCount' ? '#define DEBUG_SHOW_SAMPLE_COUNT' : '',
-    o.debugShow === 'shadowMap' ? '#define DEBUG_SHOW_SHADOW_MAP' : ''
+    o.debugShow === 'shadowMap' ? '#define DEBUG_SHOW_SHADOW_MAP' : '',
+    o.lightShafts ? '#define SHADOW_LENGTH' : ''
   ].filter(s => s.length > 0)
 }
 
