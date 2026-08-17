@@ -228,6 +228,11 @@ export function buildSharedCloudsUniforms(
 
 /** CloudsPass 句柄：持 primitive + MRT textures + uniformMap + bridge getter + destroy。 */
 export interface CloudsPass {
+  /**
+   * M5 att2 shadowLength Tex bridge（{_texture,_target}）——喂 core atmosphere stage 的
+   * cloudsShadowLengthBridge（天空 inscatter 云影调制 = 太阳周围光柱）。lightShafts 关时 undefined。
+   */
+  getShadowLengthBridge(): { _texture: unknown; _target: number } | undefined
   /** att0 color Tex bridge（{_texture,_target}，注入 overlay PostProcessStage uniform）。 */
   getColorBridge(): { _texture: unknown; _target: number }
   /** att0 color Tex（直接引用，调试/probe 用；temporal 时为低分）。 */
@@ -489,6 +494,12 @@ export function createCloudsPass(
     const internal = colorTex as unknown as { _texture: unknown; _target: number }
     return { _texture: internal._texture, _target: internal._target }
   }
+  // ── M5 att2 shadowLength bridge（core atmosphere cloudsShadowLengthBridge 消费）──
+  const shadowLengthBridge = (): { _texture: unknown; _target: number } | undefined => {
+    if (shadowLenTex == null) return undefined
+    const internal = shadowLenTex as unknown as { _texture: unknown; _target: number }
+    return { _texture: internal._texture, _target: internal._target }
+  }
 
   let destroyed = false
   return {
@@ -499,6 +510,7 @@ export function createCloudsPass(
     marchWidth,
     marchHeight,
     getColorBridge: colorBridge,
+    getShadowLengthBridge: shadowLengthBridge,
     destroy(): void {
       if (destroyed) return
       destroyed = true

@@ -240,3 +240,27 @@ describe('5-tap 视角自适应（Phase 1.2，评审 C1/M3）', () => {
     expect(s).toMatch(/smoothstep\([^)]*abs\(muLook\)/)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M5 atmosphere 路径（CLOUDS_SHADOW_LENGTH）：天空 inscatter 云影调制
+// ─────────────────────────────────────────────────────────────────────────────
+describe('M5 atmosphere 路径（cloudsShadowLength 编译分支）', () => {
+  it('开：#define + uniform 声明 + 天空分支采样（shadow_length 非 0 字面量）', () => {
+    const src = buildAerialPerspectiveFragmentShader({ cloudsShadowLength: true })
+    expect(src).toContain('#define CLOUDS_SHADOW_LENGTH')
+    expect(src).toContain('uniform sampler2D u_cloudsShadowLength;')
+    expect(src).toContain('texture(u_cloudsShadowLength, v_textureCoordinates).r')
+    expect(src).toContain(
+      'getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance);'
+    )
+  })
+
+  it('关（默认）：无 define，天空 shadow_length=0（零回归）', () => {
+    const src = buildAerialPerspectiveFragmentShader({})
+    expect(src).not.toContain('#define CLOUDS_SHADOW_LENGTH')
+    expect(src).toContain(
+      'getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance);'
+    )
+    expect(src).toContain('const float cloudsShadowLength = 0.0;')
+  })
+})

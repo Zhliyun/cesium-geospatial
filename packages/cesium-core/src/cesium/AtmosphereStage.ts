@@ -101,10 +101,20 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   // 真实 GPU profile 实测 depthTemporal+blit ≈ 2-6ms/帧，移除收益确定）。true → HDR 设备创建 stage，
   // lensflare occlusion 用 smoothDepth（?depthTemporal=1 恢复旧行为）。评审 M1/M7。
   depthTemporal?: boolean
+  /**
+   * M5 云 god rays atmosphere 路径（2026-08-17 spec r1 修订）：clouds march 视线 shadowLength
+   * 纹理的 bridge 闭包（{_texture,_target}——Primitive MRT 纹理喂 PostProcessStage 必须 bridge，
+   * spec 附录 F4）。返回 undefined（云未开/lightShafts 关）时天空 shadow_length=0（零回归）；
+   * 桥存在 → shader define CLOUDS_SHADOW_LENGTH + u_cloudsShadowLength 绑定 → 天空 inscatter
+   * 被云影调制 = 太阳周围放射状光柱（云内 applyAerialPerspective 路径只产生 subtle 调制）。
+   */
+  cloudsShadowLengthBridge?: () => { _texture: unknown; _target: number } | undefined
 }
 
 // 校验后的完整 options（hdrDepthTemporal 排除：runtime 基于 stageCreated 决定，非用户 option；buildAtmosphereStage 时注入）。
-export interface ResolvedAtmosphereStageOptions extends Required<Omit<AerialPerspectiveFragOptions, 'hdrDepthTemporal'>> {
+// cloudsShadowLength 排除同 hdrDepthTemporal：runtime 由 cloudsShadowLengthBridge 存在决定（buildAtmosphereStage 注入）。
+export interface ResolvedAtmosphereStageOptions
+  extends Required<Omit<AerialPerspectiveFragOptions, 'hdrDepthTemporal' | 'cloudsShadowLength'>> {
   exposureFollowTimeline: boolean
   exposureDay: number
   exposureNight: number
@@ -303,6 +313,17 @@ export function buildAtmosphereUniforms(
   }
 }
 
+// M5 atmosphere 路径：clouds shadowLength bridge → atmosphere uniform 表增量（有桥才绑——
+// PostProcessStage uniforms 表的 value 闭包每帧调，桥闭包返回 undefined 时段不渲染云影=0）。
+function appendCloudsShadowLengthUniform(
+  uniforms: Record<string, unknown>,
+  bridge: (() => { _texture: unknown; _target: number } | undefined) | undefined
+): void {
+  if (bridge != null) {
+    uniforms.u_cloudsShadowLength = bridge
+  }
+}
+
 export interface AtmosphereStageHandle {
   readonly atmosphereStage: PostProcessStage
   /**
@@ -371,8 +392,16 @@ export function createAtmosphereStage(
       // history 采错 → smoothLogDepth 错乱 → debug=5 地球切割 + 水波纹未消）。?temporalEma=0 验证：切割消失，
       // 水波纹仍在（=波纹非时序抖，EMA 整个 temporal 路线无效）。回退 raw depth（UNSIGNED_BYTE 变体 +
       // Bug1 czm_reverseLogDepthWindow 反演）。待查波纹真根因（sceneDist 等值线 inscatter 量化阶梯）。
-      fragmentShader: buildAerialPerspectiveFragmentShader({ ...resolved, hdrDepthTemporal: false }),
-      uniforms: buildAtmosphereUniforms(luts, resolved, state),
+      fragmentShader: buildAerialPerspectiveFragmentShader({
+        ...resolved,
+        hdrDepthTemporal: false,
+        cloudsShadowLength: options.cloudsShadowLengthBridge != null
+      }),
+      uniforms: (() => {
+        const u = buildAtmosphereUniforms(luts, resolved, state)
+        appendCloudsShadowLengthUniform(u, options.cloudsShadowLengthBridge)
+        return u
+      })(),
       pixelFormat: PixelFormat.RGBA,
       pixelDatatype: postHdrDatatype
     })

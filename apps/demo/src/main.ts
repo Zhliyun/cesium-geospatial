@@ -267,10 +267,18 @@ async function main(): Promise<void> {
     // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
     const skipAtmosphere =
       getString('atmo') === '0' || getString('atmo') === 'false'
+    // M5 云 god rays atmosphere 路径：clouds march 的视线 shadowLength bridge（cloudsHandle 在
+    // 下方后创建——闭包惰性求值，云未开/关光柱时返回 undefined → 天空 shadow_length=0 零回归）。
+    let cloudsShadowBridge:
+      | (() => { _texture: unknown; _target: number } | undefined)
+      | undefined = undefined
     if (skipAtmosphere) {
       scene.logarithmicDepthBuffer = false
     } else {
-      const atmosphereHandle = createAtmosphereStage(scene, luts, options)
+      const atmosphereHandle = createAtmosphereStage(scene, luts, {
+        ...options,
+        cloudsShadowLengthBridge: () => cloudsShadowBridge?.()
+      })
 
       // 性能 profiling（Phase 0）：?profile=1 逐 stage GPU 计时（EXT_disjoint_timer_query_webgl2）。
       // 评审 M2：lensflare 取外层 composite（TIME_ELAPSED 不可嵌套，同帧一层粒度）；
@@ -378,6 +386,9 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {})
         })
         // 暴露 window.__cloudsStage（调试/控制台 destroy 用，同 __cloudsSpike 模式）
+        cloudsShadowBridge = cloudsHandle != null
+          ? () => cloudsHandle.cloudsPass.getShadowLengthBridge()
+          : undefined
         ;(window as unknown as { __cloudsStage?: unknown }).__cloudsStage =
           cloudsHandle
         if (cloudsHandle != null) {

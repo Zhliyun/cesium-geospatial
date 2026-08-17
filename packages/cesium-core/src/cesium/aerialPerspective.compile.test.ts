@@ -90,3 +90,15 @@ void main() { out_FragColor = vec4(thisIdentifierDoesNotExist); }`
     expect(ok).toBe(true)
   })
 })
+
+// M5 atmosphere 路径：CLOUDS_SHADOW_LENGTH 开的编译组合（sky 分支采样 u_cloudsShadowLength）
+describe('M5 CLOUDS_SHADOW_LENGTH 编译', () => {
+  it('glslang：cloudsShadowLength 开编译通过（sampler2D 声明 + 天空分支采样）', () => {
+    const src = buildStandaloneShaderForValidation({ cloudsShadowLength: true })
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(`glslang 编译失败（cloudsShadowLength=true）:\n${output}\n` + src.split('\n').slice(0, 40).map((l, i) => `${i + 1}: ${l}`).join('\n'))
+    }
+    expect(ok).toBe(true)
+  })
+})

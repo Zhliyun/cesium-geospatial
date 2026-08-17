@@ -35,6 +35,15 @@ export interface AerialPerspectiveFragOptions {
   sun?: boolean // SUN：天空分支日盘（默认 true）
   sky?: boolean // SKY：天空分支存在性（默认 true；false 时远平面直通 inputColor）
   hdrDepthTemporal?: boolean // Bug3：depthTemporal stage 装配（HDR）→ 读 colorTexture.a EMA smoothLogDepth（消水波纹）；否则读 raw globe depth
+  /**
+   * M5 云 god rays atmosphere 路径（2026-08-17 spec r1 修订，用户拍板）：天空分支的
+   * GetSkyRadiance shadow_length 从恒 0 改为采样 clouds march 的视线 shadowLength 纹理
+   * （MRT att2，米→km 已换算）→ 天空 inscatter 被云影调制 = 太阳周围放射状光柱。
+   * 默认 false（shadow_length=0 零回归）；由 AtmosphereStage 依 cloudsShadowLength 桥存在开启。
+   * 「云内路径」（clouds.frag applyAerialPerspective）只产生 subtle 的云体大气透视调制——
+   * 光柱视觉主体在本路径（three 的 atmosphereShadowLength 喂大气系统同款机制）。
+   */
+  cloudsShadowLength?: boolean
 }
 
 type ResolvedOptions = Required<AerialPerspectiveFragOptions>
@@ -321,7 +330,14 @@ ${sun ? SUN_DISK_GLSL : ''}
 function buildMainFn(o: ResolvedOptions): string {
   const skyBranch = o.sky
     ? `
-    inscatter = getSkyRadiance(cameraPosition, rayDirection, 0.0, sunDirection, fragmentAngle, transmittance);
+#ifdef CLOUDS_SHADOW_LENGTH
+    // M5 atmosphere 路径：视线云影长度调制天空 inscatter（太阳周围放射光柱）。
+    // clouds march att2 已 *METER_TO_LENGTH_UNIT（m→km），与本函数 shadow_length 参数域一致。
+    float cloudsShadowLength = texture(u_cloudsShadowLength, v_textureCoordinates).r;
+#else
+    const float cloudsShadowLength = 0.0;
+#endif
+    inscatter = getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance);
 `
     : `
     finalColor = originalColor.rgb;
@@ -589,6 +605,7 @@ export function buildAerialPerspectiveFragmentShader(
     sun: true,
     sky: true,
     hdrDepthTemporal: false,
+    cloudsShadowLength: false,
     ...options
   }
 
@@ -596,9 +613,14 @@ export function buildAerialPerspectiveFragmentShader(
   if (o.sun) defines.push('#define SUN')
   if (o.sky) defines.push('#define SKY')
   if (o.hdrDepthTemporal) defines.push('#define DEPTH_TEMPORAL_EMA') // Bug3：HDR 读 depthTemporal .a
+  if (o.cloudsShadowLength) defines.push('#define CLOUDS_SHADOW_LENGTH') // M5 atmosphere 路径
 
   const uniforms: string[] = [POST_PROCESS_TEXTURES_GLSL, LUT_UNIFORMS_GLSL, FRAME_UNIFORMS_GLSL]
   if (o.sky && o.sun) uniforms.push(COS_SUN_ANGULAR_RADIUS_UNIFORM_GLSL)
+  // M5 云 god rays atmosphere 路径：天空分支采样的视线云影长度（clouds march MRT att2，km 域）
+  if (o.cloudsShadowLength) {
+    uniforms.push('uniform sampler2D u_cloudsShadowLength;')
+  }
 
   // LOG_DEPTH_GLSL：czm_reverseLogDepthWindow（main depth 反演用）+ 配套反演辅助（logDepth.ts）。
   const functions: string[] = [HELPERS_GLSL, LOG_DEPTH_GLSL]
