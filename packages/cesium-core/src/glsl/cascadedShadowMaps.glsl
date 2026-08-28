@@ -24,6 +24,11 @@ int getCascadeIndex(
     #endif // UNROLLED_LOOP_INDEX < SHADOW_CASCADE_COUNT
   }
   #pragma unroll_loop_end
+  // 末层 fallback：仅当 depth 仍在 BSM 覆盖内（< 1.0 = far）——超出返回 -1（BSM 覆盖外，
+  // 与 getFadedCascadeIndex 的远端上界语义一致；调用方须处理 -1）。
+  if (depth >= 1.0) {
+    return -1;
+  }
   return SHADOW_CASCADE_COUNT - 1;
 }
 
@@ -62,8 +67,12 @@ int getFadedCascadeIndex(
       alpha = saturate(min(depth - interval.x, interval.y - depth) / margin);
     }
     #else // UNROLLED_LOOP_INDEX < SHADOW_CASCADE_COUNT - 1
-    // Don't fade out the last cascade.
-    if (depth >= interval.x) {
+    // Don't fade out the last cascade —— 但加远端上界（depth < 1.0 = shadowFar）：
+    // Cesium 全球尺度下云可视距离（maxRayDistance 200km）≫ BSM 有效距离，超出 shadowFar 的
+    // 云若 light-space xy 落在末层 ortho 盒内（uv 合法）会采样到错位 BSM 内容 → 远端云面
+    // 异常深色斑（屏幕锚定、随相机前进；2026-08-28 用户实测）。three 原版场景视距≈阴影 far，
+    // 无此暴露。越界点循环无匹配 → 返回 -1 → 消费端 fallback 光深 0（无自阴影）。
+    if (depth >= interval.x && depth < 1.0) {
       prevIndex = nextIndex;
       nextIndex = UNROLLED_LOOP_INDEX;
       alpha = saturate((depth - interval.x) / margin);

@@ -117,8 +117,8 @@ function createMockScene(): any {
       inverseViewMatrix: Matrix4.clone(Matrix4.IDENTITY),
       // M4 T7：viewMatrix（jitter reprojection 用；静止相机 mock 用 identity）
       viewMatrix: Matrix4.clone(Matrix4.IDENTITY),
-      // 完整视锥 near/far + 透视投影矩阵（preRender 时刻值；far 5e6 > maxRayDistance 2e5 →
-      // BSM far 取小后 2e5，验决策 D6）
+      // 完整视锥 near/far + 透视投影矩阵（preRender 时刻值；far 5e6 > maxRayDistance 2e5 >
+      // SHADOW_FAR_LIMIT 6e4 → BSM far 取小后 6e4，验决策 D6 + 2026-08-28 远端深色斑修复）
       frustum: {
         near: 1.5,
         far: 5e6,
@@ -395,9 +395,10 @@ describe('createCloudsStage M3 T5 BSM 编排', () => {
     const shadowPassHandle = (createShadowPass as any).mock.results[0].value
     const cb = scene._listeners.preRender[0]
     cb(scene, JulianDateMock())
-    // cameraNear/far 与 cascades.update 同帧同源（完整视锥 near；far = min(frustum.far, maxRayDistance)）
+    // cameraNear/far 与 cascades.update 同帧同源（完整视锥 near；
+    // far = min(frustum.far, maxRayDistance, SHADOW_FAR_LIMIT=6e4)——D6 + 2026-08-28 远端深色斑修复）
     expect(stateArg.shadow.cameraNear).toBe(1.5)
-    expect(stateArg.shadow.far).toBe(2e5) // min(5e6, maxRayDistance 2e5)——决策 D6
+    expect(stateArg.shadow.far).toBe(6e4) // min(5e6, maxRayDistance 2e5, SHADOW_FAR_LIMIT 6e4)
     // intervals 是 practical split 归一化域：首段 x=0、末段 y=1
     expect(stateArg.shadow.intervals[0].x).toBe(0)
     expect(stateArg.shadow.intervals[2].y).toBeCloseTo(1)

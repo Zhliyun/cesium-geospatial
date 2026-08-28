@@ -368,6 +368,7 @@ async function main(): Promise<void> {
           : cloudsDebug === 2 ? ('frontDepth' as const)
           : cloudsDebug === 3 ? ('sampleCount' as const)
           : cloudsDebug === 4 ? ('shadowMap' as const)
+          : cloudsDebug === 5 ? ('cascades' as const)
           : undefined
         const cloudsHandle = createCloudsStage(scene, luts, weather, {
           clouds: true,

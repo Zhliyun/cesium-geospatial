@@ -145,6 +145,10 @@ vec3 getCascadeColor(const vec3 rayPosition) {
     cameraNear,
     shadowFar
   );
+  // getCascadeIndex 可能返回 -1（超出 shadowFar 远端上界，2026-08-28 修复引入）→ 白色
+  if (cascadeIndex < 0) {
+    return vec3(1.0);
+  }
   vec2 uv = getShadowUv(worldPosition, cascadeIndex);
   if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
     return vec3(1.0);

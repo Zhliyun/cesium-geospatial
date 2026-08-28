@@ -66,9 +66,10 @@ export interface CloudsMainOptions {
   /**
    * Debug 视图（clouds.frag DEBUG_SHOW_* 分支，M2 视觉调试用）：
    *   'uv'（globeUv checker 映射）/ 'frontDepth'（turbo 云前深度）/ 'sampleCount'（march 采样数）/
-   *   'shadowMap'（BSM 可视化，M3）。默认 null 正常渲染。
+   *   'shadowMap'（BSM 可视化，M3）/ 'cascades'（cascade 分层着色：红=0 绿=1 蓝=2，越界=白）。
+   *   默认 null 正常渲染。
    */
-  debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | null
+  debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | 'cascades' | null
   /**
    * M5 云 god rays 开关（默认 true，对齐 three defaults.lightShafts）：define SHADOW_LENGTH →
    * marchShadowLength 沿视线累加 BSM 光深 → applyAerialPerspective 以 shadow_length 调
@@ -138,6 +139,7 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     o.debugShow === 'frontDepth' ? '#define DEBUG_SHOW_FRONT_DEPTH' : '',
     o.debugShow === 'sampleCount' ? '#define DEBUG_SHOW_SAMPLE_COUNT' : '',
     o.debugShow === 'shadowMap' ? '#define DEBUG_SHOW_SHADOW_MAP' : '',
+    o.debugShow === 'cascades' ? '#define DEBUG_SHOW_CASCADES' : '',
     o.lightShafts ? '#define SHADOW_LENGTH' : ''
   ].filter(s => s.length > 0)
 }

@@ -222,6 +222,9 @@ export function createCloudsStage(
   // ── M3 BSM：cascade 矩阵 + shadowState + 生成 pass ──
   const cascadeCount = params.shadowCascadeCount // = shader #define SHADOW_CASCADE_COUNT = CASCADE_COUNT
   const mapSize = 512 // three 默认；BSM 单边尺寸（texelSize 同源）
+  // BSM 有效距离上限（2026-08-28 远端深色斑）：最远 cascade texel ≈ 2·(far段宽)/512；
+  // far=2e5 时 texel ~1km → frontDepth 精度崩 → 远端云过暗斑块。60km 时最远 texel ~200m。
+  const SHADOW_FAR_LIMIT = 6e4
   const cascades = new CascadedShadowMaps({ cascadeCount, mapSize })
 
   // shadowState 数组用新分配实例（勿复用 params.shadowMatrices/shadowIntervals 默认数组：
@@ -439,7 +442,11 @@ export function createCloudsStage(
         const zenith = Math.max(0, Cartesian3.dot(state.sunDirection, normal))
         const distance = 1e6 + (1e3 - 1e6) * zenith
         // BSM far：完整视锥 far 与 maxRayDistance 取小（决策 D6——云 march 不超 maxRayDistance）
-        const far = Math.min(camera.frustum.far, params.maxRayDistance)
+        // 2026-08-28 远端深色斑修复：再与 SHADOW_FAR_LIMIT 取小——maxRayDistance=200km 时最远
+        // cascade 的 texel 达 ~1km，frontDepth 精度崩 → distanceToFront 虚高 → 远端云自阴影
+        // 过暗斑块（屏幕锚定、随相机前进）。收缩到 60km 后三层 split 重排（最远 texel ~200m），
+        // 远端云走 uv 越界 fallback（光深 0=无自阴影）——低太阳角远端云的自阴影视觉贡献本就弱。
+        const far = Math.min(camera.frustum.far, params.maxRayDistance, SHADOW_FAR_LIMIT)
         const near = camera.frustum.near
         cascades.update(
           {
