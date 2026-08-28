@@ -25,7 +25,8 @@ import {
 } from '@cesium-geospatial/core'
 import {
   loadWeatherTextures,
-  createCloudsStage
+  createCloudsStage,
+  WORLD_RADII_DEFAULT
 } from '@cesium-geospatial/clouds'
 import { createSkyStage } from './SkyStage'
 import { createDepthDebugStage } from './DepthDebugStage'
@@ -389,6 +390,11 @@ async function main(): Promise<void> {
           // BSM 矩阵锚定模式（spec v3）：默认 world 世界锚定固定网格（消移动闪动）；
           // ?cloudsShadowAnchor=frustum 回退视锥拟合（AB 对照基线，含已知缺陷的现实现）
           ...(getString('cloudsShadowAnchor') === 'frustum' ? { shadowAnchor: 'frustum' as const } : {}),
+          // world 模式 radii×N（E1' 归因实验）：?cloudsShadowScale=5 → {80,168,480}km
+          // 膨胀层覆盖全程航迹（缺省 WORLD_RADII_DEFAULT {16,33.6,96}km 单源于 clouds 包）
+          ...(getNumber('cloudsShadowScale') != null
+            ? { worldRadii: WORLD_RADII_DEFAULT.map(r => r * getNumber('cloudsShadowScale')!) }
+            : {}),
           // M5 云 god rays 开关（默认开）：?cloudsLightShafts=0 诊断基线（无云间体积光柱）
           ...(getString('cloudsLightShafts') === '0' ? { lightShafts: false } : {}),
           // 云 overlay 曝光（默认 10 对齐 three 版 storybook 标定；偏灰调大/过曝调小）
@@ -417,6 +423,28 @@ async function main(): Promise<void> {
               }
             })
             console.info(`[probe] 平移探针激活：每帧前进 ${probeMove}m（第 30 帧起）`)
+          }
+          // 轨道探针（spec §6 主战场）：每帧 rotateLeft N 弧度（绕焦点，位姿耦合移动——
+          // position 与 orientation 同时变，激发与平移不同的矩阵扰动通道）。前 30 帧等
+          // 场景稳定后启动，与 probeMove 同模式（互斥使用：同 URL 同时传时各自独立驱动）。
+          const probeOrbit = getNumber('cloudsProbeOrbit')
+          if (probeOrbit != null && probeOrbit > 0) {
+            let orbitFrame = 0
+            scene.preRender.addEventListener(() => {
+              if (++orbitFrame > 30) viewer.camera.rotateLeft(probeOrbit)
+            })
+            console.info(`[probe] 轨道探针激活：每帧 rotateLeft ${probeOrbit}rad（第 30 帧起）`)
+          }
+          // dolly 缩放探针（spec §6 第四探针）：每帧 zoomIn N 米（沿视线缩放 = 滚轮语义，
+          // 相机-焦点距离变 → 级联层选择/视锥比例变化通道）。手动滚轮不可脚本化，
+          // 用相机 API 等价驱动（与 probeMove/probeOrbit 同 preRender 域同 30 帧延迟）。
+          const probeZoom = getNumber('cloudsProbeZoom')
+          if (probeZoom != null && probeZoom > 0) {
+            let zoomFrame = 0
+            scene.preRender.addEventListener(() => {
+              if (++zoomFrame > 30) viewer.camera.zoomIn(probeZoom)
+            })
+            console.info(`[probe] dolly 探针激活：每帧 zoomIn ${probeZoom}m（第 30 帧起）`)
           }
         }
       } catch (err) {

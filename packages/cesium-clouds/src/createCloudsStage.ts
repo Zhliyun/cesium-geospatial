@@ -142,6 +142,13 @@ export interface CloudsStageOptions extends CloudsPassOptions {
    * demo `?cloudsShadowAnchor=frustum`。
    */
   shadowAnchor?: 'world' | 'frustum'
+  /**
+   * world 锚定模式每层 ortho 半径覆盖（m，长度 = cascadeCount；仅 shadowAnchor='world'
+   * 时生效）。缺省不传 = CascadedShadowMaps 类内 WORLD_RADII_DEFAULT（设计值单源）。
+   * demo `?cloudsShadowScale=N` → WORLD_RADII_DEFAULT.map(r => r*N)（E1' 归因实验：
+   * radii×5={80,168,480}km 膨胀层覆盖全程航迹）。
+   */
+  worldRadii?: number[]
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy。 */
@@ -257,11 +264,13 @@ export function createCloudsStage(
   // 构造期一次定死（cascades 分支选择）——运行期不切换。
   const worldAnchor = (options.shadowAnchor ?? 'world') === 'world'
   // world 分支：anchor 之外全走类内缺省设计值（worldRadii {16,33.6,96}km、worldIntervals
-  // {0,10,21,60}km——Global Constraints：设计值单源于类缺省，编排不重复传）
+  // {0,10,21,60}km——Global Constraints：设计值单源于类缺省，编排不重复传；
+  // options.worldRadii 显式传时覆盖（E1' 归因实验 radii×N），intervals 不开口）
   const cascades = new CascadedShadowMaps({
     cascadeCount,
     mapSize,
-    ...(worldAnchor ? { anchor: 'world' as const } : {})
+    ...(worldAnchor ? { anchor: 'world' as const } : {}),
+    ...(worldAnchor && options.worldRadii != null ? { worldRadii: options.worldRadii } : {})
   })
 
   // shadowState 数组用新分配实例（勿复用 params.shadowMatrices/shadowIntervals 默认数组：

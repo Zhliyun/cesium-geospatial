@@ -41,6 +41,14 @@
 import { Cartesian2, Cartesian3, Cartesian4, Matrix3, Matrix4 } from 'cesium'
 import { SUN_QUANT_STEP } from './sunQuantization'
 
+/**
+ * world 锚定缺省设计值（spec v3 Global Constraints：设计值单源）。
+ * 导出供 demo `?cloudsShadowScale=N`（E1' 归因实验 radii×N）等消费方按倍率派生；
+ * 类缺省引用同一常量——改这里即改全局，无第二份拷贝。
+ */
+export const WORLD_RADII_DEFAULT = [16e3, 33.6e3, 96e3] as const
+export const WORLD_INTERVALS_DEFAULT = [0, 10e3, 21e3, 60e3] as const
+
 export interface Cascade {
   /** 归一化视深区间 [x,y)（viewZToOrthographicDepth 域，末段 y=1）。 */
   interval: Cartesian2
@@ -237,8 +245,8 @@ export class CascadedShadowMaps {
     this.fade = options.fade ?? true
     this.margin = options.margin ?? 0
     this.anchor = options.anchor ?? 'frustum'
-    this.worldRadii = options.worldRadii ?? [16e3, 33.6e3, 96e3]
-    this.worldIntervals = options.worldIntervals ?? [0, 10e3, 21e3, 60e3]
+    this.worldRadii = options.worldRadii ?? [...WORLD_RADII_DEFAULT]
+    this.worldIntervals = options.worldIntervals ?? [...WORLD_INTERVALS_DEFAULT]
     this.shellTopRadius = options.shellTopRadius ?? 6362200
     this.worldMargin = options.worldMargin ?? 3e4
     this.zSnapGrid = options.zSnapGrid ?? 1e3

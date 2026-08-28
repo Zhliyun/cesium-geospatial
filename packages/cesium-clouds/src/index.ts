@@ -44,3 +44,6 @@ export {
   type CloudsStageHandle,
   type CloudsStageOptions
 } from './createCloudsStage'
+
+// BSM world 锚定缺省设计值（T6 导出：demo ?cloudsShadowScale 派生用；类缺省同源）
+export { WORLD_RADII_DEFAULT, WORLD_INTERVALS_DEFAULT } from './CascadedShadowMaps'
