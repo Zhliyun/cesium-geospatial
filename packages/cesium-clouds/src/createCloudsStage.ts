@@ -16,6 +16,12 @@
 //   - options.shadowPass=false（demo ?cloudsShadow=0）→ 诊断基线：不建 cascades/ShadowPass，
 //     state.shadow 恒 undefined → 主 march fallback dummy → Beer=1（无自阴影，M2 行为）
 //
+// BSM world 锚定编排（T4，spec v3 §3.1——缺省 world，?cloudsShadowAnchor=frustum 回退）：
+//   - cascades 构造按 shadowAnchor 分支（world 用类内缺省设计值 radii/intervals）
+//   - preRender BSM 段：world 分支太阳量化喂矩阵（march/消费端精确，§3.1.8）、far 固定
+//     min(maxRayDistance, SHADOW_FAR_LIMIT)（不随视锥）、cameraNear=0（§3.1.5）、distance
+//     不传（z 盒解析）；frustum 分支 bit 级保留现行为（AB 基线）
+//
 // M4 temporal 编排（plan D1/D2/D7）：
 //   - 云端（options.temporal≠false，demo ?cloudsTemporal=0 关）：march 1/4 分（CloudsPass
 //     temporalUpscale）→ CloudsResolvePass（第二个 VOXELS primitive，add 在 march 之后——
@@ -76,6 +82,7 @@ import {
 } from './temporalMath'
 import { CascadedShadowMaps } from './CascadedShadowMaps'
 import { createShadowPass, type ShadowPass } from './ShadowPass'
+import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
 import {
   defaultCloudsParameters,
   type CloudsParameters,
@@ -122,6 +129,14 @@ export interface CloudsStageOptions extends CloudsPassOptions {
    * 消费端通道），与不冻结对照相减得矩阵通道分量。demo `?cloudsShadowFreeze=1`。
    */
   shadowFreeze?: boolean
+  /**
+   * BSM 矩阵锚定模式（spec v3）：'world'（缺省）= 世界锚定固定网格（interval 常数
+   * {0,10,21,60}km、相机 light 投影 snap 固定 texel 网格、太阳量化喂矩阵、far/cameraNear
+   * 固定不随视锥——消相机移动/缩放时级联矩阵逐帧重排的闪动）；'frustum' = 现实现视锥
+   * 拟合（AB 对照基线，bit 级保留含已知缺陷——distance 入壳、视锥 far 参与等）。
+   * demo `?cloudsShadowAnchor=frustum`。
+   */
+  shadowAnchor?: 'world' | 'frustum'
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy。 */
@@ -224,6 +239,8 @@ export function createCloudsStage(
   const sunInertialScratch = new Cartesian3()
   const icrfScratch = new Matrix3()
   const normalScratch = new Cartesian3()
+  // world 分支量化太阳 scratch（spec §3.1.8：仅矩阵输入量化，逐帧覆写复用）
+  const qSunScratch = new Cartesian3()
 
   // ── M3 BSM：cascade 矩阵 + shadowState + 生成 pass ──
   const cascadeCount = params.shadowCascadeCount // = shader #define SHADOW_CASCADE_COUNT = CASCADE_COUNT
@@ -231,7 +248,16 @@ export function createCloudsStage(
   // BSM 有效距离上限（2026-08-28 远端深色斑）：最远 cascade texel ≈ 2·(far段宽)/512；
   // far=2e5 时 texel ~1km → frontDepth 精度崩 → 远端云过暗斑块。60km 时最远 texel ~200m。
   const SHADOW_FAR_LIMIT = 6e4
-  const cascades = new CascadedShadowMaps({ cascadeCount, mapSize })
+  // BSM 锚定模式（T4，spec v3）：缺省 world；frustum = AB 对照基线（bit 级现行为）。
+  // 构造期一次定死（cascades 分支选择）——运行期不切换。
+  const worldAnchor = (options.shadowAnchor ?? 'world') === 'world'
+  // world 分支：anchor 之外全走类内缺省设计值（worldRadii {16,33.6,96}km、worldIntervals
+  // {0,10,21,60}km——Global Constraints：设计值单源于类缺省，编排不重复传）
+  const cascades = new CascadedShadowMaps({
+    cascadeCount,
+    mapSize,
+    ...(worldAnchor ? { anchor: 'world' as const } : {})
+  })
 
   // shadowState 数组用新分配实例（勿复用 params.shadowMatrices/shadowIntervals 默认数组：
   // 默认 shadowMatrices 元素是 Object.freeze 的全局 Matrix4.IDENTITY——Matrix4.clone 逐项
@@ -439,23 +465,38 @@ export function createCloudsStage(
       // preRender 时刻 camera.frustum.near/far 是完整视锥值（multi-frustum 分段前）——
       // cascade 归一化域与 u_shadowCameraNear 同帧同源（T4 concern #1）。
       if (shadowPass != null) {
-        // 虚拟光源距离：太阳天顶角越高（正午）越近（three CloudsEffect.ts:387 语义
-        // lerp(1e6, 1e3, zenith)）。distance 大（晨昏 zenith=0 → 1e6 上限）是安全的：
-        // BSM 两端均不消费 clip.z——生成端 cascade() 的 march 起点经 getRayNearFar 与
-        // 云层球壳解析求交（inverseShadowMatrices 的 z=-1 反投影只取 xy），消费端
-        // getShadowUv 只取 clip.xy（正交投影 xy 与 z 解耦）。CascadedShadowMaps 的
-        // 「distance 过大会超出 ortho 盒深、勿传大值」警告（T1）仅针对未来引入
-        // clip.z 剔除/依赖的场景，当前管线不受约束。
-        const normal = ellipsoid.geodeticSurfaceNormal(camera.positionWC, normalScratch)
-        const zenith = Math.max(0, Cartesian3.dot(state.sunDirection, normal))
-        const distance = 1e6 + (1e3 - 1e6) * zenith
-        // BSM far：完整视锥 far 与 maxRayDistance 取小（决策 D6——云 march 不超 maxRayDistance）
-        // 2026-08-28 远端深色斑修复：再与 SHADOW_FAR_LIMIT 取小——maxRayDistance=200km 时最远
-        // cascade 的 texel 达 ~1km，frontDepth 精度崩 → distanceToFront 虚高 → 远端云自阴影
-        // 过暗斑块（屏幕锚定、随相机前进）。收缩到 60km 后三层 split 重排（最远 texel ~200m），
-        // 远端云走 uv 越界 fallback（光深 0=无自阴影）——低太阳角远端云的自阴影视觉贡献本就弱。
-        const far = Math.min(camera.frustum.far, params.maxRayDistance, SHADOW_FAR_LIMIT)
-        const near = camera.frustum.near
+        // T4 world 分支（spec v3 §3.1）：矩阵输入太阳量化（0.05° 网格——跑钟时矩阵只在
+        // 格点跳变，静止相机+慢太阳下矩阵稳定）；march 与消费端 state.sunDirection 保持
+        // 精确（§3.1.8）。frustum 分支原引用直传（bit 级现行为）。
+        const sunForMatrices = worldAnchor
+          ? quantizeSunDirection(state.sunDirection, SUN_QUANT_STEP, qSunScratch)
+          : state.sunDirection
+        // 虚拟光源距离（仅 frustum 分支：three CloudsEffect.ts:387 语义 lerp(1e6, 1e3, zenith)）。
+        // distance 大（晨昏 zenith=0 → 1e6 上限）是安全的：BSM 两端均不消费 clip.z——生成端
+        // cascade() 的 march 起点经 getRayNearFar 与云层球壳解析求交（inverseShadowMatrices
+        // 的 z=-1 反投影只取 xy），消费端 getShadowUv 只取 clip.xy（正交投影 xy 与 z 解耦）。
+        // CascadedShadowMaps 的「distance 过大会超出 ortho 盒深、勿传大值」警告（T1）仅针对
+        // 未来引入 clip.z 剔除/依赖的场景，当前管线不受约束。world 分支不传（z 盒解析式定
+        // near/far，不消费 distance——spec §3.2）。
+        let distance: number | undefined
+        if (!worldAnchor) {
+          const normal = ellipsoid.geodeticSurfaceNormal(camera.positionWC, normalScratch)
+          const zenith = Math.max(0, Cartesian3.dot(state.sunDirection, normal))
+          distance = 1e6 + (1e3 - 1e6) * zenith
+        }
+        // BSM far/near（spec §3.1.5）——world 固定：far = min(maxRayDistance, SHADOW_FAR_LIMIT)
+        // 常数（去掉 camera.frustum.far 参与，multi-frustum 缩放时不再变；与 worldIntervals
+        // 常数域 [0,60km] 归一化同域）、cameraNear 固定 0（u_shadowCameraNear 源头注入 0）。
+        // frustum 分支 bit 级现行为：完整视锥 far 与 maxRayDistance 取小（决策 D6——云 march
+        // 不超 maxRayDistance）；2026-08-28 远端深色斑修复再与 SHADOW_FAR_LIMIT 取小——
+        // maxRayDistance=200km 时最远 cascade 的 texel 达 ~1km，frontDepth 精度崩 → 远端云
+        // 自阴影过暗斑块（屏幕锚定、随相机前进）。收缩到 60km 后三层 split 重排（最远 texel
+        // ~200m），远端云走 uv 越界 fallback（光深 0=无自阴影）——低太阳角远端云的自阴影
+        // 视觉贡献本就弱。
+        const far = worldAnchor
+          ? Math.min(params.maxRayDistance, SHADOW_FAR_LIMIT)
+          : Math.min(camera.frustum.far, params.maxRayDistance, SHADOW_FAR_LIMIT)
+        const near = worldAnchor ? 0 : camera.frustum.near
         // 诊断冻结（?cloudsShadowFreeze=1）：首帧后矩阵不再 update（BSM 冻结网格重 march）。
         // shadowMatrices/shadowState 已是首帧值，直接跳过 update 段（render 照常）。
         if (!options.shadowFreeze || !matricesFrozen) {
@@ -467,7 +508,7 @@ export function createCloudsStage(
               near,
               far
             },
-            state.sunDirection,
+            sunForMatrices,
             distance
           )
           for (let i = 0; i < cascadeCount; i++) {

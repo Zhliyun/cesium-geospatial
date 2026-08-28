@@ -386,6 +386,9 @@ async function main(): Promise<void> {
           // 噪声分解诊断（评审门禁实验）：冻结 cascade 矩阵（首帧后不更新）——「冻结+移动」
           // 录屏差分 = 非矩阵噪声地板（层切换/jitter/消费端），与不冻结对照相减得矩阵分量
           ...(getString('cloudsShadowFreeze') === '1' ? { shadowFreeze: true } : {}),
+          // BSM 矩阵锚定模式（spec v3）：默认 world 世界锚定固定网格（消移动闪动）；
+          // ?cloudsShadowAnchor=frustum 回退视锥拟合（AB 对照基线，含已知缺陷的现实现）
+          ...(getString('cloudsShadowAnchor') === 'frustum' ? { shadowAnchor: 'frustum' as const } : {}),
           // M5 云 god rays 开关（默认开）：?cloudsLightShafts=0 诊断基线（无云间体积光柱）
           ...(getString('cloudsLightShafts') === '0' ? { lightShafts: false } : {}),
           // 云 overlay 曝光（默认 10 对齐 three 版 storybook 标定；偏灰调大/过曝调小）
@@ -399,7 +402,7 @@ async function main(): Promise<void> {
           cloudsHandle
         if (cloudsHandle != null) {
           console.info(
-            '[phase3-clouds] 体积云已接线（M3 稳定行为 + M5 云 god rays；?cloudsLightShafts=0 关光柱对比；?cloudsTemporal=1 开 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影）'
+            '[phase3-clouds] 体积云已接线（M3 稳定行为 + M5 云 god rays；?cloudsLightShafts=0 关光柱对比；?cloudsTemporal=1 开 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影；?cloudsShadowAnchor=frustum 回退视锥锚定 AB 基线）'
           )
           // 平移探针（噪声分解实验）：每帧 moveForward N 米（直线平移，激发 BSM texel 跳变
           // 通道——rotateLeft 是轨道移动，模式单一）。preRender 里持续驱动，录屏窗口截取。

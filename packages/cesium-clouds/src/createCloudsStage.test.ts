@@ -100,6 +100,7 @@ vi.mock('./CloudsResolvePass', () => ({
 import { createCloudsStage, type CloudsStageOptions } from './createCloudsStage'
 import { createCloudsPass } from './CloudsPass'
 import { createShadowPass } from './ShadowPass'
+import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
 import { Cartesian3, Ellipsoid, Matrix4 } from 'cesium'
 
 // mock scene：globe.ellipsoid（真 WGS84，scaleToGeodeticSurface 等方法齐全）+ camera.positionWC +
@@ -389,7 +390,11 @@ describe('createCloudsStage M3 T5 BSM 编排', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
-      clouds: true
+      clouds: true,
+      // frustum 分支（AB 基线，bit 级现行为）：cameraNear 取 frustum.near、far 含 frustum.far
+      // 参与、intervals 走 splitFrustum 切分——T4 缺省已是 world（near=0/far 固定），本用例
+      // 显式锚 frustum 保 M3 断言语义
+      shadowAnchor: 'frustum'
     })
     const stateArg = (createCloudsPass as any).mock.calls[0][3]
     const shadowPassHandle = (createShadowPass as any).mock.results[0].value
@@ -445,6 +450,106 @@ describe('createCloudsStage M3 T5 BSM 编排', () => {
     // 幂等：二次 destroy 不重复
     expect(() => handle!.destroy()).not.toThrow()
     expect(shadowPassHandle.destroy).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T4（BSM world 锚定）：shadowAnchor 开关缺省 world + 量化太阳喂矩阵 + far/cameraNear 固定
+// ─────────────────────────────────────────────────────────────────────────────
+describe('createCloudsStage BSM world 锚定编排', () => {
+  // 模拟 multi-frustum 分段态：完整视锥（near 1.5/far 5e6）切换为分段（near 5/far 2e4），
+  // 投影矩阵同步重算（Cesium 分段渲染时每段重算投影——mock 对齐该事实，防矩阵/数值不一致）
+  function setFrustumSegment(scene: any, near: number, far: number): void {
+    scene.camera.frustum.near = near
+    scene.camera.frustum.far = far
+    scene.camera.frustum.projectionMatrix = Matrix4.computePerspectiveFieldOfView(
+      Math.PI / 3,
+      16 / 9,
+      near,
+      far,
+      new Matrix4()
+    )
+  }
+
+  it('world 锚定缺省：shadowState.far 恒 6e4（不随分段视锥 far）、cameraNear=0（spec §3.1.5）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    // cascades 构造接线：缺省 anchor='world'（worldRadii/worldIntervals 走类内缺省设计值）
+    expect(handle!.cascades.anchor).toBe('world')
+    setFrustumSegment(scene, 5, 2e4)
+    firePreRender(scene)
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    // far = min(maxRayDistance, SHADOW_FAR_LIMIT)（去掉 camera.frustum.far 参与——multi-frustum
+    // 缩放时不再变）；u_shadowCameraNear 源头 state.shadow.cameraNear 固定 0（intervals 常数域
+    // [0,60km]/60km 归一化，near/far 必须同域——spec §3.1.5）
+    expect(stateArg.shadow.far).toBe(6e4)
+    expect(stateArg.shadow.cameraNear).toBe(0)
+    // intervals 常数区间（world 分支不复用 splitFrustum）：末段 y 恰为 1（60km/60km）
+    expect(stateArg.shadow.intervals[2].y).toBe(1)
+    handle!.destroy()
+  })
+
+  it('shadowAnchor=frustum 回退：far 含 camera.frustum.far 参与 + cameraNear=frustum.near（bit 级现行为，AB 基线）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      shadowAnchor: 'frustum'
+    })
+    expect(handle!.cascades.anchor).toBe('frustum')
+    setFrustumSegment(scene, 5, 2e4)
+    firePreRender(scene)
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    // far = min(frustum.far, maxRayDistance, SHADOW_FAR_LIMIT)——分段 far 2e4 参与取小；
+    // cameraNear = frustum.near（D3：cascade 选择 near 解耦用完整视锥 near）
+    expect(stateArg.shadow.far).toBe(2e4)
+    expect(stateArg.shadow.cameraNear).toBe(5)
+    handle!.destroy()
+  })
+
+  it('world 锚定：矩阵输入太阳量化（quantizeSunDirection(state.sunDirection)）+ distance 不传（z 盒解析不用）；state.sunDirection 保持精确', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    const updateSpy = vi.spyOn(handle!.cascades, 'update')
+    firePreRender(scene)
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    const [camInput, sunArg, distanceArg] = updateSpy.mock.calls[0]
+    // 矩阵输入 = 精确太阳的量化格点（spec §3.1.8：仅矩阵输入量化，march/消费端保持精确）
+    const expected = quantizeSunDirection(stateArg.sunDirection, SUN_QUANT_STEP, new Cartesian3())
+    expect(Cartesian3.equalsEpsilon(sunArg, expected, 0, 1e-12)).toBe(true)
+    // 非平凡：mock 时刻的太阳不恰好在量化格点 → 量化值 ≠ 精确值（证量化确实生效）
+    expect(Cartesian3.equals(sunArg, stateArg.sunDirection)).toBe(false)
+    // world 分支 distance 不传（undefined → update 缺省 1；updateWorld 不消费）
+    expect(distanceArg).toBeUndefined()
+    // camera 输入仍是真实相机（updateWorld 消费 inverseViewMatrix 做 center snap）
+    expect(camInput.inverseViewMatrix).toBe(scene.camera.inverseViewMatrix)
+    handle!.destroy()
+  })
+
+  it('frustum 回退：矩阵输入太阳保持精确引用（不量化）+ distance = zenith lerp（three 语义保留）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      shadowAnchor: 'frustum'
+    })
+    const updateSpy = vi.spyOn(handle!.cascades, 'update')
+    firePreRender(scene)
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    const [, sunArg, distanceArg] = updateSpy.mock.calls[0]
+    // frustum 分支太阳原引用直传（bit 级现行为——量化只属 world 分支）
+    expect(sunArg).toBe(stateArg.sunDirection)
+    // distance = lerp(1e6, 1e3, zenith)，zenith = dot(sun, geodeticSurfaceNormal)（mock 机位
+    // (6378137,0,0) 的地表法线 = (1,0,0) → zenith = sun.x）
+    const expectedDistance = 1e6 + (1e3 - 1e6) * Math.max(0, stateArg.sunDirection.x)
+    expect(distanceArg).toBeCloseTo(expectedDistance, 6)
+    handle!.destroy()
   })
 })
 
