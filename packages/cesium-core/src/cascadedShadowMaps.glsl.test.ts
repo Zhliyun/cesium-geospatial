@@ -19,12 +19,20 @@ describe('cascadedShadowMaps.glsl 远端上界（2026-08-28 深色斑修复锚�
     expect(source).toContain('if (depth >= interval.x && depth < 1.0) {')
   })
 
+  it('末层 alpha 含远端 fade-out 项（1.0 - depth）——硬边界会在相机移动时逐帧翻转闪烁', () => {
+    // depth→1.0 时 alpha→0 → jitter 走 prevIndex（-1 → 无阴影）：jitter dither 渐变过渡，
+    // 替代「有阴影↔无阴影」干跳变（shadowFar 边界随视锥在云面扫过时硬切闪烁，用户实测）
+    expect(source).toContain(
+      'alpha = saturate(min(depth - interval.x, 1.0 - depth) / margin);'
+    )
+  })
+
   it('getCascadeIndex 末层 fallback 前检查 depth >= 1.0 返回 -1（与 faded 版语义一致）', () => {
     expect(source).toContain('if (depth >= 1.0) {')
     expect(source).toContain('return -1;')
   })
 
-  it('两个 cascade 选择函数仍在（上游结构未大改，锚点 1/2 才有意义）', () => {
+  it('两个 cascade 选择函数仍在（上游结构未大改，锚点 1/2/3 才有意义）', () => {
     expect(source).toContain('int getCascadeIndex(')
     expect(source).toContain('int getFadedCascadeIndex(')
   })

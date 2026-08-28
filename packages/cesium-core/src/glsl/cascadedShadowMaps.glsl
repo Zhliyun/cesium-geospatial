@@ -72,10 +72,13 @@ int getFadedCascadeIndex(
     // 云若 light-space xy 落在末层 ortho 盒内（uv 合法）会采样到错位 BSM 内容 → 远端云面
     // 异常深色斑（屏幕锚定、随相机前进；2026-08-28 用户实测）。three 原版场景视距≈阴影 far，
     // 无此暴露。越界点循环无匹配 → 返回 -1 → 消费端 fallback 光深 0（无自阴影）。
+    // alpha 含远端 fade-out 项（1.0 - depth）：depth→1.0 时 alpha→0 → jitter 走 prevIndex
+    // （末层区间内 prevIndex=-1 → 无阴影）——jitter dither 渐变过渡，替代硬边界（相机移动时
+    // shadowFar 边界在云面扫过，硬切会逐帧翻转闪烁；fade 带宽 = margin，与层间 fade 同机制）。
     if (depth >= interval.x && depth < 1.0) {
       prevIndex = nextIndex;
       nextIndex = UNROLLED_LOOP_INDEX;
-      alpha = saturate((depth - interval.x) / margin);
+      alpha = saturate(min(depth - interval.x, 1.0 - depth) / margin);
     }
     #endif // UNROLLED_LOOP_INDEX < SHADOW_CASCADE_COUNT - 1
     #endif // UNROLLED_LOOP_INDEX < SHADOW_CASCADE_COUNT
