@@ -25,6 +25,8 @@
 
 ### Task 1: world 矩阵核心（构造选项 + 相机 snap + 单源构造 + 常数 interval）
 
+> **勘误（实现期发现，以 spec 勘误版与 commit 62da033 为准）**：本任务 Step 3 代码块两处域错误——① ortho 参数应为**相机相对域对称盒 `(-radius, radius, -radius, radius)`**（原 `center.x±radius` 光心域绝对坐标与 viewMatrix 扣 centerWorld 双重扣除，盒心落 2c，一般机位 BSM 全空）；② `orthoNear = center.z − zNearGeo`（原式符号反，near 面会切进壳内）。两处均已被 T2 用例拦截并修复，下方代码块保留原文仅作历史。
+
 **Files:**
 - Modify: `packages/cesium-clouds/src/CascadedShadowMaps.ts`
 - Test: `packages/cesium-clouds/src/CascadedShadowMaps.test.ts`

@@ -47,8 +47,12 @@
 3. **z 域局部相对式 near 面（v3 重写，复审裁决 §9-B）**：v2 公式 `dot(P_surface,sunDir) + √(R_top²−radius²)` 是量纲级错误——第二项 ≈ 地心距 6375km，把近平面抬一个地球半径。精确基下无害（射线重合、clip.z 无消费），但**量化基（偏 0.05°）× march 精确方向非共模**：同一 uv 柱内生成端反投影点与消费端世界点的横向分离 = Δz·sin(step)，Δz=6371km 时分离 5.6km = 93+ texel（影云错位）。v3 公式（光心域 light 坐标，直接取**盘内壳顶最大 z**）：
    ```
    ρ = |相机 light-xy 投影|；ρ_min = max(0, ρ − radius_i)
-   zNear_geocentric = √(R_top² − ρ_min²) + margin        // 盘内壳顶之上；margin ≤ 30km
-   orthoNear = zNear_geocentric − dot(centerWorld, sunDir) // 域换算：光心域→light 相机相对域（盲审 3）
+   zNear_geocentric = √(max(0, R_top² − ρ_min²)) + margin   // 盘内壳顶之上；margin ≤ 30km
+                                                              // （max(0,·)：ρ_min≥R_top 时盘柱与壳顶球
+                                                              //  不相交、盒内无云、zNear=margin 良定义）
+   orthoNear = dot(centerWorld, sunDir) − zNear_geocentric   // 域换算（光心域→light 相机相对域；符号：
+                                                              //  near 面须落在壳顶太阳侧外——v3 原式差一
+                                                              //  符号，实现期 T2 用例拦截后修正）
    ```
    margin 约束：**Δz·sin(0.05°) < 1 texel ⟺ margin ≤ texel/sin(step) ≈ 72km@c0（v3 texel 62.5m）**（取 ≤30km 留裕量，分离 ≤26m ≈ 0.4 texel）；margin 同时 ≥ 球冠高差（r²/2R ≈ 0.72km@96km）+ 壳厚 2.2km——30km ≫ 两者 ✓。far 随意给足（clip.z 全管线无消费，盲审逐文件核实：shadow.frag 只取 clip.xy、getShadowUv 只取 clip.xy、shadowResolve 不读 z）。z 同 snap 到粗网格（如 1km，纯为跳过判据稳定）。**顺带修复现存 bug（v3 加严重度，盲审 4）**：现 distance=lerp(1e6,1e3,zenith) 在 zenith→1 时反投影起点入壳——`rayNear>rayFar → maxRayDistance<0 → march 循环立即 break → 该 texel 光深**全量归零**`（非「少算上半段」，是全有全无；正午低相机 ≲1.2km 即触发）。固定 z 盒后此路径消失，**回归用例断言「正午低相机下 BSM 光深 >0」**（world 分支修复；frustum 分支保留 bug 作 AB 基线，复审 N2）。
 4. **interval 常数区间**（评审 M1/重伤-3）：world 分支**不复用 splitFrustum**（near=0 → logarithmic 分支 0·∞=NaN 传染 practical）。直接常数区间 `{0, 10, 21, 60}km/60km` 与 radii 配套。单测断言无 NaN 且单调覆盖 [0,1]。**interval-radius 联动约束（复审 F）**：interval 交界微调（§5 无云视距段统计）必须联动重算 radii（texel 密度随 radii 变 → snap 网格变），实现时写死联动。
