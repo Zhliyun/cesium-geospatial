@@ -275,7 +275,9 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
 
   // ── M4 resolve draw pass（temporal 时；shader 用 T3 ShadowResolveMaterial 单 cascade 化）──
   // three ShadowResolveMaterial 默认：varianceGamma=1、temporalAlpha=0.01（BSM 单像素闪烁
-  // 显眼 → 极慢混合）
+  // 显眼 → 极慢混合）。2026-08-28 录屏帧间差分实测：调深（alpha 0.003/gamma 4）无改善——
+  // 残余闪动不在 resolve 泄漏率，是 cascade 视锥锚定重建的固有跳变（PCF+resolve+dither
+  // 三件套已在位且各自缺一不可，单独去掉任一项闪动放大 3-12×）。
   const resolveUniformMap: { [name: string]: () => unknown } = temporalPass
     ? {
         inputBuffer: () => bsmTexture, // 生成端 current（含 velocity 层）
