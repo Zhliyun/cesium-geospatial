@@ -1,15 +1,18 @@
 // T1：CascadedShadowMaps 纯数学单测（node，无 GL）。
 // 相机固定在 ECEF (0,0,6.4e6) 朝 -Z 看时手推期望值断言。
 import { describe, expect, it } from 'vitest'
-import { Cartesian2, Cartesian3, Cartesian4, Matrix3, Matrix4, Transforms } from 'cesium'
+import {
+  Cartesian2, Cartesian3, Cartesian4, Math as CesiumMath, Matrix3, Matrix4, Transforms
+} from 'cesium'
 
 import { CascadedShadowMaps, splitFrustum } from './CascadedShadowMaps'
 
 // 视线朝地心的简单透视相机：位于北极上方，看 -Z。构造 view（world→view）：
 // view = rotate(把相机 -Z 对到 world -Z) * translate(-eye) —— 这里相机无旋转，
 // viewMatrix = translate(-eye)，inverseViewMatrix（=three matrixWorld）= translate(eye)。
-function makeCamera(near: number, far: number, fovy = Math.PI / 3) {
-  const eye = new Cartesian3(0, 0, 6.4e6)
+// height：北极相机离地高度 m（eye.z = 6371000 + height；默认 29000 → 6.4e6 与旧值逐位一致）。
+function makeCamera(near: number, far: number, fovy = Math.PI / 3, height = 29000) {
+  const eye = new Cartesian3(0, 0, 6371000 + height)
   const inverseViewMatrix = Matrix4.fromTranslation(eye)
   // 透视投影（gluPerspective 语义，aspect 1）：Cesium Matrix4.computePerspectiveFieldOfView。
   // near=0 时其内部 Check 抛 DeveloperError，但矩阵本身良定义（m10=-1、m14=0）——
@@ -386,6 +389,34 @@ describe('CascadedShadowMaps world 锚定', () => {
           expect(back4.x / back4.w).toBeCloseTo(probe.x, -2)
           expect(back4.y / back4.w).toBeCloseTo(probe.y, -2)
           expect(back4.z / back4.w).toBeCloseTo(probe.z, -2)
+        }
+      }
+    }
+  })
+
+  // 与上例互补（上例固定「高空相机 + 低仰角」盯 NaN；本例固定「低空相机 800m」扫全部太阳仰角，
+  // 盯的是 zNear 解析式的几何正确性：spec §3.1.3 现存 bug（zenith→1 全量归零）的回归护栏。
+  it('zNear 极端太阳角（2°/10°/30°/60°/89°，低相机 800m）：z=-1 反投影面全盘在壳顶之上（spec §3.1.3）', () => {
+    const csm = makeWorldCSM()
+    const Rtop = 6362200 // shellTopRadius 缺省（bottomRadius 6360000 + shadowTopHeight 2200）
+    for (const deg of [2, 10, 30, 60, 89]) {
+      const el = CesiumMath.toRadians(deg)
+      const sunI = Cartesian3.normalize(
+        new Cartesian3(Math.cos(el), 0.1, Math.sin(el)), new Cartesian3())
+      const cam = makeCamera(0.1, 6e4, Math.PI / 3, 800) // 低相机 800m（zenith bug 触发高度）
+      csm.update(cam, sunI, 1e5)
+      for (let i = 0; i < 3; i++) {
+        const inv = csm.cascades[i].inverseMatrix
+        // 全盘角点（clip xy=±1, z=-1）反投影 → |p| 必须 > Rtop（壳顶球外）：
+        // near 面 = 光心域 z = sqrt(Rtop²−rhoMin²)+margin，任意 rho≥rhoMin 处
+        // |p|² = rho²+z² ≥ rhoMin²+(sqrt(Rtop²−rhoMin²)+margin)² > Rtop²（margin>0 恒成立）；
+        // 公式错（域换算丢项/sqrt 取错域）时 near 面切进壳内 → 角点 |p|<Rtop 即红。
+        for (const cx of [-1, 1]) for (const cy of [-1, 1]) {
+          const p4 = Matrix4.multiplyByVector(
+            inv, new Cartesian4(cx, cy, -1, 1), new Cartesian4())
+          const p = Cartesian3.fromElements(p4.x / p4.w, p4.y / p4.w, p4.z / p4.w)
+          expect(Cartesian3.magnitude(p), `deg=${deg} cascade=${i} corner=(${cx},${cy})`)
+            .toBeGreaterThan(Rtop)
         }
       }
     }
