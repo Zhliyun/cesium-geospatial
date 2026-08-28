@@ -143,6 +143,26 @@ interface CesiumContext extends Context {
 }
 
 /**
+ * 对齐 Cesium FBO 状态机（2026-08-28 云影运动错位根因，比 2026-08-18 的 attach 重绑更深一层）。
+ *
+ * Cesium 的 FBO 绑定是 JS 侧状态机（Context.js bindFramebuffer）：`framebuffer !==
+ * context._currentFramebuffer` 才动 GL，且目标为 undefined 时【主动 gl.bindFramebuffer(null)】。
+ * 本 pass 裸 gl.bindFramebuffer 绕过它，但 drawPass.execute → Context.draw →
+ * beginDraw(cmd._framebuffer ?? passState.framebuffer = undefined) 会走它——当
+ * _currentFramebuffer 被外部污染（≠undefined）时，execute 主动绑 null → 该层 draw 画到画布
+ * （随后被场景渲染覆盖，无声）→ BSM 层停更而 inverseShadowMatrices 已更新 → 相机运动时近端
+ * 云影错位、静止后自洽恢复。污染源实例：AtmosphereStage depthTemporal 的 postRender blit
+ * （Scene.js 帧序 preRender→render{...endFrame}→postRender——blit 在 endFrame 后执行，
+ * _currentFramebuffer = historyFBO 跨帧存活到下帧 preRender 本 pass）。
+ *
+ * execute 前显式置 undefined 使状态机 no-op、draw 落在裸绑定的 BSM fbo（语义同 Context.endFrame
+ * 的重置；私有字段直写，与本文件 _gl/_texture 等深路径访问同一先例）。
+ */
+function syncCesiumFramebufferTracker(context: Context): void {
+  ;(context as { _currentFramebuffer?: unknown })._currentFramebuffer = undefined
+}
+
+/**
  * 预置全 0 texel 视图（TypedArray 类型随 pixelDatatype 匹配）。
  *
  * HALF_FLOAT 无原生 TypedArray——Uint16Array 位承载（0x0000 = +0.0 half）。Cesium
@@ -325,6 +345,9 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
             return
           }
           cascadeIndex = i // 先切 uniform 再 draw（同 draw 内 uniformMap 闭包读到本层值）
+          // execute 前对齐 Cesium FBO 状态机（见 syncCesiumFramebufferTracker 注释）——
+          // _currentFramebuffer 被外部污染时 execute 会主动绑 null、本层 draw 落画布（层停更）
+          syncCesiumFramebufferTracker(context)
           drawPass.execute(context)
         }
         // ── M4 resolve：切 resolveFBO（只挂 att0——生成端 att1 的 velocity 层若残留即成
@@ -347,6 +370,8 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
               break // finally 恢复 prevFbo
             }
             cascadeIndex = i
+            // 同生成段：execute 前对齐 Cesium FBO 状态机，防 resolve 首层 draw 落画布
+            syncCesiumFramebufferTracker(context)
             resolveDrawPass.execute(context)
           }
           // swap（resolve↔history）+ prevMatrices ← 本帧（下帧 velocity 用）

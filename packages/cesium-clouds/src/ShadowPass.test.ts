@@ -254,6 +254,50 @@ describe('createShadowPass', () => {
     pass.destroy()
   })
 
+  // 回归（2026-08-28 云影运动错位根因——比 3b5d7b8 更深一层）：Cesium Context 的 FBO 绑定是
+  // JS 侧状态机（Context.js bindFramebuffer：framebuffer !== _currentFramebuffer 才动 GL，
+  // 目标 undefined 时【主动 gl.bindFramebuffer(null)】）。本 pass 裸 gl.bindFramebuffer 绕过它，
+  // 但 drawPass.execute → Context.draw → beginDraw(undefined) 会走它——当 _currentFramebuffer
+  // 被外部污染（≠undefined：上一帧 postRender 的 depthTemporal history blit 在 endFrame 后执行，
+  // 留下 _currentFramebuffer = historyFBO 跨帧存活）时，首个 execute 主动绑 null → cascade 0 的
+  // draw 画到画布（随后被场景渲染覆盖，无声）→ BSM 层 0 停更而 inverseShadowMatrices 已更新 →
+  // 相机运动时近端云影错位、静止后自洽恢复（用户实测症状）。
+  // 修复：每次 execute 前显式 _currentFramebuffer = undefined（对齐状态机，语义同 endFrame）。
+  it('render() 对齐 Cesium FBO 状态机：_currentFramebuffer 被外部污染时，每层 draw 仍落在 BSM fbo', () => {
+    const context = createMockContext()
+    const drawBindings: unknown[] = [] // 每次 draw 时刻的 GL 绑定（落点）
+    const pass = createShadowPass({
+      context,
+      cascadeCount: 3,
+      mapSize: 8,
+      uniformMap: { frame: () => 0 },
+      temporalPass: false,
+      // stub execute：忠实模拟 Context.draw → beginDraw(cmd._framebuffer ?? passState.framebuffer
+      // = undefined) → bindFramebuffer(ctx, undefined) 的状态机语义——JS 侧 _currentFramebuffer
+      // ≠ undefined 时主动 gl.bindFramebuffer(null)（draw 被重定向到画布）。
+      createDrawPass: () => ({
+        execute: (ctx: unknown) => {
+          const c = ctx as { _currentFramebuffer?: unknown }
+          if (c._currentFramebuffer !== undefined) {
+            c._currentFramebuffer = undefined
+            gl.bindFramebuffer(0x8d40, null) // 主动重定向（真 Cesium 行为）
+          }
+          drawBindings.push(currentBinding) // draw 落点 = 此刻 GL 绑定
+        },
+        destroy: () => {}
+      })
+    })
+    // 污染：模拟上一帧 postRender blit 留下的跨帧 _currentFramebuffer（historyFBO）
+    ;(context as { _currentFramebuffer?: unknown })._currentFramebuffer = { tag: 'historyFbo' }
+    pass.render()
+    // 3 层 draw 全部落在 ShadowPass 内部 fbo 上——未对齐状态机时 i=0 落 null（BSM 层 0 停更）
+    expect(drawBindings).toHaveLength(3)
+    for (const b of drawBindings) {
+      expect((b as { tag: string } | null)?.tag).toMatch(/^fbo\d+$/)
+    }
+    pass.destroy()
+  })
+
   it('render() 对 cascadeCount=3 依次 attach layer 0,1,2 且每层 execute 一次 draw（attach 的 tex 是 bsmTexture raw handle）', () => {
     const context = createMockContext()
     const record = mkRecord()
