@@ -421,4 +421,30 @@ describe('CascadedShadowMaps world 锚定', () => {
       }
     }
   })
+
+  // 本用例曾红（T2 逮到 xy 域混用，fix round 2 修复，详见 task-2-report.md）：
+  // projectionMatrix 曾用光心域绝对坐标 c±r + viewMatrix 又平移 centerWorld（§3.1.9）
+  // → center 双重扣除（clip.xy=(x−2c)/r₀）→ 整数 texel 平移帧 UV 差加倍（实测 dx=−14≠−7）。
+  // 修复（对称盒 −r,+r）后转绿；同时暴露并修复 zNear 域换算符号（orthoNear=center.z−zNearGeo）。
+  it('整数 texel 平移帧：同一世界点新旧矩阵 UV 差恰为整数 texel（velocity 精确重投影前提，spec §3.1.6）', () => {
+    const csm = makeWorldCSM()
+    // sun 必须轴对齐（正午北极 → light 轴=世界轴）：非对齐 sun 下世界系平移投影到 light xy
+    // 非 texel 整数倍（且两帧 z 差也会泄进 light xy），「整数 texel 平移」前提本身不可陈述。
+    const sunNoon = new Cartesian3(0, 0, 1)
+    const camZ = 6.371e6 + 8e3
+    const probe = new Cartesian3(4e3, 1e3, 6.371e6 + 9e3) // cascade 0 盒内云中一点
+    const texel = (WORLD_RADII[0] * 2) / 512 // = 62.5
+    // 帧序列：一次跳 N texel 的平移（N = texel 整数倍；两帧同 z，平移仅 xy）
+    csm.update({ ...makeCamera(0.1, 6e4), inverseViewMatrix: Matrix4.fromTranslation(new Cartesian3(0, 0, camZ)) }, sunNoon, 1e5)
+    const uvA = uvOf(csm.cascades[0].matrix, probe)
+    const inv = Matrix4.fromTranslation(new Cartesian3(7 * texel, -3 * texel, camZ))
+    csm.update({ ...makeCamera(0.1, 6e4), inverseViewMatrix: inv }, sunNoon, 1e5)
+    const uvB = uvOf(csm.cascades[0].matrix, probe)
+    const dx = (uvB.x - uvA.x) * 512
+    const dy = (uvB.y - uvA.y) * 512
+    expect(Math.abs(dx - Math.round(dx))).toBeLessThan(1e-6)
+    expect(Math.abs(dy - Math.round(dy))).toBeLessThan(1e-6)
+    expect(Math.round(dx)).toBe(-7) // 网格平移 +7 texel → 同点 uv 反向平移 7
+    expect(Math.round(dy)).toBe(3)
+  })
 })

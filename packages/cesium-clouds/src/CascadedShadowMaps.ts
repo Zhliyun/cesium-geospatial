@@ -425,14 +425,23 @@ export class CascadedShadowMaps {
       const rhoMin = Math.max(0, rhoC - radius)             // 盘缘最近距日轴
       const Rtop = this.shellTopRadius
       const zNearGeo = Math.sqrt(Math.max(0, Rtop * Rtop - rhoMin * rhoMin)) + this.worldMargin
-      // 域换算：光心域 z → light 相机相对域（相机原点=centerWorld，其 light z=center.z）
-      const orthoNear = zNearGeo - center.z
+      // 域换算（fix round 2 符号修正）：欲令 z=−1 面（太阳侧 march 起点）落在光心域
+      // z = zNearGeo，按 Cesium near 语义（z_clip=−1 ⟺ z_view=−near）须 near = center.z −
+      // zNearGeo。brief/spec 原式 zNearGeo−center.z 差一符号：z 面曾落在 2·center.z−zNearGeo
+      // （低空相机+低仰角时切进壳内/地下，|p|<Rtop），T2 zNear 用例当初绿是被 xy 双扣掩护
+      // （角点 rho 被推到 |2c|≈1.27e7，|p| 恒巨）——xy 修复后掩护消失显形。
+      // orthoNear 可为负（面在太阳侧=相机身后，正交投影合法，frustum 分支 near=−margin 同款）。
+      const orthoNear = center.z - zNearGeo
       const orthoFar = orthoNear + 2e5 // far 随意给足（clip.z 全管线无消费，spec §3.1.3）
 
-      // ortho（非对称绕 snap 后 center；Cesium 参数序 (l,r,bottom,top,near,far)）
+      // ortho（对称盒，light 相机相对域；Cesium 参数序 (l,r,bottom,top,near,far)）。
+      // ⚠️ 域语义（fix round 2，task-2-report 论证）：§3.1.9 单源构造的 viewMatrix 已平移
+      // −centerWorld（盒中心归零），projection 参数必须在相机相对域取 ±radius 对称盒——
+      // 若塞光心域绝对坐标 c±radius 则 center 被双重扣除（clip.xy=(x−2c)/r₀），北极用例
+      // c.xy=0 退化无偏被掩盖，一般机位盒中心偏到 2c（~1e6m）→ 云壳出盒 → BSM 全空。
+      // 与 frustum 分支同款；z 域同样须相机相对域（见下方 orthoNear 符号修正）。
       Matrix4.computeOrthographicOffCenter(
-        center.x - radius, center.x + radius,
-        center.y - radius, center.y + radius,
+        -radius, radius, -radius, radius,
         orthoNear, orthoFar,
         cascade.projectionMatrix
       )
