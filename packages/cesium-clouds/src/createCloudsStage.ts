@@ -22,6 +22,10 @@
 //     min(maxRayDistance, SHADOW_FAR_LIMIT)（不随视锥）、cameraNear=0（§3.1.5）、distance
 //     不传（z 盒解析）；frustum 分支 bit 级保留现行为（AB 基线）
 //
+// 静止跳过（T5，spec §3.2）：cascades.update 返回矩阵是否变化（world 语义键），静止帧
+// 跳过整段矩阵覆写 + shadowPass.render（重 march 必产出相同内容——白赚）；与 shadowFreeze
+// 诊断正交（freeze=update 不跑、render 照常每帧——冻结网格重 march 是其噪声分解语义）。
+//
 // M4 temporal 编排（plan D1/D2/D7）：
 //   - 云端（options.temporal≠false，demo ?cloudsTemporal=0 关）：march 1/4 分（CloudsPass
 //     temporalUpscale）→ CloudsResolvePass（第二个 VOXELS primitive，add 在 march 之后——
@@ -127,6 +131,7 @@ export interface CloudsStageOptions extends CloudsPassOptions {
    * 诊断：冻结 cascade 矩阵（首帧 update 后不再更新，BSM 在冻结网格上每帧重 march）。
    * 噪声分解实验用——「冻结矩阵 + 相机移动」录屏差分 = 非矩阵噪声地板（层切换/jitter/
    * 消费端通道），与不冻结对照相减得矩阵通道分量。demo `?cloudsShadowFreeze=1`。
+   * 与 T5 静止跳过正交：freeze 下 update 不跑但 render 照常每帧（重 march 正是实验内容）。
    */
   shadowFreeze?: boolean
   /**
@@ -497,10 +502,22 @@ export function createCloudsStage(
           ? Math.min(params.maxRayDistance, SHADOW_FAR_LIMIT)
           : Math.min(camera.frustum.far, params.maxRayDistance, SHADOW_FAR_LIMIT)
         const near = worldAnchor ? 0 : camera.frustum.near
-        // 诊断冻结（?cloudsShadowFreeze=1）：首帧后矩阵不再 update（BSM 冻结网格重 march）。
-        // shadowMatrices/shadowState 已是首帧值，直接跳过 update 段（render 照常）。
-        if (!options.shadowFreeze || !matricesFrozen) {
-          cascades.update(
+        // ── 静止跳过（T5，spec §3.2）与诊断冻结（?cloudsShadowFreeze=1）正交组合 ──
+        // - freeze 激活（开且首帧已过）：update/矩阵覆写整段跳过（T4 行为），render 照常
+        //   每帧——freeze 语义是「冻结矩阵重 march」（噪声分解实验：冻结网格上逐帧差 =
+        //   非矩阵噪声地板），跳 render 会破坏该语义。
+        // - 非 freeze：update 照跑，返回 changed（world = 语义键比较；frustum 恒 true）。
+        //   changed=false（矩阵静止帧）→ 矩阵覆写 + setCurrentMatrices + render 全跳——
+        //   BSM 纹理内容只依赖矩阵/云场/量化太阳格点，静止帧重 march 必产出相同内容，
+        //   跳过即白赚（m7 不变量：跳过帧 shadowMatrices、ShadowPass 内 current/prev
+        //   matrices 与 temporal history 三者冻结不变——render 内部的 prev←本帧登记也
+        //   不发生，静止期结束后首帧 velocity 用冻结 prev，矩阵连续 → 无假速度）。
+        // - shadowTemporal 开时不跳 render：BSM resolve 时序累积依赖逐帧 jitter 相位
+        //   （frame 递增）——「重 march 相同内容」前提被 jitter 破坏，跳帧=累积停更。
+        const freezeActive = options.shadowFreeze === true && matricesFrozen
+        let changed = false
+        if (!freezeActive) {
+          changed = cascades.update(
             {
               inverseViewMatrix: camera.inverseViewMatrix,
               projectionMatrix: (camera.frustum as unknown as { projectionMatrix: Matrix4 })
@@ -511,22 +528,24 @@ export function createCloudsStage(
             sunForMatrices,
             distance
           )
-          for (let i = 0; i < cascadeCount; i++) {
-            Matrix4.clone(cascades.cascades[i].matrix, shadowMatrices[i])
-            Matrix4.clone(cascades.cascades[i].inverseMatrix, inverseMatrices[i])
-            shadowIntervals[i].x = cascades.cascades[i].interval.x
-            shadowIntervals[i].y = cascades.cascades[i].interval.y
-        }
-          // M4：本帧矩阵先登记（render 内部 velocity 用 prevMatrices=上帧、末尾 prev ← 本帧）
-          if (shadowPass != null) {
+          if (changed) {
+            for (let i = 0; i < cascadeCount; i++) {
+              Matrix4.clone(cascades.cascades[i].matrix, shadowMatrices[i])
+              Matrix4.clone(cascades.cascades[i].inverseMatrix, inverseMatrices[i])
+              shadowIntervals[i].x = cascades.cascades[i].interval.x
+              shadowIntervals[i].y = cascades.cascades[i].interval.y
+            }
+            // M4：本帧矩阵先登记（render 内部 velocity 用 prevMatrices=上帧、末尾 prev ← 本帧）
             shadowPass.setCurrentMatrices(shadowMatrices)
-        }
-          shadowState.cameraNear = near
-          shadowState.far = far
-          shadowState.bsm = shadowPass.bsmTexture
+            shadowState.cameraNear = near
+            shadowState.far = far
+            shadowState.bsm = shadowPass.bsmTexture
+          }
           matricesFrozen = true
         }
-        shadowPass.render()
+        if (freezeActive || changed || shadowTemporal) {
+          shadowPass.render()
+        }
       }
     }
   )

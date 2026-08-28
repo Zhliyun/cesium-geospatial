@@ -553,6 +553,92 @@ describe('createCloudsStage BSM world 锚定编排', () => {
   })
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// T5（静止跳过，spec §3.2）：update 返回 changed → 矩阵静止帧跳过 shadowPass.render；
+// 与 shadowFreeze 诊断正交组合（freeze=update 不跑、render 照常——现行为不变）
+// ─────────────────────────────────────────────────────────────────────────────
+describe('createCloudsStage T5 静止跳过', () => {
+  // mock scene 相机静止 + firePreRender 恒用同一 JulianDate → sunDirection/量化格点逐帧
+  // 相同 → 语义键相同 → changed=false（world 锚定缺省下）
+  it('静止跳过：矩阵不变帧不调 shadowPass.render + setCurrentMatrices/矩阵覆写全跳（spec §3.2 白赚）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    const shadowPassHandle = (createShadowPass as any).mock.results[0].value
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    firePreRender(scene)
+    firePreRender(scene) // 同输入（相机/时刻不变）→ 键同 → changed=false
+    expect(shadowPassHandle.render).toHaveBeenCalledTimes(1)
+    // m7 不变量（可观察部分）：跳过帧 setCurrentMatrices 不调（ShadowPass 内
+    // current/prevMatrices 与 temporal history 三者冻结）
+    expect(shadowPassHandle.setCurrentMatrices).toHaveBeenCalledTimes(1)
+    // shadowState.matrices 内容冻结（跳过帧不 clone 覆写）
+    const frozen = Matrix4.clone(stateArg.shadow.matrices[0], new Matrix4())
+    firePreRender(scene) // 仍静止
+    expect(shadowPassHandle.render).toHaveBeenCalledTimes(1)
+    expect(stateArg.shadow.matrices[0]).toEqual(frozen)
+    // 跨格平移 → 矩阵变 → render 恢复（2e4 远超 cascade 0 texel 62.5m）
+    scene.camera.inverseViewMatrix = Matrix4.fromTranslation(new Cartesian3(2e4, 2e4, 0))
+    firePreRender(scene)
+    expect(shadowPassHandle.render).toHaveBeenCalledTimes(2)
+    expect(shadowPassHandle.setCurrentMatrices).toHaveBeenCalledTimes(2)
+    handle!.destroy()
+  })
+
+  it('freeze 诊断：首帧 update+render 各 1 次，后续帧 update 不跑、render 照常（现行为不变——冻结网格重 march）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      shadowFreeze: true
+    })
+    const shadowPassHandle = (createShadowPass as any).mock.results[0].value
+    const updateSpy = vi.spyOn(handle!.cascades, 'update')
+    firePreRender(scene)
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(shadowPassHandle.render).toHaveBeenCalledTimes(1)
+    firePreRender(scene)
+    firePreRender(scene)
+    // freeze 激活（首帧后）：update 整段跳过；render 照常每帧——freeze 的诊断语义是
+    // 「冻结矩阵重 march」（噪声分解：冻结网格上逐帧差 = 非矩阵噪声地板），T4 行为不变
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(shadowPassHandle.render).toHaveBeenCalledTimes(3)
+    handle!.destroy()
+  })
+
+  it('shadowTemporal 开：矩阵静止帧仍 render（BSM resolve 时序累积依赖逐帧 jitter 相位，跳帧=停更）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      shadowTemporal: true
+    })
+    const shadowPassHandle = (createShadowPass as any).mock.results[0].value
+    firePreRender(scene)
+    firePreRender(scene)
+    firePreRender(scene)
+    expect(shadowPassHandle.render).toHaveBeenCalledTimes(3)
+    handle!.destroy()
+  })
+
+  it('frustum 回退：changed 恒 true → 每帧 render（AB 基线行为不变）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      shadowAnchor: 'frustum'
+    })
+    const shadowPassHandle = (createShadowPass as any).mock.results[0].value
+    firePreRender(scene)
+    firePreRender(scene)
+    firePreRender(scene)
+    expect(shadowPassHandle.render).toHaveBeenCalledTimes(3)
+    handle!.destroy()
+  })
+})
+
 // JulianDate mock（preRender 回调签名第 2 参；真实 JulianDate 太重，mock 最小）
 function JulianDateMock(): any {
   return { dayNumber: 2458849, secondsOfDay: 50000 }

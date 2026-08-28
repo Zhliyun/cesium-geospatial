@@ -39,6 +39,7 @@
 //   Matrix4.makeOrthographic(l,r,top,bottom,n,f) → Matrix4.computeOrthographicOffCenter(l,r,bottom,top,n,f)
 //     （注意参数顺序：three (l,r,top,bottom) vs Cesium (l,r,bottom,top)）
 import { Cartesian2, Cartesian3, Cartesian4, Matrix3, Matrix4 } from 'cesium'
+import { SUN_QUANT_STEP } from './sunQuantization'
 
 export interface Cascade {
   /** 归一化视深区间 [x,y)（viewZToOrthographicDepth 域，末段 y=1）。 */
@@ -224,6 +225,11 @@ export class CascadedShadowMaps {
   private readonly frusta: FrustumCorners[] = []
   private readonly lightFrustum = new FrustumCorners() // 每 cascade 复用（three scratch 风格）
   private readonly splits: number[] = []
+  /**
+   * world 分支语义键（spec §3.2 静止跳过）：上次 update 的「各层 snap 后 center 三分量 +
+   * 量化太阳格点序号」拼串。undefined = 尚未 update 过（首帧必判变化）。
+   */
+  private _lastWorldKey: string | undefined
 
   constructor(options: CascadedShadowMapsOptions) {
     this.mapSize = options.mapSize
@@ -257,11 +263,12 @@ export class CascadedShadowMaps {
    * @param sunDirection 指向太阳的单位向量（ECEF world 系；与 camera.inverseViewMatrix 同系）
    * @param distance shadow 相机沿 sunDirection 相对包盒的偏移（three 默认 1；
    *   ortho 盒深 = radius*2 + margin，distance 过大时场景会超出盒深——编排侧应传小值）
+   * @returns 矩阵是否变化（world 分支 = 语义键比较——编排据此跳过静止帧 shadowPass.render，
+   *   spec §3.2；frustum 分支恒 true——视锥拟合逐帧重排，无静止白赚，绑定约束）
    */
-  update(camera: CascadeCameraInput, sunDirection: Cartesian3, distance = 1): void {
+  update(camera: CascadeCameraInput, sunDirection: Cartesian3, distance = 1): boolean {
     if (this.anchor === 'world') {
-      this.updateWorld(camera, sunDirection)
-      return
+      return this.updateWorld(camera, sunDirection)
     }
     const far = camera.far
     this.far = far
@@ -363,6 +370,7 @@ export class CascadedShadowMaps {
       Matrix4.multiply(cascade.projectionMatrix, cascade.viewMatrix, cascade.matrix)
       Matrix4.multiply(cascade.inverseViewMatrix, cascade.inverseProjectionMatrix, cascade.inverseMatrix)
     }
+    return true
   }
 
   /**
@@ -371,8 +379,12 @@ export class CascadedShadowMaps {
    * - center = 相机 light 投影 snap 到固定 texel 网格（原点=地心；§3.1.2）
    * - zNear 局部相对式（盘内壳顶之上 + margin；§3.1.3）+ 光心域→相机相对域换算
    * - 单源矩阵构造（light 基一次求出，§3.1.9）
+   *
+   * @returns 矩阵是否变化（语义键比较，spec §3.2 静止跳过）。键相同 → 本次矩阵输出与上次
+   *   逐位相同（跳过安全前提 m7：updateWorld 的矩阵输出仅依赖 center×N（snap 后确定值）与
+   *   light 基（太阳函数）——interval/radius/margin 均构造期常数，far/near 不进矩阵）。
    */
-  private updateWorld(camera: CascadeCameraInput, sunDirection: Cartesian3): void {
+  private updateWorld(camera: CascadeCameraInput, sunDirection: Cartesian3): boolean {
     const intervals = this.worldIntervals
     const radii = this.worldRadii
     const far = intervals[this.cascadeCount]
@@ -405,6 +417,19 @@ export class CascadedShadowMaps {
     const camPos = Matrix4.getTranslation(camera.inverseViewMatrix, new Cartesian3())
     const camLight = Matrix3.multiplyByVector(invRot, camPos, new Cartesian3())
 
+    // 语义键·太阳项：量化格点序号（整数比较，比向量 epsilon 比较更简且稳定）。粒度 =
+    // SUN_QUANT_STEP（与编排侧量化网格同源，§3.1.8）——编排喂量化太阳时键格点恰为输入
+    // 格点（矩阵只在格点跳变，键精确匹配）；喂精确太阳时 <半格微变被吸收进跳过（与量化
+    // 设计同精度）。用 zAxis（已 normalize，同输入确定性同值）而非原始 sunDirection——
+    // 不假设调用者已归一。theta 用 clamp 防浮点越界 acos NaN。
+    const thetaGrid = Math.round(
+      Math.acos(Math.min(1, Math.max(-1, zAxis.z))) / SUN_QUANT_STEP
+    )
+    const phiGrid = Math.round(Math.atan2(zAxis.y, zAxis.x) / SUN_QUANT_STEP)
+
+    // 语义键·center 项：每层 snap 后的三分量（snap 输出 = 整数格点 × 格宽，同格点输入
+    // 逐位同值 → 字符串稳定；跨格点必变）。矩阵重算总是执行（值幂等），键仅决定返回值。
+    let key = ''
     for (let i = 0; i < this.cascadeCount; i++) {
       const radius = radii[i]
       const texel = (radius * 2) / this.mapSize
@@ -416,6 +441,7 @@ export class CascadedShadowMaps {
         Math.round(camLight.y / texel) * texel,
         Math.round(camLight.z / this.zSnapGrid) * this.zSnapGrid
       )
+      key += `${center.x},${center.y},${center.z};`
 
       // zNear 局部相对式（光心域，spec §3.1.3）：盘内壳顶最大 z + margin。
       // 定义域扩展（fix round 1）：rhoMin ≥ Rtop 时盘柱与壳顶球不相交、盒内无云，
@@ -455,5 +481,11 @@ export class CascadedShadowMaps {
       Matrix4.multiply(cascade.projectionMatrix, cascade.viewMatrix, cascade.matrix)
       Matrix4.multiply(cascade.inverseViewMatrix, cascade.inverseProjectionMatrix, cascade.inverseMatrix)
     }
+
+    // 键比较（spec §3.2）：相同 → 本次矩阵与上次逐位一致，编排可跳过 render（返回 false）。
+    key += `${thetaGrid},${phiGrid}`
+    if (key === this._lastWorldKey) return false
+    this._lastWorldKey = key
+    return true
   }
 }

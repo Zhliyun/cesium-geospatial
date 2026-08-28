@@ -426,6 +426,50 @@ describe('CascadedShadowMaps world 锚定', () => {
   // projectionMatrix 曾用光心域绝对坐标 c±r + viewMatrix 又平移 centerWorld（§3.1.9）
   // → center 双重扣除（clip.xy=(x−2c)/r₀）→ 整数 texel 平移帧 UV 差加倍（实测 dx=−14≠−7）。
   // 修复（对称盒 −r,+r）后转绿；同时暴露并修复 zNear 域换算符号（orthoNear=center.z−zNearGeo）。
+  // T5 静止跳过（spec §3.2）：update 返回「矩阵是否变化」——编排据此跳过静止帧的
+  // shadowPass.render（重 march 必产出相同内容，白赚）。键 = 各层 snap 后 center 三分量
+  // + 量化太阳格点序号（updateWorld 内部构造）；far/near 不进键（world 分支不消费视锥）。
+  it('update 返回值：world 下矩阵不变帧返回 false（同相机+同太阳），变化帧 true（spec §3.2）', () => {
+    const csm = makeWorldCSM()
+    const cam = makeCamera(0.1, 6e4)
+    expect(csm.update(cam, sun, 1e5)).toBe(true)   // 首帧（键从 undefined 起，必变化）
+    expect(csm.update(cam, sun, 1e5)).toBe(false)  // 同输入 → 键同
+    expect(csm.update(makeCamera(0.1, 2e4), sun, 1e5)).toBe(false) // 缩放不变（far 不进键）
+    const inv = Matrix4.fromTranslation(new Cartesian3(2e4, 0, 6.371e6 + 8e3))
+    expect(csm.update({ ...cam, inverseViewMatrix: inv }, sun, 1e5)).toBe(true) // 大平移跨格
+    const sun2 = Cartesian3.normalize(new Cartesian3(0.31, 0.2, 1), new Cartesian3())
+    expect(csm.update({ ...cam, inverseViewMatrix: inv }, sun2, 1e5)).toBe(true) // 太阳跨格
+    // 太阳微变（< SUN_QUANT_STEP 半格）不跨格 → false：跳过粒度 = 量化粒度（§3.1.8 同源）
+    const sunTiny = Cartesian3.add(
+      sun2, Cartesian3.multiplyByScalar(
+        Cartesian3.normalize(new Cartesian3(1, 0, 0), new Cartesian3()), 1e-6, new Cartesian3()
+      ), new Cartesian3()
+    )
+    Cartesian3.normalize(sunTiny, sunTiny)
+    expect(csm.update({ ...cam, inverseViewMatrix: inv }, sunTiny, 1e5)).toBe(false)
+  })
+
+  // 跳过帧安全前提（m7 不变量，编排侧消费）：键相同时矩阵值逐位不变——update 返回 false
+  // 的帧 shadowMatrices 若被 clone 覆写也不会变化；此用例直接锁定 CSM 侧逐位一致。
+  it('update 返回 false 的帧：三层矩阵逐位不变（跳过安全性）', () => {
+    const csm = makeWorldCSM()
+    const cam = makeCamera(0.1, 6e4)
+    csm.update(cam, sun, 1e5)
+    const base = csm.cascades.map(c => Matrix4.clone(c.matrix))
+    expect(csm.update(cam, sun, 1e5)).toBe(false)
+    for (let i = 0; i < 3; i++) {
+      expect(csm.cascades[i].matrix).toEqual(base[i])
+    }
+  })
+
+  it('update 返回值：frustum 分支恒 true（视锥拟合逐帧重排，无静止白赚——绑定约束）', () => {
+    const csm = new CascadedShadowMaps({ cascadeCount: 3, mapSize: 512 })
+    const cam = makeCamera(1.0, 2e5)
+    const sunZ = new Cartesian3(0, 0, 1)
+    expect(csm.update(cam, sunZ, 1e5)).toBe(true)
+    expect(csm.update(cam, sunZ, 1e5)).toBe(true) // 同输入仍 true（frustum 不做键比较）
+  })
+
   it('整数 texel 平移帧：同一世界点新旧矩阵 UV 差恰为整数 texel（velocity 精确重投影前提，spec §3.1.6）', () => {
     const csm = makeWorldCSM()
     // sun 必须轴对齐（正午北极 → light 轴=世界轴）：非对齐 sun 下世界系平移投影到 light xy
