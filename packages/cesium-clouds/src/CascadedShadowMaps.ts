@@ -417,11 +417,14 @@ export class CascadedShadowMaps {
         Math.round(camLight.z / this.zSnapGrid) * this.zSnapGrid
       )
 
-      // zNear 局部相对式（光心域，spec §3.1.3）：盘内壳顶最大 z + margin
+      // zNear 局部相对式（光心域，spec §3.1.3）：盘内壳顶最大 z + margin。
+      // 定义域扩展（fix round 1）：rhoMin ≥ Rtop 时盘柱与壳顶球不相交、盒内无云，
+      // 负数开根会 NaN 污染整矩阵（实测 8km+0°/100km 低仰角/449km+10° 全炸）——
+      // clamp 到 0 使 zNear=margin 良定义，深度图空白即该域正确结果。
       const rhoC = Math.hypot(center.x, center.y)          // 盘心距日轴
       const rhoMin = Math.max(0, rhoC - radius)             // 盘缘最近距日轴
       const Rtop = this.shellTopRadius
-      const zNearGeo = Math.sqrt(Rtop * Rtop - rhoMin * rhoMin) + this.worldMargin
+      const zNearGeo = Math.sqrt(Math.max(0, Rtop * Rtop - rhoMin * rhoMin)) + this.worldMargin
       // 域换算：光心域 z → light 相机相对域（相机原点=centerWorld，其 light z=center.z）
       const orthoNear = zNearGeo - center.z
       const orthoFar = orthoNear + 2e5 // far 随意给足（clip.z 全管线无消费，spec §3.1.3）

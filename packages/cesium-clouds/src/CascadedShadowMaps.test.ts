@@ -293,7 +293,9 @@ describe('CascadedShadowMaps world 锚定', () => {
     return out
   }
   const uvOf = (m: Matrix4, p: Cartesian3): Cartesian2 => {
-    const v = Matrix4.multiplyByPoint(m, p, new Cartesian3())
+    // probe 逐分量 f32 化（GPU uniform 上载近似，审查 Minor——提高 f32 仿真保真）
+    const pf = new Cartesian3(Math.fround(p.x), Math.fround(p.y), Math.fround(p.z))
+    const v = Matrix4.multiplyByPoint(m, pf, new Cartesian3())
     return new Cartesian2(v.x * 0.5 + 0.5, v.y * 0.5 + 0.5) // ortho w=1
   }
 
@@ -348,6 +350,44 @@ describe('CascadedShadowMaps world 锚定', () => {
     csm.update(makeCamera(5, 1.2e5), sun, 1e5)
     for (let i = 0; i < 3; i++) {
       expect(csm.cascades[i].matrix).toEqual(base[i])
+    }
+  })
+
+  it('高空+低仰角无 NaN：rhoMin≥Rtop 定义域扩展下三层矩阵全部 finite（fix round 1）', () => {
+    // 触发域（北极相机，地表基值 6371000）：相机位矢模越大、太阳仰角越低，
+    // rhoC=|cam|·cos(e) 越大 → rhoMin=rhoC−radius 可能超过 Rtop=6362200 →
+    // sqrt 负数产 NaN（修复前 8km+0°/100km+0°,5°/449km 全部组合实炸）。
+    // 修复后该域 zNear=margin：盘柱与壳顶球不相交、盒内无云，深度图空白即正确结果。
+    const csm = makeWorldCSM()
+    for (const height of [8e3, 1e5, 4.49e5]) {
+      for (const elevDeg of [0, 5, 10]) {
+        const elev = (elevDeg * Math.PI) / 180
+        // 北极上方相机；太阳仰角 e（相对当地地平）→ sunDir=(cos e, 0, sin e)
+        const inv = Matrix4.fromTranslation(new Cartesian3(0, 0, 6371000 + height))
+        const sunElev = new Cartesian3(Math.cos(elev), 0, Math.sin(elev))
+        csm.update({ ...makeCamera(0.1, 6e4), inverseViewMatrix: inv }, sunElev, 1e5)
+        const probe = new Cartesian3(0, 0, 6371000 + 1500) // 相机正下方云层内一点
+        for (const c of csm.cascades) {
+          // interval 良定义
+          expect(Number.isFinite(c.interval.x)).toBe(true)
+          expect(Number.isFinite(c.interval.y)).toBe(true)
+          expect(c.interval.y).toBeGreaterThan(c.interval.x)
+          // 三层 matrix 16 元素全部 finite
+          for (let e = 0; e < 16; e++) {
+            expect(Number.isFinite((c.matrix as unknown as number[])[e])).toBe(true)
+          }
+          // 反投影良定义：world→clip→world roundtrip（NaN 会沿矩阵乘传染）
+          const clip = Matrix4.multiplyByPoint(c.matrix, probe, new Cartesian3())
+          const clip4 = new Cartesian4(clip.x, clip.y, clip.z, 1.0)
+          const back4 = Matrix4.multiplyByVector(c.inverseMatrix, clip4, new Cartesian4())
+          expect(Number.isFinite(back4.x / back4.w)).toBe(true)
+          expect(Number.isFinite(back4.y / back4.w)).toBe(true)
+          expect(Number.isFinite(back4.z / back4.w)).toBe(true)
+          expect(back4.x / back4.w).toBeCloseTo(probe.x, -2)
+          expect(back4.y / back4.w).toBeCloseTo(probe.y, -2)
+          expect(back4.z / back4.w).toBeCloseTo(probe.z, -2)
+        }
+      }
     }
   })
 })
