@@ -1,7 +1,7 @@
 // T1：CascadedShadowMaps 纯数学单测（node，无 GL）。
 // 相机固定在 ECEF (0,0,6.4e6) 朝 -Z 看时手推期望值断言。
 import { describe, expect, it } from 'vitest'
-import { Cartesian3, Cartesian4, Matrix4, Transforms } from 'cesium'
+import { Cartesian2, Cartesian3, Cartesian4, Matrix3, Matrix4, Transforms } from 'cesium'
 
 import { CascadedShadowMaps, splitFrustum } from './CascadedShadowMaps'
 
@@ -11,10 +11,17 @@ import { CascadedShadowMaps, splitFrustum } from './CascadedShadowMaps'
 function makeCamera(near: number, far: number, fovy = Math.PI / 3) {
   const eye = new Cartesian3(0, 0, 6.4e6)
   const inverseViewMatrix = Matrix4.fromTranslation(eye)
-  // 透视投影（gluPerspective 语义，aspect 1）：Cesium Matrix4.computePerspectiveFieldOfView
-  const projectionMatrix = Matrix4.computePerspectiveFieldOfView(
-    fovy, 1.0, near, far, new Matrix4()
-  )
+  // 透视投影（gluPerspective 语义，aspect 1）：Cesium Matrix4.computePerspectiveFieldOfView。
+  // near=0 时其内部 Check 抛 DeveloperError，但矩阵本身良定义（m10=-1、m14=0）——
+  // 手写同公式绕过检查（world 锚定用例需要 near=0 相机；world 分支不消费投影矩阵）。
+  const projectionMatrix = near > 0
+    ? Matrix4.computePerspectiveFieldOfView(fovy, 1.0, near, far, new Matrix4())
+    : new Matrix4(
+        1 / Math.tan(fovy / 2), 0, 0, 0,
+        0, 1 / Math.tan(fovy / 2), 0, 0,
+        0, 0, (far + near) / (near - far), 2 * far * near / (near - far),
+        0, 0, -1, 0
+      )
   return { inverseViewMatrix, projectionMatrix, near, far }
 }
 
@@ -238,5 +245,109 @@ describe('CascadedShadowMaps.update', () => {
     )
     const gap = Cartesian3.distance(centerWorldMine, centerWorldCsm)
     expect(gap).toBeLessThan(1000)
+  })
+})
+
+// ── world 锚定模式（spec v3 §3.1）──
+const WORLD_RADII = [16e3, 33.6e3, 96e3]
+const WORLD_INTERVALS = [0, 10e3, 21e3, 60e3]
+
+function makeWorldCSM() {
+  return new CascadedShadowMaps({
+    cascadeCount: 3, mapSize: 512,
+    anchor: 'world', worldRadii: WORLD_RADII, worldIntervals: WORLD_INTERVALS
+  })
+}
+
+describe('CascadedShadowMaps world 锚定', () => {
+  const sun = Cartesian3.normalize(new Cartesian3(0.3, 0.2, 1), new Cartesian3())
+
+  it('interval 常数区间：无 NaN、单调、覆盖 [0,1]（near=0 不喂 splitFrustum，spec §3.1.4）', () => {
+    const csm = makeWorldCSM()
+    const cam = makeCamera(0, 6e4) // near=0 传 world 分支必须安全
+    csm.update(cam, sun, 1e5)
+    expect(csm.cascades[0].interval.x).toBe(0)
+    expect(csm.cascades[2].interval.y).toBeCloseTo(1, 10)
+    for (let i = 0; i < 3; i++) {
+      const iv = csm.cascades[i].interval
+      expect(Number.isFinite(iv.x)).toBe(true)
+      expect(Number.isFinite(iv.y)).toBe(true)
+      expect(iv.y).toBeGreaterThan(iv.x)
+      if (i > 0) expect(iv.x).toBeCloseTo(csm.cascades[i - 1].interval.y, 10)
+    }
+  })
+
+  it('radius/texel 恒定：任意相机变化下 ortho 半径 = worldRadii（spec §3.1.1）', () => {
+    const csm = makeWorldCSM()
+    csm.update(makeCamera(0.1, 6e4), sun, 1e5)
+    for (let i = 0; i < 3; i++) {
+      const r = 1 / csm.cascades[i].projectionMatrix[0]
+      expect(r).toBeCloseTo(WORLD_RADII[i], 6)
+    }
+  })
+
+  // f32 仿真（GPU float32 近似——spec §6：f64 域断言会平凡通过）
+  const f32m = (m: Matrix4): Matrix4 => {
+    const out = new Matrix4()
+    for (let i = 0; i < 16; i++) (out as unknown as number[])[i] = Math.fround(m[i])
+    return out
+  }
+  const uvOf = (m: Matrix4, p: Cartesian3): Cartesian2 => {
+    const v = Matrix4.multiplyByPoint(m, p, new Cartesian3())
+    return new Cartesian2(v.x * 0.5 + 0.5, v.y * 0.5 + 0.5) // ortho w=1
+  }
+
+  it('纯旋转（heading/pitch 变、位置不动）：矩阵 f32 化后逐帧不变（spec §3.1.2 最强性质）', () => {
+    const csm = makeWorldCSM()
+    const cam = makeCamera(0.1, 6e4)
+    // 绕视轴 + 俯仰各转一次（位置恒定）：构造带旋转的 inverseViewMatrix
+    const rotM = (rx: number, rz: number) =>
+      Matrix4.fromRotationTranslation(
+        Matrix3.multiply(Matrix3.fromRotationZ(rz), Matrix3.fromRotationX(rx), new Matrix3()),
+        new Cartesian3(0, 0, 6.371e6 + 8e3)
+      )
+    // base 必须与旋转帧同位置（rotM(0,0)=零旋转+同平移）——makeCamera 的 eye 在 6.4e6，
+    // 与旋转帧差 21km，world 锚定矩阵随位置 snap 变化，位置不同则矩阵必然不同
+    csm.update({ ...cam, inverseViewMatrix: rotM(0, 0) }, sun, 1e5)
+    const base = csm.cascades.map(c => f32m(c.matrix))
+    for (const [rx, rz] of [[0.2, 0], [-0.15, 0.4], [0, 0.7]]) {
+      csm.update({ ...cam, inverseViewMatrix: rotM(rx, rz) }, sun, 1e5)
+      for (let i = 0; i < 3; i++) {
+        const now = f32m(csm.cascades[i].matrix)
+        for (let e = 0; e < 16; e++) {
+          expect((now as unknown as number[])[e]).toBe((base[i] as unknown as number[])[e])
+        }
+      }
+    }
+  })
+
+  it('平移：同一世界点 UV 相位稳定（f32 仿真 |Δuv·mapSize − round| < 0.1 texel，spec §3.1.7）', () => {
+    const csm = makeWorldCSM()
+    const cam = makeCamera(0.1, 6e4)
+    const probe = new Cartesian3(5e3, -2e3, 6.371e6 + 8.5e3) // 云内一点
+    let prevUv: Cartesian2 | undefined
+    for (let s = 0; s < 8; s++) {
+      const inv = Matrix4.fromTranslation(new Cartesian3(s * 30, 0, 6.371e6 + 8e3))
+      csm.update({ ...cam, inverseViewMatrix: inv }, sun, 1e5)
+      const uv = uvOf(f32m(csm.cascades[0].matrix), probe)
+      if (prevUv != null) {
+        const dx = (uv.x - prevUv.x) * 512
+        const dy = (uv.y - prevUv.y) * 512
+        expect(Math.abs(dx - Math.round(dx))).toBeLessThan(0.1)
+        expect(Math.abs(dy - Math.round(dy))).toBeLessThan(0.1)
+      }
+      prevUv = uv
+    }
+  })
+
+  it('缩放（near/far 大变）：矩阵不变（spec §3.1.5 far 不随视锥）', () => {
+    const csm = makeWorldCSM()
+    csm.update(makeCamera(0.1, 6e4), sun, 1e5)
+    const base = csm.cascades.map(c => Matrix4.clone(c.matrix))
+    csm.update(makeCamera(0.1, 2e4), sun, 1e5) // far 6e4→2e4（multi-frustum 分段态）
+    csm.update(makeCamera(5, 1.2e5), sun, 1e5)
+    for (let i = 0; i < 3; i++) {
+      expect(csm.cascades[i].matrix).toEqual(base[i])
+    }
   })
 })

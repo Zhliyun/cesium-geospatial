@@ -74,6 +74,21 @@ export interface CascadedShadowMapsOptions {
   fade?: boolean
   /** ortho near/far 余量（three 默认 0）。 */
   margin?: number
+  /**
+   * 矩阵锚定模式（spec v3 §3.1）：'frustum'（缺省）= 现实现视锥拟合；
+   * 'world' = 固定 radii + 相机位置 texel snap（世界锚定，消移动闪动）。
+   */
+  anchor?: 'frustum' | 'world'
+  /** world 模式：每层固定半径 m（spec §3.1.1 = 1.6×d 覆盖最坏取向）。缺省 [16e3, 33.6e3, 96e3]。 */
+  worldRadii?: number[]
+  /** world 模式：分层区间绝对距离 m（长度 cascadeCount+1；spec §3.1.4 常数区间）。缺省 [0, 10e3, 21e3, 60e3]。 */
+  worldIntervals?: number[]
+  /** world 模式：壳顶球半径 m（zNear 解析式用，spec §3.1.3）。缺省 6362200（bottomRadius 6360000 + shadowTopHeight 2200）。 */
+  shellTopRadius?: number
+  /** world 模式：near 面裕量 m（spec §3.1.3 约束 ≤30km）。缺省 3e4。 */
+  worldMargin?: number
+  /** world 模式：center.z snap 粗网格 m（spec §3.1.3）。缺省 1e3。 */
+  zSnapGrid?: number
 }
 
 type FrustumSplitMode = 'uniform' | 'logarithmic' | 'practical'
@@ -190,6 +205,18 @@ export class CascadedShadowMaps {
   readonly splitLambda: number
   readonly fade: boolean
   readonly margin: number
+  /** 矩阵锚定模式（'frustum' 缺省 = 视锥拟合；'world' = 世界锚定，spec v3 §3.1）。 */
+  readonly anchor: 'frustum' | 'world'
+  /** world 模式：每层固定 ortho 半径 m（长度 = cascadeCount）。 */
+  readonly worldRadii: number[]
+  /** world 模式：分层区间绝对距离 m（长度 = cascadeCount+1，near 项应为 0）。 */
+  readonly worldIntervals: number[]
+  /** world 模式：壳顶球半径 m（zNear 解析式）。 */
+  readonly shellTopRadius: number
+  /** world 模式：ortho near 面裕量 m。 */
+  readonly worldMargin: number
+  /** world 模式：center.z snap 粗网格 m。 */
+  readonly zSnapGrid: number
   /** 最近一次 update 用的 far（= camera.far）。 */
   far = 0
 
@@ -203,6 +230,12 @@ export class CascadedShadowMaps {
     this.splitLambda = options.splitLambda ?? 0.5
     this.fade = options.fade ?? true
     this.margin = options.margin ?? 0
+    this.anchor = options.anchor ?? 'frustum'
+    this.worldRadii = options.worldRadii ?? [16e3, 33.6e3, 96e3]
+    this.worldIntervals = options.worldIntervals ?? [0, 10e3, 21e3, 60e3]
+    this.shellTopRadius = options.shellTopRadius ?? 6362200
+    this.worldMargin = options.worldMargin ?? 3e4
+    this.zSnapGrid = options.zSnapGrid ?? 1e3
     for (let i = 0; i < options.cascadeCount; ++i) {
       this.cascades.push({
         interval: new Cartesian2(),
@@ -226,6 +259,10 @@ export class CascadedShadowMaps {
    *   ortho 盒深 = radius*2 + margin，distance 过大时场景会超出盒深——编排侧应传小值）
    */
   update(camera: CascadeCameraInput, sunDirection: Cartesian3, distance = 1): void {
+    if (this.anchor === 'world') {
+      this.updateWorld(camera, sunDirection)
+      return
+    }
     const far = camera.far
     this.far = far
 
@@ -321,6 +358,86 @@ export class CascadedShadowMaps {
       lookAtMatrix(position, centerWorld, UP, cascade.inverseViewMatrix)
 
       // 4) 派生矩阵（对齐 three update 末尾六件套）
+      Matrix4.inverse(cascade.projectionMatrix, cascade.inverseProjectionMatrix)
+      Matrix4.inverse(cascade.inverseViewMatrix, cascade.viewMatrix)
+      Matrix4.multiply(cascade.projectionMatrix, cascade.viewMatrix, cascade.matrix)
+      Matrix4.multiply(cascade.inverseViewMatrix, cascade.inverseProjectionMatrix, cascade.inverseMatrix)
+    }
+  }
+
+  /**
+   * world 锚定分支（spec v3 §3.1）：
+   * - interval 常数（不复用 splitFrustum——near=0 产 NaN，§3.1.4）
+   * - center = 相机 light 投影 snap 到固定 texel 网格（原点=地心；§3.1.2）
+   * - zNear 局部相对式（盘内壳顶之上 + margin；§3.1.3）+ 光心域→相机相对域换算
+   * - 单源矩阵构造（light 基一次求出，§3.1.9）
+   */
+  private updateWorld(camera: CascadeCameraInput, sunDirection: Cartesian3): void {
+    const intervals = this.worldIntervals
+    const radii = this.worldRadii
+    const far = intervals[this.cascadeCount]
+    this.far = far
+
+    // 1) 常数 interval（归一化域）
+    for (let i = 0; i < this.cascadeCount; i++) {
+      this.cascades[i].interval.x = intervals[i] / far
+      this.cascades[i].interval.y = intervals[i + 1] / far
+    }
+    this.cascades[0].interval.x = 0
+
+    // 2) light 基（单源；z=+sunDirection 指向太阳，与现实现 lookAtMatrix(0,-sun) 同基）
+    const zAxis = Cartesian3.normalize(sunDirection, new Cartesian3())
+    let xAxis = Cartesian3.cross(UP, zAxis, new Cartesian3())
+    if (Cartesian3.magnitude(xAxis) < 1e-9) {
+      xAxis = Cartesian3.cross(new Cartesian3(1, 0, 0), zAxis, new Cartesian3())
+    }
+    Cartesian3.normalize(xAxis, xAxis)
+    const yAxis = Cartesian3.cross(zAxis, xAxis, new Cartesian3())
+    // ⚠️ row-major 参数序（69ee488 坑）：「列=basis」须逐行写各 basis 分量
+    const rot = new Matrix3(
+      xAxis.x, yAxis.x, zAxis.x,
+      xAxis.y, yAxis.y, zAxis.y,
+      xAxis.z, yAxis.z, zAxis.z
+    )
+    const invRot = Matrix3.transpose(rot, new Matrix3())
+
+    // 3) 相机位置 → light 系（纯旋转，原点=地心）
+    const camPos = Matrix4.getTranslation(camera.inverseViewMatrix, new Cartesian3())
+    const camLight = Matrix3.multiplyByVector(invRot, camPos, new Cartesian3())
+
+    for (let i = 0; i < this.cascadeCount; i++) {
+      const radius = radii[i]
+      const texel = (radius * 2) / this.mapSize
+      const cascade = this.cascades[i]
+
+      // center.xy snap 到固定 texel 网格；center.z snap 到粗网格（z 无消费语义，§3.1.3）
+      const center = new Cartesian3(
+        Math.round(camLight.x / texel) * texel,
+        Math.round(camLight.y / texel) * texel,
+        Math.round(camLight.z / this.zSnapGrid) * this.zSnapGrid
+      )
+
+      // zNear 局部相对式（光心域，spec §3.1.3）：盘内壳顶最大 z + margin
+      const rhoC = Math.hypot(center.x, center.y)          // 盘心距日轴
+      const rhoMin = Math.max(0, rhoC - radius)             // 盘缘最近距日轴
+      const Rtop = this.shellTopRadius
+      const zNearGeo = Math.sqrt(Rtop * Rtop - rhoMin * rhoMin) + this.worldMargin
+      // 域换算：光心域 z → light 相机相对域（相机原点=centerWorld，其 light z=center.z）
+      const orthoNear = zNearGeo - center.z
+      const orthoFar = orthoNear + 2e5 // far 随意给足（clip.z 全管线无消费，spec §3.1.3）
+
+      // ortho（非对称绕 snap 后 center；Cesium 参数序 (l,r,bottom,top,near,far)）
+      Matrix4.computeOrthographicOffCenter(
+        center.x - radius, center.x + radius,
+        center.y - radius, center.y + radius,
+        orthoNear, orthoFar,
+        cascade.projectionMatrix
+      )
+
+      // 单源 light 相机：rotation=rot、translation=centerWorld（§3.1.9，不走 lookAtMatrix）
+      const centerWorld = Matrix3.multiplyByVector(rot, center, new Cartesian3())
+      Matrix4.fromRotationTranslation(rot, centerWorld, cascade.inverseViewMatrix)
+
       Matrix4.inverse(cascade.projectionMatrix, cascade.inverseProjectionMatrix)
       Matrix4.inverse(cascade.inverseViewMatrix, cascade.viewMatrix)
       Matrix4.multiply(cascade.projectionMatrix, cascade.viewMatrix, cascade.matrix)
