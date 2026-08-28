@@ -383,6 +383,9 @@ async function main(): Promise<void> {
           // ?cloudsTemporal=1 显式开启体验 1/4 分 march + Bayer 重建的帧率优势）
           ...(getString('cloudsTemporal') === '1' ? { temporal: true } : {}),
           ...(getString('cloudsShadowTemporal') === '1' ? { shadowTemporal: true } : {}),
+          // 噪声分解诊断（评审门禁实验）：冻结 cascade 矩阵（首帧后不更新）——「冻结+移动」
+          // 录屏差分 = 非矩阵噪声地板（层切换/jitter/消费端），与不冻结对照相减得矩阵分量
+          ...(getString('cloudsShadowFreeze') === '1' ? { shadowFreeze: true } : {}),
           // M5 云 god rays 开关（默认开）：?cloudsLightShafts=0 诊断基线（无云间体积光柱）
           ...(getString('cloudsLightShafts') === '0' ? { lightShafts: false } : {}),
           // 云 overlay 曝光（默认 10 对齐 three 版 storybook 标定；偏灰调大/过曝调小）
@@ -398,6 +401,20 @@ async function main(): Promise<void> {
           console.info(
             '[phase3-clouds] 体积云已接线（M3 稳定行为 + M5 云 god rays；?cloudsLightShafts=0 关光柱对比；?cloudsTemporal=1 开 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影）'
           )
+          // 平移探针（噪声分解实验）：每帧 moveForward N 米（直线平移，激发 BSM texel 跳变
+          // 通道——rotateLeft 是轨道移动，模式单一）。preRender 里持续驱动，录屏窗口截取。
+          const probeMove = getNumber('cloudsProbeMove')
+          if (probeMove != null && probeMove > 0) {
+            let probeFrame = 0
+            scene.preRender.addEventListener(() => {
+              probeFrame++
+              if (probeFrame > 30) {
+                // 前 30 帧等场景稳定（瓦片/BSM 首帧），之后匀速前进
+                viewer.camera.moveForward(probeMove)
+              }
+            })
+            console.info(`[probe] 平移探针激活：每帧前进 ${probeMove}m（第 30 帧起）`)
+          }
         }
       } catch (err) {
         console.warn('[phase3-clouds] weather 纹理加载失败，跳过体积云', err)

@@ -116,6 +116,12 @@ export interface CloudsStageOptions extends CloudsPassOptions {
    * 机制已验证可用，生成端 jitter + 0.01 慢收敛）。demo `?cloudsShadowTemporal=1` 开。
    */
   shadowTemporal?: boolean
+  /**
+   * 诊断：冻结 cascade 矩阵（首帧 update 后不再更新，BSM 在冻结网格上每帧重 march）。
+   * 噪声分解实验用——「冻结矩阵 + 相机移动」录屏差分 = 非矩阵噪声地板（层切换/jitter/
+   * 消费端通道），与不冻结对照相减得矩阵通道分量。demo `?cloudsShadowFreeze=1`。
+   */
+  shadowFreeze?: boolean
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy。 */
@@ -364,6 +370,8 @@ export function createCloudsStage(
   // M4 temporal 状态：上帧相机快照（velocity reprojection 用；首帧 undefined → fallback 当前
   // 矩阵，velocity=0——three previousProjectionMatrix ?? camera.projectionMatrix 同款）。
   let prevCamera: TemporalCameraSnapshot | undefined
+  // 诊断冻结状态（?cloudsShadowFreeze=1）：首帧 update 过后置 true
+  let matricesFrozen = false
   const removePreRender = scene.preRender.addEventListener(
     (_scene: Scene, time: JulianDate) => {
       const camera = scene.camera
@@ -448,30 +456,35 @@ export function createCloudsStage(
         // 远端云走 uv 越界 fallback（光深 0=无自阴影）——低太阳角远端云的自阴影视觉贡献本就弱。
         const far = Math.min(camera.frustum.far, params.maxRayDistance, SHADOW_FAR_LIMIT)
         const near = camera.frustum.near
-        cascades.update(
-          {
-            inverseViewMatrix: camera.inverseViewMatrix,
-            projectionMatrix: (camera.frustum as unknown as { projectionMatrix: Matrix4 })
-              .projectionMatrix,
-            near,
-            far
-          },
-          state.sunDirection,
-          distance
-        )
-        for (let i = 0; i < cascadeCount; i++) {
-          Matrix4.clone(cascades.cascades[i].matrix, shadowMatrices[i])
-          Matrix4.clone(cascades.cascades[i].inverseMatrix, inverseMatrices[i])
-          shadowIntervals[i].x = cascades.cascades[i].interval.x
-          shadowIntervals[i].y = cascades.cascades[i].interval.y
+        // 诊断冻结（?cloudsShadowFreeze=1）：首帧后矩阵不再 update（BSM 冻结网格重 march）。
+        // shadowMatrices/shadowState 已是首帧值，直接跳过 update 段（render 照常）。
+        if (!options.shadowFreeze || !matricesFrozen) {
+          cascades.update(
+            {
+              inverseViewMatrix: camera.inverseViewMatrix,
+              projectionMatrix: (camera.frustum as unknown as { projectionMatrix: Matrix4 })
+                .projectionMatrix,
+              near,
+              far
+            },
+            state.sunDirection,
+            distance
+          )
+          for (let i = 0; i < cascadeCount; i++) {
+            Matrix4.clone(cascades.cascades[i].matrix, shadowMatrices[i])
+            Matrix4.clone(cascades.cascades[i].inverseMatrix, inverseMatrices[i])
+            shadowIntervals[i].x = cascades.cascades[i].interval.x
+            shadowIntervals[i].y = cascades.cascades[i].interval.y
         }
-        // M4：本帧矩阵先登记（render 内部 velocity 用 prevMatrices=上帧、末尾 prev ← 本帧）
-        if (shadowPass != null) {
-          shadowPass.setCurrentMatrices(shadowMatrices)
+          // M4：本帧矩阵先登记（render 内部 velocity 用 prevMatrices=上帧、末尾 prev ← 本帧）
+          if (shadowPass != null) {
+            shadowPass.setCurrentMatrices(shadowMatrices)
         }
-        shadowState.cameraNear = near
-        shadowState.far = far
-        shadowState.bsm = shadowPass.bsmTexture
+          shadowState.cameraNear = near
+          shadowState.far = far
+          shadowState.bsm = shadowPass.bsmTexture
+          matricesFrozen = true
+        }
         shadowPass.render()
       }
     }
