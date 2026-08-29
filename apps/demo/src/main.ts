@@ -371,8 +371,20 @@ async function main(): Promise<void> {
           : cloudsDebug === 4 ? ('shadowMap' as const)
           : cloudsDebug === 5 ? ('cascades' as const)
           : undefined
+        // 质量档位白名单解析（controller 裁决 Ruling 4）：?cloudsQuality 非法值（如 foo）
+        // → undefined 走库内缺省 high，而非 as 直传踩 Record 键 undefined
+        const cloudsQualityRaw = getString('cloudsQuality')
+        const cloudsQuality =
+          cloudsQualityRaw === 'low' || cloudsQualityRaw === 'medium'
+          || cloudsQualityRaw === 'high' || cloudsQualityRaw === 'ultra'
+            ? cloudsQualityRaw
+            : undefined
         const cloudsHandle = createCloudsStage(scene, luts, weather, {
           clouds: true,
+          // 质量档位（spec 2026-08-29）：?cloudsQuality=low|medium|high|ultra（缺省 high=现状；
+          // 白名单守卫——非法值忽略，防 Record 键 undefined 崩创建。局部 const 收窄使
+          // getString 的 string|null 收敛到字面量联合，无需 as 断言）
+          ...(cloudsQuality != null ? { quality: cloudsQuality } : {}),
           ...(cloudsDebugShow != null ? { debugShow: cloudsDebugShow } : {}),
           ...(getString('cloudsShapeDetail') === '0' ? { shapeDetail: false } : {}),
           ...(getString('cloudsTurbulence') === '0' ? { turbulence: false } : {}),
@@ -408,8 +420,20 @@ async function main(): Promise<void> {
           cloudsHandle
         if (cloudsHandle != null) {
           console.info(
-            '[phase3-clouds] 体积云已接线（M3 稳定行为 + M5 云 god rays；?cloudsLightShafts=0 关光柱对比；?cloudsTemporal=1 开 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影；?cloudsShadowAnchor=frustum 回退视锥锚定 AB 基线）'
+            '[phase3-clouds] 体积云已接线（M3 稳定行为 + M5 云 god rays；?cloudsLightShafts=0 关光柱对比；?cloudsTemporal=1 开 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影；?cloudsShadowAnchor=frustum 回退视锥锚定 AB 基线；?cloudsQuality=N 初始档/按键 1-4 切档）'
           )
+          // 质量档位快捷键（setQuality 运行时验证入口，spec §8）：1/2/3/4 = low/medium/high/ultra。
+          // 仅帧间触发（keydown 在 rAF 外，spec §7 调用时机约束天然满足）。
+          const QUALITY_KEYS: Record<string, 'low' | 'medium' | 'high' | 'ultra'> = {
+            '1': 'low', '2': 'medium', '3': 'high', '4': 'ultra'
+          }
+          window.addEventListener('keydown', (ev) => {
+            const next = QUALITY_KEYS[ev.key]
+            if (next != null) {
+              cloudsHandle.setQuality(next)
+              console.info(`[phase3-clouds] quality → ${next}（setQuality 内部重建）`)
+            }
+          })
           // 平移探针（噪声分解实验）：每帧 moveForward N 米（直线平移，激发 BSM texel 跳变
           // 通道——rotateLeft 是轨道移动，模式单一）。preRender 里持续驱动，录屏窗口截取。
           const probeMove = getNumber('cloudsProbeMove')

@@ -88,6 +88,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
+| `cloudsQuality` | `high` | 质量档位 `low`/`medium`/`high`/`ultra`：march 步数/编译开关（光柱/细节/湍流/精确天光）/BSM 级联数与尺寸整档联动；键盘 `1`-`4` 运行时切换 |
 | `cloudsExposure` | 10 | 云层曝光（偏灰调大、过曝调小） |
 | `cloudsShadow=0` | 开 | 关 BSM 自阴影（对比云体积感） |
 | `cloudsShadowAnchor=frustum` | world | 回退视锥锚定 BSM（AB 对照基线；默认 world 世界锚定固定网格，抗移动闪动） |
