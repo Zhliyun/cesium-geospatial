@@ -287,4 +287,37 @@ describe('insertStageBeforeLensFlare（v2.1 全语义）', () => {
     expect(m.timeline().length).toBe(lenNow)
     handle.destroy()
   })
+
+  it('§8.1.11b 回滚自身失败：rebuild 再抛错 → 仍抛原始异常 + console.error 记回滚异常', () => {
+    const m = makeScene()
+    const handle = createAtmosphereStage(m.scene, stubLuts, {})
+    const b = makeInsertStage('clouds_overlay_b')
+    // 主路径：add(b) 抛原始异常（同 §8.1.11）
+    const origAdd = m.addSpy.getMockImplementation()
+    m.addSpy.mockImplementation((s: { name?: string }) => {
+      if (s === b) throw new Error('mock add 失败')
+      origAdd?.(s)
+    })
+    // 回滚路径：rebuildLensFlare 走 lensFlareMock——本用例内 mockClear 后首次调用即回滚
+    // rebuild，替换实现使其再抛错（回滚异常），验证原始异常胜出。
+    const origLf = lensFlareMock.getMockImplementation()
+    lensFlareMock.mockImplementation(() => {
+      throw new Error('mock rebuild 失败')
+    })
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // 抛出的是原始异常（非回滚异常 'mock rebuild 失败'）
+      expect(() => handle.insertStageBeforeLensFlare(b)).toThrow('mock add 失败')
+      // 回滚失败被 console.error 记录：消息含「回滚失败」+ 第二参为回滚异常本体
+      expect(errSpy).toHaveBeenCalledTimes(1)
+      const errArgs = errSpy.mock.calls[0] as unknown[]
+      expect(String(errArgs[0])).toContain('回滚失败')
+      expect((errArgs[1] as Error).message).toBe('mock rebuild 失败')
+    } finally {
+      errSpy.mockRestore()
+      if (origLf) lensFlareMock.mockImplementation(origLf) // 恢复默认实现（防跨用例残留）
+      if (origAdd) m.addSpy.mockImplementation(origAdd)
+    }
+    handle.destroy()
+  })
 })
