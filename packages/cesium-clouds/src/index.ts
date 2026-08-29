@@ -47,3 +47,12 @@ export {
 
 // BSM world 锚定缺省设计值（T6 导出：demo ?cloudsShadowScale 派生用；类缺省同源）
 export { WORLD_RADII_DEFAULT, WORLD_INTERVALS_DEFAULT } from './CascadedShadowMaps'
+
+// 质量档位（spec 2026-08-29 §3/§4/§5）
+export {
+  cloudsQualityPresets,
+  applyQualityPreset,
+  type CloudsQualityPreset,
+  type ResolvedCloudsQuality,
+  type AppliedCloudsQuality
+} from './qualityPresets'

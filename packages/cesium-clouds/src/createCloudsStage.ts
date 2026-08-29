@@ -88,14 +88,22 @@ import { CascadedShadowMaps } from './CascadedShadowMaps'
 import { createShadowPass, type ShadowPass } from './ShadowPass'
 import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
 import {
-  defaultCloudsParameters,
   type CloudsParameters,
   type CloudsShadowFrameState
 } from './cloudsDefaultParameters'
+import { applyQualityPreset, type CloudsQualityPreset } from './qualityPresets'
 import type { WeatherTextures } from './weatherTextures'
 
-/** createCloudsStage 选项（透传 CloudsPassOptions + clouds 开关）。 */
-export interface CloudsStageOptions extends CloudsPassOptions {
+/**
+ * createCloudsStage 选项（透传 CloudsPassOptions + clouds 开关）。
+ * v3（spec §5）：parameters 入口类型 Partial（合并语义见 applyQualityPreset）——用 Omit 重组，
+ * CloudsPassOptions.parameters 保持全量契约（createCloudsPass 整体替换语义不动，CloudsPass 零改动）。
+ */
+export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'> {
+  /** 业务参数覆盖（字段级浅合并：缺省→档位→此处显式；shadowMarch 整对象；Cesium 数学类型内部 clone）。 */
+  parameters?: Partial<CloudsParameters>
+  /** 质量档位（缺省 'high' = 现状零回归；spec §3 四档逐字对齐参考库）。demo ?cloudsQuality=low。 */
+  quality?: CloudsQualityPreset
   /**
    * clouds 开关（默认 false → 不创建 stage，零回归）。
    * demo 在 atmosphere mode 内 `?clouds=1` 时传 true。
@@ -241,7 +249,10 @@ export function createCloudsStage(
   // ── 业务参数同源（M3 T5 上提）：CloudsPass 与 ShadowPass/共享 uniform 段共用一份 ──
   // （若各自 defaultCloudsParameters() 会得两份独立对象——默认值恰好一致但参数化后漂移；
   // 注入 options.parameters 后 createCloudsPass 内 `options.parameters ?? default` 取到同一份）
-  const params: CloudsParameters = options.parameters ?? defaultCloudsParameters()
+  // ── 质量档位解析（spec §5：缺省→档位→用户显式；产物 deep-clone 新对象）──
+  // Task 1 阶段只消费 params 维度；main 编译开关/shadow 结构（mapSize/cascadeCount）Task 4 接线。
+  const applied = applyQualityPreset(options.quality ?? 'high', options)
+  const params: CloudsParameters = applied.params
 
   // ── 每帧可变状态（createCloudsStage 持有；preRender 更新；CloudsPass uniformMap 闭包读引用）──
   const state: CloudsFrameState = {
