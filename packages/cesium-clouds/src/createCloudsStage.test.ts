@@ -878,3 +878,102 @@ describe('质量档位装配（spec §6/§7）', () => {
     expect(inst.destroy).toHaveBeenCalledTimes(1)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 5：setQuality 行为收口（spec §7 v3）——同档 no-op / 换档重建（旧 impl 全
+// destroy + listener 零直捕驱动新 impl）/ 用户显式参数保留（合并语义端到端）/
+// params clone 无共享引用 / destroy 后 no-op+warn / 重建抛错原子性（句柄作废）
+// ─────────────────────────────────────────────────────────────────────────────
+import type { Mock } from 'vitest'
+
+describe('setQuality 行为（spec §7 v3）', () => {
+  // 本组装配辅助：清 mock 历史 + clouds:true 基线建 stage（沿用本文件逐用例 clearAllMocks 惯例）
+  function createStage(options: CloudsStageOptions): {
+    handle: NonNullable<ReturnType<typeof createCloudsStage>>
+    scene: ReturnType<typeof createMockScene>
+  } {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      ...options
+    })
+    expect(handle).toBeDefined()
+    return { handle: handle!, scene }
+  }
+
+  it('同档 no-op：不触发销毁/重建', () => {
+    const { handle } = createStage({ quality: 'high' })
+    handle.setQuality('high')
+    expect(vi.mocked(createCloudsPass).mock.calls.length).toBe(1) // 未重建
+  })
+
+  it('换档：旧 impl 全部 destroy 均被调 + listener 推动新 impl（零直捕断言）', () => {
+    const { handle, scene } = createStage({ quality: 'high' })
+    // 换档前经 getter 捕获旧 impl 三件公开资源（此刻 getter 读旧 impl）
+    const oldPass = handle.cloudsPass
+    const oldShadowDestroy = handle.shadowPass!.destroy as unknown as Mock
+    const oldOverlay = handle.overlayStage
+    handle.setQuality('low')
+    // 旧 impl 全销毁：cloudsPass/shadowPass destroy + overlay 从 postProcessStages 摘除
+    expect(oldPass.destroy as unknown as Mock).toHaveBeenCalled()
+    expect(oldShadowDestroy).toHaveBeenCalled()
+    expect(scene.postProcessStages.remove).toHaveBeenCalledWith(oldOverlay)
+    // listener 驱动新 impl（非直捕旧 impl）：fire preRender 后新 shadowState.far =
+    // low 档 far 不变式 21km——若 listener 仍驱动已销毁旧 impl，新 impl 的 far 停在初始 0
+    firePreRender(scene)
+    expect(handle.shadowState.far).toBe(21e3)
+    // getter 反映新 impl（新 cloudsPass 实例）
+    expect(handle.cloudsPass).not.toBe(oldPass)
+  })
+
+  it('换档保留用户显式参数（合并语义端到端）', () => {
+    const { handle } = createStage({ quality: 'high', parameters: { maxIterationCount: 333 } })
+    handle.setQuality('low')
+    const passOpts = (createCloudsPass as any).mock.lastCall![4] as {
+      parameters: { maxIterationCount: number; minStepSize: number }
+    }
+    expect(passOpts.parameters.maxIterationCount).toBe(333) // 用户显式 > 档位 200
+    expect(passOpts.parameters.minStepSize).toBe(100) // 档位值（low preset 显式列）
+  })
+
+  it('换档后 params 无共享引用（clone 生效，spec §5）', () => {
+    const userParams = { maxIterationCount: 333 }
+    const { handle } = createStage({ quality: 'high', parameters: userParams })
+    handle.setQuality('medium')
+    handle.setQuality('high')
+    const p1 = (createCloudsPass as any).mock.calls.at(-2)![4] as { parameters: { maxIterationCount: number } }
+    const p2 = (createCloudsPass as any).mock.lastCall![4] as { parameters: { maxIterationCount: number } }
+    // 每次 applyQualityPreset 产物是 deep-clone 新对象（defaultCloudsParameters 每调新建）
+    expect(p1.parameters).not.toBe(p2.parameters)
+    // clone 不丢用户显式值：两次重建的 params 均保留 333
+    expect(p1.parameters.maxIterationCount).toBe(333)
+    expect(p2.parameters.maxIterationCount).toBe(333)
+  })
+
+  it('destroy 后 setQuality：no-op + warn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { handle } = createStage({})
+    handle.destroy()
+    handle.setQuality('low')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(createCloudsPass).mock.calls.length).toBe(1) // 不重建
+    warn.mockRestore()
+  })
+
+  it('重建抛错：句柄作废（destroyed 置位，再 setQuality warn 不重建）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { handle } = createStage({})
+    // once 桩须在首建之后排队：createStage 的初始 build 同样调 createCloudsPass，
+    // 先排队会被初始 build 消费（brief 草稿顺序笔误——见任务补充说明同类索引笔误）
+    vi.mocked(createCloudsPass).mockImplementationOnce(() => {
+      throw new Error('GL 资源失败')
+    })
+    expect(() => handle.setQuality('low')).toThrow('GL 资源失败')
+    handle.setQuality('high') // destroyed → no-op + warn
+    expect(warn).toHaveBeenCalledTimes(1)
+    // 恰好 2 次 createCloudsPass（首建 + 失败重建各 1）；此后 setQuality 不再尝试重建
+    expect(vi.mocked(createCloudsPass).mock.calls.length).toBe(2)
+    warn.mockRestore()
+  })
+})
