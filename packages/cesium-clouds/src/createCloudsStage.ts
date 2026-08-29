@@ -124,8 +124,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   clouds?: boolean
   /**
-   * overlay 云曝光（默认 10，对齐 three 版 clouds storybook ToneMapping exposure 标定）。
-   * demo `?cloudsExposure=N` 调节（偏灰→调大；过曝→调小）。
+   * overlay 云曝光（默认 6，线性域云 premultiplied 值缩放（V2 验收后定稿））。
+   * demo `?cloudsExposure=N` 调节。
    */
   cloudsOverlayExposure?: number
   /**
@@ -207,47 +207,34 @@ export interface CloudsStageHandle {
   destroy(): void
 }
 
-// overlay fragment shader：读 tonemap 输出（display space）+ cloudsBuffer（linear HDR）。
-// M2 简化：cloud 先 ACES+gamma 到 display space，再 alpha mix（cloud.a = transmittance → opacity = 1-a）。
-// colorTexture 由 Cesium PostProcessStage 内建提供（前一 stage 输出）；u_cloudsBuffer 由 bridge 注入。
-// out_FragColor 不声明——Cesium 单输出 stage 自动注入 layout(location=0) out（同 CloudsSpikeMRT OVERLAY_SHADER）。
+// overlay fragment shader（v2 spec §4.1 线性域化）：读前一 stage 输出（atmosphere 线性 HDR）+
+// cloudsBuffer（march/resolve 输出，premultiplied 线性 HDR）。
+// 线性域 premultiplied over：cloud.rgb 已含 opacity 因子，直接加和（无 unpremultiply/ACES/gamma——
+// 由链尾 tonemap 统一收尾，消灭 M2「云单独 ACES」display 域双 ACES 债）。
+// 位置：atmosphere 之后、lensFlare/tonemap 之前（demo 经 insertStageBeforeLensFlare 编排）——
+// halo 光晕叠加在云之上（修复「光晕被云覆盖」）。
 //
-// 颜色链两处标定（2026-08-14 偏灰排查）：
-//   1. unpremultiply：cloud.rgb 是 premultiplied（云色×opacity），直接 ACES 会在薄云/边缘处被
-//      低值段压暗 ~5 倍（ACES(0.3L) ≠ 0.3·ACES(L)）→ 先 /a 还原 straight 云色再 tonemap。
-//   2. exposure：three 版 clouds storybook ToneMapping exposure=10（云线性 radiance 量级 ~0.1，
-//      ×10 拉进 ACES 工作区）；不乘则云整体暗 ~10 倍 → 偏灰。u_cloudsExposure uniform 可调。
+// 无样本路径 clouds.frag color=vec4(0) → a=0 且 rgb=0 → final = x·1.0 + 0·E = x，逐位透传。
+// 颜色标定：u_cloudsExposure = 线性域云 premultiplied 值缩放（three 版 storybook ToneMapping
+// exposure=10 → 本项目 display 域时代标定 6 → 线性域起点沿用 6，V2 视觉验收后定稿）。
 const OVERLAY_SHADER = `uniform sampler2D colorTexture;
 uniform sampler2D u_cloudsBuffer;
 uniform float u_cloudsExposure;
 in vec2 v_textureCoordinates;
 
-// ACES filmic（对齐 core tonemap.frag ACESFilmic 常数）。
-vec3 cloudsOverlay_ACESFilmic(vec3 x) {
-  const float a = 2.51;
-  const float b = 0.03;
-  const float c = 2.43;
-  const float d = 0.59;
-  const float e = 0.14;
-  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
-
 void main() {
   vec4 scene = texture(colorTexture, v_textureCoordinates);
   vec4 cloud = texture(u_cloudsBuffer, v_textureCoordinates);
-  // three 版 cloudsEffect.frag 语义（premultiplied over blend）：clouds.a = 云 opacity
-  // （无样本 clouds.frag:863 color=vec4(0) → a=0 → 不覆盖，scene 透传）；clouds.rgb premultiplied。
-  // M2 overlay 在 tonemap 后：cloud 线性 HDR（premultiplied）→ unpremultiply → ×exposure →
-  // ACES + gamma 到 display space → straight-alpha over（ACES 非线性下的近似，flat 阶段可接受）。
-  vec3 cloudLinear = cloud.rgb / max(cloud.a, 1e-4);
-  vec3 cloudDisplay = pow(cloudsOverlay_ACESFilmic(cloudLinear * u_cloudsExposure), vec3(1.0 / 2.2));
-  vec3 final = scene.rgb * (1.0 - cloud.a) + cloud.a * cloudDisplay;
+  // 线性域 premultiplied over（spec D5）：E·premultiplied ≡ premultiplied(E·straight)。
+  // ACES + gamma 由链尾 tonemap 统一。
+  vec3 final = scene.rgb * (1.0 - cloud.a) + cloud.rgb * u_cloudsExposure;
   out_FragColor = vec4(final, scene.a);
 }
 `
 
-// 云 overlay ACES 曝光：three 版 clouds storybook ToneMapping exposure=10 标定，本项目
-// 视觉验收校准为 6（用户 2026-08-14 标定——云暗灰修正后 10 略过曝）。
+// 云 overlay 曝光（v2 spec §4.3/D7）：线性域云 premultiplied 值缩放（链尾统一 ACES）。
+// 起点沿用 display 域时代标定 6（不透明云内部新旧式同为 pow(ACES(6·rgb), 1/2.2)），
+// V2 视觉验收后定稿并回改此处 + README。
 const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 6
 
 /** 模块内 impl（spec §7 v2）：一次装配的全部资源 + 每帧逻辑 + 完整销毁。 */
@@ -461,24 +448,25 @@ function buildCloudsStageImpl(
     ;(scene.primitives as unknown as { add: (p: unknown) => void }).add(resolvePass.primitive)
   }
 
-  // ── overlay PostProcessStage（cloudsBuffer bridge + tonemap 输出 mix）──
-  // sampleMode NEAREST：保护云边缘锐利（cloudsBuffer 是 raymarch 像素对齐数据纹理，LINEAR 会糊边缘）。
-  // pixelDatatype UNSIGNED_BYTE：overlay 输出 display ready（已 ACES+gamma），下游无 HDR 需求。
+  // ── overlay PostProcessStage（cloudsBuffer bridge + 前一 stage 线性 HDR mix）──
+  // sampleMode NEAREST：保护云边缘锐利（cloudsBuffer 是 raymarch 像素对齐数据纹理，LINEAR 会糊边缘）
+  //   + atmosphere input dithering 透传（同 tonemap NEAREST 保护的逻辑）。
+  // pixelDatatype resolveCloudsHdrDatatype（spec D6）：线性 HDR RT 承载 >1 段（UNSIGNED_BYTE 会
+  //   clip，真 8-bit 设备客观降级）；与 march RT / resolvePass 同源检测。
   const overlayStage = new PostProcessStage({
     name: 'clouds_overlay',
     fragmentShader: OVERLAY_SHADER,
     uniforms: {
-      // bridge 每帧重新取（防 resize 后 colorTex 引用变更；M2 不处理 resize 但接口留动态）。
-      // M4：temporal 时读 resolve 输出（全分重建后的 cloudsBuffer）；否则 march att0 直读
-      //（swap 后的 resolveRef 即本帧输出——overlay 在 PostProcess 阶段取值）。
+      // bridge 每帧重新取（防 resize 后 colorTex 引用变更；接口留动态）。
+      // temporal 时读 resolve 输出（全分重建后的 cloudsBuffer）；否则 march att0 直读。
       u_cloudsBuffer: () =>
         resolvePass != null ? resolvePass.getResolvedBridge() : cloudsPass.getColorBridge(),
-      // 云曝光（three 版 ToneMapping exposure=10 标定；URL ?cloudsExposure=N 可调）
+      // 云曝光（线性域缩放，spec §4.3；URL ?cloudsExposure=N 可调）
       u_cloudsExposure: options.cloudsOverlayExposure ?? CLOUDS_OVERLAY_EXPOSURE_DEFAULT
     },
     sampleMode: PostProcessStageSampleMode.NEAREST,
     pixelFormat: PixelFormat.RGBA,
-    pixelDatatype: PixelDatatype.UNSIGNED_BYTE
+    pixelDatatype: resolveCloudsHdrDatatype(scene)
   })
   scene.postProcessStages.add(overlayStage)
 

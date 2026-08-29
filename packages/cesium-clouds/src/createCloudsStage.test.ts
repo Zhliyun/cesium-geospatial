@@ -213,7 +213,7 @@ describe('createCloudsStage', () => {
     handle!.destroy()
   })
 
-  it('overlay stage fragmentShader 含 colorTexture + u_cloudsBuffer（cloudsBuffer overlay 合成）', () => {
+  it('overlay fragmentShader 线性域 premultiplied over（v2 spec §4.1：删云单独 ACES，链尾 tonemap 统一）', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
@@ -221,8 +221,24 @@ describe('createCloudsStage', () => {
     })
     expect(handle!.overlayStage.fragmentShader).toContain('colorTexture')
     expect(handle!.overlayStage.fragmentShader).toContain('u_cloudsBuffer')
-    // M2 ACES+gamma in overlay（cloud 线性 HDR → display space mix）
-    expect(handle!.overlayStage.fragmentShader).toContain('cloudsOverlay_ACESFilmic')
+    // 线性域式在场（spec §4.1）
+    expect(handle!.overlayStage.fragmentShader).toContain('scene.rgb * (1.0 - cloud.a)')
+    expect(handle!.overlayStage.fragmentShader).toContain('cloud.rgb * u_cloudsExposure')
+    // display 域三件套不在场：ACESFilmic 函数 / unpremultiply / gamma
+    expect(handle!.overlayStage.fragmentShader).not.toContain('cloudsOverlay_ACESFilmic')
+    expect(handle!.overlayStage.fragmentShader).not.toContain('1.0 / 2.2')
+    expect(handle!.overlayStage.fragmentShader).not.toContain('max(cloud.a')
+    handle!.destroy()
+  })
+
+  it('overlay pixelDatatype = resolveCloudsHdrDatatype(scene)（线性 HDR RT，spec §4.2 D6）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    // mock resolveCloudsHdrDatatype 返 0x140b（HALF_FLOAT 哨兵，见 vi.mock('./CloudsPass') :71）
+    expect(handle!.overlayStage.pixelDatatype).toBe(0x140b)
     handle!.destroy()
   })
 
