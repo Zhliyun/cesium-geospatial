@@ -350,7 +350,7 @@ describe('夜间环境底光 nightAmbient（方向 B）', () => {
     const src = buildCloudsMainFragmentShader({})
     expect(src).toContain('uniform float nightAmbient;')
     // 淡入区间 sin(-12°)=-0.2079 / sin(-5°)=-0.0872（LUT -5° 归零线 → 天文夜满值）
-    expect(src).toContain('1.0 - smoothstep(-0.1736, -0.0523, muSunLocal)')
+    expect(src).toContain('1.0 - smoothstep(-0.1045, -0.0175, muSunLocal)')
     // 抬在 skyIrradiance 上（经 skyGradient × scattering × 能量积分传播 → 云保有形体梯度）
     expect(src).toContain('skyIrradiance += vec3(nightAmbient) * nightFactor;')
   })
