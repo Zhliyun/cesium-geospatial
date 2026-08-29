@@ -261,10 +261,13 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
       : {})
   }
 
-  // ── draw pass（缺省 FullscreenPass；shader 用 T2 组装器——temporalPass 传入编译分支）──
+  // ── draw pass（缺省 FullscreenPass；shader 用 T2 组装器——temporalPass/cascadeCount 传入编译分支）──
   const fragmentShaderSource = buildCloudsShadowFragmentShader({
     ...(options.shaderOptions ?? {}),
-    temporalPass
+    temporalPass,
+    // spec §6：与主 march SHADOW_CASCADE_COUNT 同源——编排层 applied.shadow.cascadeCount 单源。
+    // 置于 spread 后：顶层必填值权威，shaderOptions 不得旁路覆盖。
+    cascadeCount
   })
   const drawPass = (options.createDrawPass ?? defaultCreateDrawPass)(
     context,

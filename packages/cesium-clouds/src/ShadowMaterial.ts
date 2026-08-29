@@ -46,21 +46,27 @@ export interface ShadowMainOptions {
    * + reprojectionMatrices uniform。false = M3 行为（单 out、无 velocity）——诊断基线。
    */
   temporalPass?: boolean
+  /**
+   * 级联数（→ #define CASCADE_COUNT，inverseShadowMatrices/reprojectionMatrices 数组长）。
+   * 默认 3。档位路径由 createCloudsStage 传 applied.shadow.cascadeCount（spec §6）。
+   */
+  cascadeCount?: number
 }
 
 // shadow 生成管线固定 define（不含 options 分支）。SHADOW 让 sampleWeather 走
 // shadowLayerMask 乘法（clouds.glsl L87——BSM 只算 shadow=true 的层，与主 march 共享语义）；
-// CASCADE_COUNT 决定 inverseShadowMatrices 数组长（决策 D4：与主 march SHADOW_CASCADE_COUNT
-// 命名区分、值独立为 3）；TEMPORAL_JITTER 开 STBN 起点抖动（frame=0 静态 jitter，M4 递增）；
-// LOCAL_WEATHER_CHANNELS 对齐主 march 的 sampleWeather swizzle 宏。
+// CASCADE_COUNT 曾在此固定为 3，质量档位化（spec §6）后移至 buildDefines 按选项动态生成
+// （决策 D4 保留：与主 march SHADOW_CASCADE_COUNT 命名区分、值同源）；TEMPORAL_JITTER 开
+// STBN 起点抖动（frame=0 静态 jitter，M4 递增）；LOCAL_WEATHER_CHANNELS 对齐主 march 的
+// sampleWeather swizzle 宏。
 const SHADOW_DEFINES_BASE = [
   '#define SHADOW',                 // sampleWeather 走 shadowLayerMask（BSM 只算 shadow=true 的层）
-  '#define CASCADE_COUNT 3',        // 决策 D4（与主 march SHADOW_CASCADE_COUNT 一致）
   '#define TEMPORAL_JITTER',        // STBN 静态 jitter（frame=0；M4 递增）
   '#define LOCAL_WEATHER_CHANNELS rgba'
 ]
 
 // 调试/断言用 define 清单（T3 ShadowPass 可对照核对 uniform/分支期望）。
+// 基础段（不含 CASCADE_COUNT——按选项 cascadeCount 动态生成，非固定管线 define）。
 export const SHADOW_PIPELINE_DEFINES: readonly string[] = SHADOW_DEFINES_BASE
 
 type ResolvedShadowMainOptions = Required<ShadowMainOptions>
@@ -68,13 +74,17 @@ type ResolvedShadowMainOptions = Required<ShadowMainOptions>
 const DEFAULTS: ResolvedShadowMainOptions = {
   shapeDetail: true,
   turbulence: true,
-  temporalPass: true
+  temporalPass: true,
+  cascadeCount: 3
 }
 
 // 构造 M3 运行期 define 集（基础管线 define + options 编译分支开关）。
 function buildDefines(o: ResolvedShadowMainOptions): string {
   return [
     ...SHADOW_DEFINES_BASE,
+    // CASCADE_COUNT：质量档位化（spec §6）自 SHADOW_DEFINES_BASE 移入——按选项动态生成，
+    // low 档 2 级联（生成端 Texture3D 深度/uniform 数组长与其一致，ShadowPass 透传同值）
+    '#define CASCADE_COUNT ' + o.cascadeCount,
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',
     o.turbulence ? '#define TURBULENCE' : '',
     o.temporalPass ? '#define TEMPORAL_PASS' : ''

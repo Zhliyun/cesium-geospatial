@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCloudsShadowFragmentShader,
   buildStandaloneCloudsShadowShaderForValidation,
+  SHADOW_PIPELINE_DEFINES,
   type ShadowMainOptions
 } from './ShadowMaterial'
 import { buildCloudsMainFragmentShader } from './CloudsMaterial'
@@ -139,5 +140,44 @@ describe('M3 T2 glslangValidator 真编译', () => {
     const { ok, output } = compileFragment(src)
     expect(ok).toBe(false)
     expect(output).toContain('ERROR')
+  })
+})
+
+// CASCADE_COUNT 参数化用例的 compile 辅助（沿用 compileOrFail 模式：失败时带 glslang
+// 输出抛错便于定位；返回 boolean 以便 expect(...).toBe(true) 断言）。
+function compileFragmentOk(src: string, label: string): boolean {
+  const { ok, output } = compileFragment(src)
+  if (!ok) {
+    throw new Error(
+      `glslangValidator 编译失败（${label}）:\n${output}\n` +
+        `---- shader 前 80 行（1-based）----\n${src
+          .split('\n')
+          .slice(0, 80)
+          .map((l, i) => `${i + 1}: ${l}`)
+          .join('\n')}`
+    )
+  }
+  return ok
+}
+
+describe('质量档位：CASCADE_COUNT 参数化（spec §6 评审 BLOCKER 修复）', () => {
+  it('默认 CASCADE_COUNT 3；传 2 时 define 变 2', () => {
+    expect(buildCloudsShadowFragmentShader()).toContain('#define CASCADE_COUNT 3')
+    const src = buildCloudsShadowFragmentShader({ cascadeCount: 2 })
+    expect(src).toContain('#define CASCADE_COUNT 2')
+    expect(src).not.toContain('#define CASCADE_COUNT 3')
+  })
+  it('SHADOW_PIPELINE_DEFINES 基础段不含 CASCADE_COUNT（按选项动态生成，非固定管线 define）', () => {
+    expect(SHADOW_PIPELINE_DEFINES.some((d) => d.startsWith('#define CASCADE_COUNT'))).toBe(false)
+  })
+  it.each([true, false])('glslang：CASCADE_COUNT 2 × temporalPass=%s 编译通过（velocity 层 unroll 验证，spec §9 v3）', (tp) => {
+    const src = buildStandaloneCloudsShadowShaderForValidation({ cascadeCount: 2, temporalPass: tp })
+    expect(compileFragmentOk(src, `cascadeCount=2 temporalPass=${tp}`)).toBe(true)
+  })
+  it('glslang：CASCADE_COUNT 2 × shapeDetail/turbulence 双关编译通过', () => {
+    for (const sd of [true, false]) for (const tb of [true, false]) {
+      const src = buildStandaloneCloudsShadowShaderForValidation({ cascadeCount: 2, shapeDetail: sd, turbulence: tb })
+      expect(compileFragmentOk(src, `cascadeCount=2 shapeDetail=${sd} turbulence=${tb}`)).toBe(true)
+    }
   })
 })
