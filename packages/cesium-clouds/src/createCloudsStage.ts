@@ -41,11 +41,11 @@
 // 集成（spec §4.3 + 附录 F4）：
 //   - CloudsPass 是 Primitive（非 PostProcessStage）→ cloudsBuffer（att0）必须用 bridge {_texture,_target}
 //     注入 overlay PostProcessStage uniform（不能用 uniform-name string，F4）
-//   - overlay 在 atmosphere 链尾 append（Cesium PostProcessStageCollection 仅支持 add 末尾追加，
-//     无法 insert 到 atmosphere 与 tonemap 之间——「不碰 core」约束下不修改 createAtmosphereStage）
-//   - M2 简化：overlay 读 tonemap 输出（display space）+ cloudsBuffer（linear HDR），对 cloud 先
-//     ACES+gamma 到 display space 再 alpha mix。M3+ 若需精确线性合成，可改 createAtmosphereStage 支持
-//     stage 插入 hook（或独立 cloudsOverlayStage 提前到 atmosphere 后 tonemap 前）
+//   - v2 spec §6.2/§6.3：overlay 是 per-handle 资源（跨 setQuality 存活）、创建后不自动 add——
+//     add 时机移交消费者（demo 走 core 侧 insertStageBeforeLensFlare 插到 atmosphere 之后、
+//     lensFlare/tonemap 之前，halo 光晕叠加在云之上；独立消费者自行 add 到链尾）
+//   - overlay 读前一 stage 输出（atmosphere 线性 HDR）+ cloudsBuffer（linear HDR premultiplied），
+//     线性域 over 合成（v2 spec §4.1），ACES+gamma 由链尾 tonemap 统一收尾
 //
 // 零回归：clouds:false（或不传）→ 不创建 primitive/stage，返回 undefined（demo 可无条件调用）。
 //
@@ -178,7 +178,7 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
 export interface CloudsStageHandle {
   /** CloudsPass（primitive + MRT + uniformMap）。 */
   readonly cloudsPass: CloudsPass
-  /** cloudsBuffer overlay PostProcessStage（add 到 scene.postProcessStages 末尾）。 */
+  /** cloudsBuffer overlay PostProcessStage（per-handle，跨 setQuality 引用恒定；创建后**未 add**——demo 走 `insertStageBeforeLensFlare` 编排，独立消费者自行 `scene.postProcessStages.add`，见 README）。 */
   readonly overlayStage: PostProcessStage
   /** ShadowPass（BSM 生成端；options.shadowPass=false 时 undefined）。调试/探针采样用。 */
   readonly shadowPass?: ShadowPass
@@ -196,14 +196,14 @@ export interface CloudsStageHandle {
    * - 原子性：重建（GL 资源创建等）抛错时旧 impl 已销毁、句柄半死不可自愈 → 置作废
    *   并 rethrow——此时须重建整个 stage。
    * - 换档瞬间有 shader 重编译长帧（跨档必触 #define 裁剪，数百 ms，spec §2 可接受）。
-   * - 已知限制：若消费者在 clouds 之后又 add 了别的 postProcessStage，重建会把新
-   *   overlay add 到末尾、改变相对顺序（当前无此用法，不处理）。
+   * - overlay 是 per-handle 资源（v2 §6.2）：换档不重建、不重新 add——链上相对顺序恒定，
+   *   uniform 源闭包自动切新 impl 的 bridge。
    * - 与参考库 setter 语义有意不同（spec §5）：参考库 Object.assign 直接覆盖实例
    *   （档位 > 用户微调、微调丢失）；本实现用户显式 > 档位，换档保留微调。
    */
   setQuality(next: CloudsQualityPreset): void
   /** 释放：摘 preRender listener + impl 完整销毁（CloudsPass/resolvePass/ShadowPass/
-   *  turbulence dummy/overlay）。幂等。 */
+   *  turbulence dummy）+ 摘顶层 overlay。幂等。 */
   destroy(): void
 }
 
@@ -237,10 +237,12 @@ void main() {
 // V2 视觉验收后定稿并回改此处 + README。
 const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 6
 
-/** 模块内 impl（spec §7 v2）：一次装配的全部资源 + 每帧逻辑 + 完整销毁。 */
+/** 模块内 impl（spec §6.1 v2）：一次装配的全部资源 + 每帧逻辑 + 完整销毁。
+ *  overlay 已移出 impl（per-handle 资源，spec §6.2）——impl 销毁清单不含 overlay。 */
 interface CloudsStageImpl {
   readonly cloudsPass: CloudsPass
-  readonly overlayStage: PostProcessStage
+  /** M4 resolve pass（temporal 时；overlay uniform 源切换用，spec §6.1 v2 新增）。 */
+  readonly resolvePass: CloudsResolvePass | undefined
   readonly cascades: CascadedShadowMaps
   readonly shadowPass: ShadowPass | undefined
   readonly shadowState: CloudsShadowFrameState
@@ -258,7 +260,7 @@ interface CloudsStageImpl {
  * BSM 结构（applied.shadow 的 cascadeCount/mapSize）——applied 每次调用由调用方新建
  * （applyQualityPreset 产物 deep-clone 新对象，勿跨 impl 共享）。
  *
- * @param scene Cesium scene（cloudsPass.primitive add 到 scene.primitives；overlay add 到 postProcessStages）。
+ * @param scene Cesium scene（cloudsPass.primitive add 到 scene.primitives；overlay 已移出 impl，顶层管理）。
  * @param luts 大气 LUT（与 AtmosphereStage 共享）。
  * @param weather weather 噪声纹理（shape + shapeDetail）。
  * @param options 用户原始选项（clouds 开关 + CloudsPassOptions 透传 + temporal/shadow 编排开关）。
@@ -448,28 +450,6 @@ function buildCloudsStageImpl(
     ;(scene.primitives as unknown as { add: (p: unknown) => void }).add(resolvePass.primitive)
   }
 
-  // ── overlay PostProcessStage（cloudsBuffer bridge + 前一 stage 线性 HDR mix）──
-  // sampleMode NEAREST：保护云边缘锐利（cloudsBuffer 是 raymarch 像素对齐数据纹理，LINEAR 会糊边缘）
-  //   + atmosphere input dithering 透传（同 tonemap NEAREST 保护的逻辑）。
-  // pixelDatatype resolveCloudsHdrDatatype（spec D6）：线性 HDR RT 承载 >1 段（UNSIGNED_BYTE 会
-  //   clip，真 8-bit 设备客观降级）；与 march RT / resolvePass 同源检测。
-  const overlayStage = new PostProcessStage({
-    name: 'clouds_overlay',
-    fragmentShader: OVERLAY_SHADER,
-    uniforms: {
-      // bridge 每帧重新取（防 resize 后 colorTex 引用变更；接口留动态）。
-      // temporal 时读 resolve 输出（全分重建后的 cloudsBuffer）；否则 march att0 直读。
-      u_cloudsBuffer: () =>
-        resolvePass != null ? resolvePass.getResolvedBridge() : cloudsPass.getColorBridge(),
-      // 云曝光（线性域缩放，spec §4.3；URL ?cloudsExposure=N 可调）
-      u_cloudsExposure: options.cloudsOverlayExposure ?? CLOUDS_OVERLAY_EXPOSURE_DEFAULT
-    },
-    sampleMode: PostProcessStageSampleMode.NEAREST,
-    pixelFormat: PixelFormat.RGBA,
-    pixelDatatype: resolveCloudsHdrDatatype(scene)
-  })
-  scene.postProcessStages.add(overlayStage)
-
   // ── preRender：每帧更新 sunDirection（Simon1994 + ICRF→Fixed）+ altitudeCorrection（密切球）──
   // 仿 AtmosphereStage.ts:568-604。state 更新后 CloudsPass uniformMap 闭包自动反映（同引用）。
   // M4 temporal 状态：上帧相机快照（velocity reprojection 用；首帧 undefined → fallback 当前
@@ -633,26 +613,20 @@ function buildCloudsStageImpl(
   // 不含 preRender listener——顶层持有，换 impl 引用即切换。
   return {
     cloudsPass,
-    overlayStage,
-    // ShadowPass 引用（调试/探针采样 BSM 用；shadowPass=false 时 undefined）
+    resolvePass,
     shadowPass,
-    // BSM 帧状态（matrices/intervals/cameraNear/far——级联投影数值调试用）
     shadowState,
-    // CascadedShadowMaps 实例（frusta/bbox 中间量调试用）
     cascades,
     params,
     onPreRender,
     destroy(): void {
       // 顺序：先 CloudsPass（消费端，撤 bsm 引用）→ 云 resolve（march 后第二个 VOXELS 实例）→
-      // ShadowPass（释放 bsmTexture——T3 concern #4），最后生成端 turbulence dummy
+      // ShadowPass（释放 bsmTexture——T3 concern #4），最后生成端 turbulence dummy。
+      // overlay 不在此清单（v2 spec §6.1：per-handle 资源，由顶层 handle.destroy/setQuality 失败分支摘）
       cloudsPass.destroy()
       resolvePass?.destroy()
       shadowPass?.destroy()
       shadowTurbulenceDummy?.destroy()
-      // overlay：PostProcessStageCollection.remove 成功则内部已 destroy，失败则手动 destroy
-      if (!scene.postProcessStages.remove(overlayStage)) {
-        overlayStage.destroy()
-      }
     }
   }
 }
@@ -661,7 +635,7 @@ function buildCloudsStageImpl(
  * 创建体积云 stage（CloudsPass + overlay）并接入 PostProcess 链（spec §7 编排）：
  * 首次 buildImpl + 零直捕 preRender listener + getter 化 handle（setQuality/destroy）。
  *
- * @param scene Cesium scene（cloudsPass.primitive add 到 scene.primitives；overlay add 到 postProcessStages）。
+ * @param scene Cesium scene（cloudsPass.primitive add 到 scene.primitives；overlay 已移出 impl，顶层管理）。
  * @param luts 大气 LUT（与 AtmosphereStage 共享）。
  * @param weather weather 噪声纹理（shape + shapeDetail）。
  * @param options clouds 开关 + CloudsPassOptions 透传 + quality 档位。
@@ -683,6 +657,38 @@ export function createCloudsStage(
   let currentQuality: CloudsQualityPreset = initialQuality
   let destroyed = false
 
+  // ── 顶层 overlay（spec §6.2 v2）：per-handle 资源，跨 impl 存活（换档只切 uniform 源）。
+  //    不自动 add——add 时机移交消费者（demo 走 insertStageBeforeLensFlare；spec §6.3）。──
+  //    sampleMode NEAREST：保护云边缘锐利（cloudsBuffer 是 raymarch 像素对齐数据纹理，
+  //    LINEAR 会糊边缘）+ atmosphere input dithering 透传（同 tonemap NEAREST 保护的逻辑）。
+  //    pixelDatatype resolveCloudsHdrDatatype（spec D6）：线性 HDR RT 承载 >1 段（UNSIGNED_BYTE
+  //    会 clip，真 8-bit 设备客观降级）；与 march RT / resolvePass 同源检测。
+  const overlayStage = new PostProcessStage({
+    name: 'clouds_overlay',
+    fragmentShader: OVERLAY_SHADER,
+    uniforms: {
+      // 闭包读顶层 impl（换档后自动指向新 bridge；setQuality 失败分支摘本 stage 前不会读旧 bridge）。
+      // bridge 每帧重新取（防 resize 后 colorTex 引用变更；接口留动态）。
+      // temporal 时读 resolve 输出（全分重建后的 cloudsBuffer）；否则 march att0 直读。
+      u_cloudsBuffer: () =>
+        impl.resolvePass != null
+          ? impl.resolvePass.getResolvedBridge()
+          : impl.cloudsPass.getColorBridge(),
+      // 云曝光（线性域缩放，spec §4.3；URL ?cloudsExposure=N 可调）
+      u_cloudsExposure: options.cloudsOverlayExposure ?? CLOUDS_OVERLAY_EXPOSURE_DEFAULT
+    },
+    sampleMode: PostProcessStageSampleMode.NEAREST,
+    pixelFormat: PixelFormat.RGBA,
+    pixelDatatype: resolveCloudsHdrDatatype(scene)
+  })
+
+  // 摘 overlay 的统一出口（handle.destroy 与 setQuality 失败分支共用；remove 失败则自行 destroy）
+  const removeOverlay = (): void => {
+    if (!scene.postProcessStages.remove(overlayStage)) {
+      if (!overlayStage.isDestroyed()) overlayStage.destroy()
+    }
+  }
+
   // ── 零直捕 listener（spec §7 v2 写死，评审 MAJOR）：体内零直捕局部量、一切经 impl——
   //    任何漏网直捕会静默驱动已销毁 impl（frame 计数分叉、矩阵停更）。listener 只挂一次，
   //    setQuality 换 impl 引用即切换驱动对象。
@@ -697,8 +703,9 @@ export function createCloudsStage(
     get cloudsPass() {
       return impl.cloudsPass
     },
+    // 顶层 stage（v2 §6.2：跨 impl 引用恒定；创建后未 add，消费者编排）
     get overlayStage() {
-      return impl.overlayStage
+      return overlayStage
     },
     // ShadowPass 引用（调试/探针采样 BSM 用；shadowPass=false 时 undefined）
     get shadowPass() {
@@ -718,16 +725,15 @@ export function createCloudsStage(
         return
       }
       if (next === currentQuality) return
-      // 统一内部重建（spec §7 / D2）：先销毁旧 impl（旧 overlay 从 postProcessStages
-      // 摘除）→ 重 resolve + 重建（新 overlay add 到末尾）→ 换引用
       impl.destroy()
       try {
         impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(next, options))
         currentQuality = next
       } catch (e) {
-        // 原子性（spec §7 v3）：旧 impl 已销毁、重建失败 → 句柄半死不可自愈，
-        // 作废是唯一安全语义（后续 setQuality/destroy 均 no-op，须重建 stage）
+        // 原子性（spec §7 v3）+ v2 BLOCKER 修订：顶层 overlay 必须同步摘除——否则残留链上
+        // 每帧读已销毁 impl 的悬空 bridge（GL 纹理名已删），静默黑帧/脏画面。
         destroyed = true
+        removeOverlay()
         throw e
       }
     },
@@ -736,6 +742,7 @@ export function createCloudsStage(
       destroyed = true
       removePreRender()
       impl.destroy()
+      removeOverlay()
     }
   }
   return handle

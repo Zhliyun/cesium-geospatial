@@ -5,10 +5,10 @@
 //
 // node 无 WebGL：验装配/接口/生命周期/零回归：
 //   - clouds:false → undefined（零回归）
-//   - clouds:true → CloudsPass + overlay stage add 到 scene.postProcessStages
+//   - clouds:true → CloudsPass + overlay stage（v2 §6.3：不自动 add，add 时机移交消费者）
 //   - overlay stage uniform u_cloudsBuffer = bridge（getColorBridge 返回值）
 //   - preRender listener 注册（sunDirection/altitudeCorrection 更新；mock Simon1994/Transforms）
-//   - destroy：摘 listener + CloudsPass.destroy + overlay stage remove（幂等）
+//   - destroy：摘 listener + impl 销毁 + 顶层 overlay 摘除（已 add 走 remove / 未 add 直调；幂等）
 //   - M3 T5 BSM 编排：ShadowPass 创建参数/uniformMap 组装/preRender cascades 更新 + render/
 //     shadowPass=false 诊断基线/destroy 顺序（CascadedShadowMaps 真实现纯 TS 可 node 跑）
 
@@ -33,6 +33,7 @@ vi.mock('cesium', async (importOriginal) => {
       this.sampleMode = opts.sampleMode
       this.pixelFormat = opts.pixelFormat
       this.pixelDatatype = opts.pixelDatatype
+      this.isDestroyed = () => false // v2.1 spec §8.0.4：clouds 侧摘除带 isDestroyed 防御
       this.destroy = vi.fn()
     },
     Sampler: function (this: any, opts: any) {
@@ -115,6 +116,7 @@ import { Cartesian3, Ellipsoid, Matrix4 } from 'cesium'
 // postProcessStages.add/remove + preRender.addEventListener
 function createMockScene(): any {
   const listeners = { preRender: [] as Array<(...args: any[]) => void> }
+  const addedStages = new Set<unknown>()
   return {
     globe: {
       ellipsoid: Ellipsoid.WGS84
@@ -140,8 +142,12 @@ function createMockScene(): any {
       }
     },
     postProcessStages: {
-      add: vi.fn(),
-      remove: vi.fn(() => true),
+      // v2.1 spec §8.0.4：有状态——add 过的 stage remove 才返 true（已 add/未 add 两分支用例）
+      add: vi.fn((s: unknown) => {
+        addedStages.add(s)
+      }),
+      remove: vi.fn((s: unknown) => addedStages.delete(s)),
+      contains: vi.fn((s: unknown) => addedStages.has(s)),
       length: 0,
       get: vi.fn()
     },
@@ -200,7 +206,7 @@ describe('createCloudsStage', () => {
     expect(createCloudsPass).not.toHaveBeenCalled()
   })
 
-  it('clouds:true → 创建 CloudsPass + overlay stage（add 到 postProcessStages）', () => {
+  it('clouds:true → 创建 CloudsPass + overlay stage（v2 §6.3：不自动 add，add 时机移交消费者）', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
@@ -208,8 +214,7 @@ describe('createCloudsStage', () => {
     })
     expect(handle).toBeDefined()
     expect(createCloudsPass).toHaveBeenCalledTimes(1)
-    expect(scene.postProcessStages.add).toHaveBeenCalledTimes(1)
-    expect(scene.postProcessStages.add).toHaveBeenCalledWith(handle!.overlayStage)
+    expect(scene.postProcessStages.add).not.toHaveBeenCalled() // 零 add
     handle!.destroy()
   })
 
@@ -285,22 +290,22 @@ describe('createCloudsStage', () => {
     handle!.destroy()
   })
 
-  it('destroy：摘 preRender listener + CloudsPass.destroy + overlay remove（幂等）', () => {
+  it('v2 §8.2.4 handle.destroy：已 add 分支走 remove；未 add 分支 destroy 直调', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
-    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
-      clouds: true
-    })
-    const cloudsPassDestroy = handle!.cloudsPass.destroy as unknown as () => void
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const overlay = handle!.overlayStage
+    // 分支 A：模拟消费者已 insert（手动 add 进有状态集合）→ destroy 走 remove 成功
+    scene.postProcessStages.add(overlay)
     handle!.destroy()
-    expect(scene.preRender.addEventListener).toHaveBeenCalledTimes(1) // 注册时
-    // listener 被摘（preRender addEventListener 返回的 remove 函数被调）
-    expect(scene._listeners.preRender).toHaveLength(0)
-    expect(cloudsPassDestroy).toHaveBeenCalled()
-    expect(scene.postProcessStages.remove).toHaveBeenCalledWith(handle!.overlayStage)
-    // 幂等：二次 destroy 不抛 + remove 不重复
-    expect(() => handle!.destroy()).not.toThrow()
-    expect(scene.postProcessStages.remove).toHaveBeenCalledTimes(1)
+    expect(scene.postProcessStages.remove).toHaveBeenCalledWith(overlay)
+    expect(overlay.destroy).not.toHaveBeenCalled() // remove 成功 → 不走直调
+    // 分支 B：未 add 的句柄 → remove 返 false → overlay.destroy 直调
+    const handle2 = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const overlay2 = handle2!.overlayStage
+    handle2!.destroy()
+    expect(scene.postProcessStages.remove).toHaveBeenCalledWith(overlay2)
+    expect(overlay2.destroy).toHaveBeenCalled()
   })
 
   it('option 透传：CloudsPassOptions 经 createCloudsStage → createCloudsPass', () => {
@@ -938,10 +943,11 @@ describe('setQuality 行为（spec §7 v3）', () => {
     const oldShadowDestroy = handle.shadowPass!.destroy as unknown as Mock
     const oldOverlay = handle.overlayStage
     handle.setQuality('low')
-    // 旧 impl 全销毁：cloudsPass/shadowPass destroy + overlay 从 postProcessStages 摘除
+    // 旧 impl 全销毁：cloudsPass/shadowPass destroy；overlay 不随 impl 摘（v2 §6.2 per-handle
+    // 跨 impl 存活——换档只切 uniform 源，add 状态由消费者持有，§8.2.7）
     expect(oldPass.destroy as unknown as Mock).toHaveBeenCalled()
     expect(oldShadowDestroy).toHaveBeenCalled()
-    expect(scene.postProcessStages.remove).toHaveBeenCalledWith(oldOverlay)
+    expect(scene.postProcessStages.remove).not.toHaveBeenCalledWith(oldOverlay)
     // listener 驱动新 impl（非直捕旧 impl）：fire preRender 后新 shadowState.far =
     // low 档 far 不变式 21km——若 listener 仍驱动已销毁旧 impl，新 impl 的 far 停在初始 0
     firePreRender(scene)
@@ -953,8 +959,8 @@ describe('setQuality 行为（spec §7 v3）', () => {
   it('换档×temporal：完整销毁清单含 resolvePass 与 shadowTurbulenceDummy（spec §9④ 字面覆盖补齐，终审 Finding 1）', () => {
     // 弥合既有两条用例的组合缺口：「换档」用例非 temporal（只断言三件），「temporal 销毁」
     // 用例走 handle.destroy 而非换档。本用例组合 setQuality 换档 × temporal=true，断言
-    // buildImpl destroy 五件套全被调（cloudsPass + resolvePass + shadowPass +
-    // shadowTurbulenceDummy + overlay remove——createCloudsStage.ts destroy() 全清单）。
+    // buildImpl destroy 四件套全被调（cloudsPass + resolvePass + shadowPass +
+    // shadowTurbulenceDummy——v2 §8.2.7 修订：overlay 移出 impl 清单，per-handle 由顶层摘）。
     textureProbe.instances.length = 0
     resolvePassProbe.instances.length = 0
     const { handle, scene } = createStage({ temporal: true, quality: 'high' })
@@ -968,12 +974,13 @@ describe('setQuality 行为（spec §7 v3）', () => {
     expect(textureProbe.instances).toHaveLength(1)
     const oldDummyDestroy = textureProbe.instances[0].destroy as unknown as Mock
     handle.setQuality('low')
-    // 完整销毁清单（spec §9④）：四件 destroy 各恰 1 次 + overlay 从 postProcessStages 摘除
+    // 完整销毁清单（spec §9④ + v2 §8.2.7）：四件 destroy 各恰 1 次；overlay 跨 impl 存活
+    //（换档不摘——由顶层 handle.destroy/setQuality 失败分支摘）
     expect(oldPass.destroy as unknown as Mock).toHaveBeenCalledTimes(1)
     expect(oldResolve.destroy).toHaveBeenCalledTimes(1)
     expect(oldShadowDestroy).toHaveBeenCalledTimes(1)
     expect(oldDummyDestroy).toHaveBeenCalledTimes(1)
-    expect(scene.postProcessStages.remove).toHaveBeenCalledWith(oldOverlay)
+    expect(scene.postProcessStages.remove).not.toHaveBeenCalledWith(oldOverlay)
     // 重建新 impl：temporal/shadow 随用户 options + low 档保留 → 新 dummy/新 resolvePass
     // 已建且未销毁（销毁的恰是旧实例）
     expect(textureProbe.instances).toHaveLength(2)
@@ -1030,5 +1037,50 @@ describe('setQuality 行为（spec §7 v3）', () => {
     // 恰好 2 次 createCloudsPass（首建 + 失败重建各 1）；此后 setQuality 不再尝试重建
     expect(vi.mocked(createCloudsPass).mock.calls.length).toBe(2)
     warn.mockRestore()
+  })
+
+  it('v2 §8.2.3 overlay 跨 impl 存活：setQuality 换档后引用不变 + u_cloudsBuffer 切新 bridge', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const overlay = handle!.overlayStage
+    const bridgeBefore = (overlay.uniforms.u_cloudsBuffer as () => unknown)()
+    handle!.setQuality('low')
+    expect(handle!.overlayStage).toBe(overlay) // 引用恒定
+    const newCloudsPass = (createCloudsPass as any).mock.calls.at(-1) // 新 impl 的 pass
+    expect(handle!.cloudsPass).not.toBe(undefined)
+    // u_cloudsBuffer 闭包切到新 impl 的 bridge（非 temporal → getColorBridge）
+    const bridgeAfter = (overlay.uniforms.u_cloudsBuffer as () => unknown)()
+    expect(bridgeAfter).not.toBe(bridgeBefore) // 新 bridge 对象
+    handle!.destroy()
+  })
+
+  it('v2 §8.2.6 setQuality 重建失败：顶层 overlay 被摘除（BLOCKER 用例）+ 句柄作废', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const overlay = handle!.overlayStage
+    scene.postProcessStages.add(overlay) // 模拟 demo 已 insert
+    // mock createCloudsPass：下一次调用（换档 buildImpl）抛错（mockImplementationOnce 一次即耗，
+    // 无需恢复基础实现）
+    ;(createCloudsPass as any).mockImplementationOnce(() => {
+      throw new Error('mock 换档重建失败')
+    })
+    expect(() => handle!.setQuality('low')).toThrow('mock 换档重建失败')
+    expect(scene.postProcessStages.remove).toHaveBeenCalledWith(overlay) // overlay 已摘
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() => handle!.setQuality('high')).not.toThrow() // 句柄作废 no-op+warn
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('v2 §8.2.4 impl.destroy 不摘 overlay（collection.remove 不触 overlay）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const overlay = handle!.overlayStage
+    handle!.setQuality('medium') // 换档触发 impl.destroy
+    expect(scene.postProcessStages.remove).not.toHaveBeenCalledWith(overlay)
+    handle!.destroy()
   })
 })
