@@ -77,6 +77,12 @@ export interface CloudsMainOptions {
    * 调制 = 朝太阳方向的云间体积光柱。false = 诊断基线（无该编译分支）。demo ?cloudsLightShafts=0。
    */
   lightShafts?: boolean
+  /**
+   * 级联数（→ #define SHADOW_CASCADE_COUNT；spec §6 参数化）。默认 3。
+   * 档位路径由 applyQualityPreset 投影（applied.main.shadowCascadeCount），用户直传仅在
+   * 不用档位时生效（quality 在场时被忽略——spec §5 单一来源）。
+   */
+  shadowCascadeCount?: number
 }
 
 type ResolvedCloudsMainOptions = Required<CloudsMainOptions>
@@ -86,7 +92,8 @@ const DEFAULTS: ResolvedCloudsMainOptions = {
   turbulence: true,
   accurateSunSkyLight: true,
   debugShow: null,
-  lightShafts: true
+  lightShafts: true,
+  shadowCascadeCount: 3
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include
@@ -115,8 +122,8 @@ const CLOUDS_MAIN_DEFINES = [
   '#define SCATTER_ANISOTROPY_1 0.5',
   '#define SCATTER_ANISOTROPY_2 -0.5',
   '#define SCATTER_ANISOTROPY_MIX 0.35',
-  // M3：cascade 数 4→3（CascadedShadowMaps 级联数对齐；uniform shadowIntervals/[Matrices] 数组长度）
-  '#define SHADOW_CASCADE_COUNT 3',
+  // M3 cascade 数 4→3 对齐 CascadedShadowMaps；cascade define 移至 buildM2Defines 按参数生成
+  // （shadowCascadeCount，spec §6——low 档 2 级联）。
   '#define SHADOW_SAMPLE_COUNT 16',
   '#define MULTI_SCATTERING_OCTAVES 6',
   '#define LOCAL_WEATHER_CHANNELS rgba',
@@ -132,6 +139,7 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
   return [
     ...CLOUDS_MAIN_DEFINES,
     '#define PERSPECTIVE_CAMERA', // getViewZ perspectiveDepthToViewZ 分支（Cesium 相机恒透视）
+    '#define SHADOW_CASCADE_COUNT ' + o.shadowCascadeCount,
     o.accurateSunSkyLight ? '#define ACCURATE_SUN_SKY_LIGHT' : '',
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',
     o.turbulence ? '#define TURBULENCE' : '',
@@ -251,15 +259,30 @@ void cloudsBridge_reconstructVaryings() {
   // 相机正前方向（view -Z → ECEF）——clouds.vert L72 等价。getRayDistanceToScene 用（M6 接通）。
   vCameraDirection = (czm_inverseView * vec4(0.0, 0.0, -1.0, 0.0)).xyz;
 
-  // ACCURATE_SUN_SKY_LIGHT define → getCloudsSunSkyIrradiance 走 GetSunAndSkyScalarIrradiance
-  // 直算，vGroundIrradiance/vCloudsIrradiance 不被读；零初始化避免未定义读（GLSL 全局默认零，
-  // 此处显式注释意图，便于关闭 ACCURATE_SUN_SKY_LIGHT 时排查）。
-  vGroundIrradiance.sun = vec3(0.0);
-  vGroundIrradiance.sky = vec3(0.0);
+  // §11.1（spec v3）：accurate 关时移植参考库 clouds.vert sampleSunSkyIrradiance 云段
+  //（shaders/clouds.vert:53-64）——min/max 云高 2 次 GetSunAndSkyScalarIrradiance（每次返
+  // sun+sky 双值 = 4 分量），每像素一次性，远廉于 per-sample 直算（ACCURATE 路径 march
+  // 循环内逐采样调，clouds.frag:535）。ground 2 分量不移植：消费点均在未 define 的
+  // HAZE/GROUND_BOUNCE 分支（spec §11.1 v3 裁决——未来开启须补，否则云底 bounce 恒 0）。
+  // 依赖 uniform（altitudeCorrection/sunDirection/bottomRadius/minHeight/maxHeight）均已在
+  // clouds.frag 声明；GetSunAndSkyScalarIrradiance/METER_TO_LENGTH_UNIT 来自 bruneton runtime include。
+#ifndef ACCURATE_SUN_SKY_LIGHT
+  vec3 bridgeIrradPos = vCameraPosition + altitudeCorrection;
+  vec3 bridgeSurfaceNormal = normalize(bridgeIrradPos);
+  vec2 bridgeCloudsRadii = (bottomRadius + vec2(minHeight, maxHeight)) * METER_TO_LENGTH_UNIT;
+  vCloudsIrradiance.minSun = GetSunAndSkyScalarIrradiance(
+    bridgeSurfaceNormal * bridgeCloudsRadii.x, sunDirection, vCloudsIrradiance.minSky);
+  vCloudsIrradiance.maxSun = GetSunAndSkyScalarIrradiance(
+    bridgeSurfaceNormal * bridgeCloudsRadii.y, sunDirection, vCloudsIrradiance.maxSky);
+#else
+  // ACCURATE define → getCloudsSunSkyIrradiance 直算，varying 不被读；零初始化防未定义读。
   vCloudsIrradiance.minSun = vec3(0.0);
   vCloudsIrradiance.minSky = vec3(0.0);
   vCloudsIrradiance.maxSun = vec3(0.0);
   vCloudsIrradiance.maxSky = vec3(0.0);
+#endif
+  vGroundIrradiance.sun = vec3(0.0);
+  vGroundIrradiance.sky = vec3(0.0);
 }
 `
 

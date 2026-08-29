@@ -253,6 +253,58 @@ describe('M4 T6 jitter surgery', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 质量档位 T2：shadowCascadeCount 参数化 + accurate=false 桥接接线（spec §6/§11.1）
+// ─────────────────────────────────────────────────────────────────────────────
+describe('质量档位：shadowCascadeCount 参数化 + accurate=false 桥接接线（spec §6/§11.1）', () => {
+  it('默认 SHADOW_CASCADE_COUNT 3；传 2 时 define 变 2', () => {
+    const src3 = buildCloudsMainFragmentShader()
+    expect(src3).toContain('#define SHADOW_CASCADE_COUNT 3')
+    const src2 = buildCloudsMainFragmentShader({ shadowCascadeCount: 2 })
+    expect(src2).toContain('#define SHADOW_CASCADE_COUNT 2')
+    expect(src2).not.toContain('#define SHADOW_CASCADE_COUNT 3')
+  })
+
+  it('accurate 关：桥接含 min/max 云高 irradiance 真计算（vert sampleSunSkyIrradiance 云段移植）', () => {
+    const src = buildCloudsMainFragmentShader({ accurateSunSkyLight: false })
+    expect(src).toContain('#ifndef ACCURATE_SUN_SKY_LIGHT')
+    // 2 次调用：surfaceNormal * radii.x / .y（spec v3 计数：ground 段不移植）
+    expect(src.match(/GetSunAndSkyScalarIrradiance/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(src).toContain('bridgeCloudsRadii')
+  })
+
+  it('accurate 开：桥接保持零填充（现有行为），bridge 真计算段被预处理裁掉', () => {
+    const src = buildCloudsMainFragmentShader({ accurateSunSkyLight: true })
+    // BRIDGE_VARYINGS_GLSL 为模块级常量，irradiance 段以 #ifndef/#else 双分支无条件拼接
+    // （GLSL 预处理——defines 拼接在前）。accurate 开 → ACCURATE_SUN_SKY_LIGHT 已 define →
+    // #ifndef 段（bridge 真计算）编译期整段裁掉，生效的只有 #else 零填充（现有行为）。
+    expect(src).toContain('#define ACCURATE_SUN_SKY_LIGHT')
+    const ifndefIdx = src.indexOf('#ifndef ACCURATE_SUN_SKY_LIGHT')
+    expect(ifndefIdx).toBeGreaterThanOrEqual(0)
+    const elseIdx = src.indexOf('#else', ifndefIdx)
+    // bridge 真计算标识符只出现在 #ifndef...#else 死分支文本内（不进编译产物）
+    const bridgeIdx = src.indexOf('bridgeCloudsRadii')
+    expect(bridgeIdx).toBeGreaterThan(ifndefIdx)
+    expect(bridgeIdx).toBeLessThan(elseIdx)
+  })
+
+  it('glslang 编译：SHADOW_CASCADE_COUNT 2 + 四编译开关全关（low 档实际组合）', () => {
+    const src = buildStandaloneCloudsShaderForValidation({
+      shadowCascadeCount: 2,
+      accurateSunSkyLight: false,
+      shapeDetail: false,
+      turbulence: false,
+      lightShafts: false
+    })
+    compileOrFail(src, 'low 档（cascade 2 + 四编译开关全关）')
+  })
+
+  it('glslang 编译：accurate 关（新接线路径）默认 cascade 3', () => {
+    const src = buildStandaloneCloudsShaderForValidation({ accurateSunSkyLight: false })
+    compileOrFail(src, 'accurate 关默认 cascade 3')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // M5 T1：SHADOW_LENGTH（lightShafts）编译分支——云 god rays
 // ─────────────────────────────────────────────────────────────────────────────
 describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
