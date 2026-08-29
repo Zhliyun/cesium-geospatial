@@ -543,10 +543,14 @@ vec4 marchClouds(
 
       // 夜间环境底光（方向 B）：抬 skyIrradiance 地板，随现有 skyGradient × scattering ×
       // 能量守恒积分传播 → 夜间云保有形体梯度（深灰云海而非黑洞）。淡入区间 = 当地太阳
-      // 仰角 -5°（LUT 归零线）→ -12°（满值）；白天 nightFactor=0 零回归。muSunLocal 用
-      // 采样点当地天顶（surfaceNormal），与 GetSunAndSkyIrradiance 内 mu_s 同源。
+      // 仰角 -3°（晨光始前天已亮）→ -10°（近满值）——2026-08-30 区间提前（原 -5°→-12°）：
+      // 晨昏带（-5°~-12°）云亮度与天空晨光脱节（用户视角 103.9E/16.5N 22:30Z 太阳 -5.8°
+      // 实拍：地平线橙红晨光已显而云纯黑——nightFactor 才 3.6% 有效底光≈0）。提前后太阳
+      // -5.8° nightFactor≈35%（0.12×0.35 微光随天亮）、-8°≈80%；白天（>-3°）nightFactor=0
+      // 零回归不变。muSunLocal 用采样点当地天顶（surfaceNormal），与 GetSunAndSkyIrradiance
+      // 内 mu_s 同源。
       float muSunLocal = dot(surfaceNormal, sunDirection);
-      float nightFactor = 1.0 - smoothstep(-0.2079, -0.0872, muSunLocal);
+      float nightFactor = 1.0 - smoothstep(-0.1736, -0.0523, muSunLocal);
       skyIrradiance += vec3(nightAmbient) * nightFactor;
 
       // March optical depth to the sun for finer details, which BSM lacks.
