@@ -1,28 +1,22 @@
 # 体积云 overlay 线性域化与后处理链重排设计（halo 被云覆盖修复）
 
 - **日期**：2026-08-29
-- **状态**：v2（吸收三专家评审：1 BLOCKER + 5 MAJOR + 全部 MINOR）
+- **状态**：v2.1（吸收三专家 v2 复审：C1/C2/C3 insert 语义闭环 + 测试补强 + 文字修正）
 - **问题来源**：用户报告「相机直面太阳所产生的圆环状光晕与体积云的层级关系不对，光晕被后面的云覆盖了」
 
-## v2 变更记录（供复审聚焦）
+## v2.1 变更记录（三专家复审结论：修完即进实现计划，无需第三轮全量）
 
 | 来源 | 修订 |
 |------|------|
-| 对抗 B1（三方均命中） | §6.2 setQuality 重建失败分支补 overlay 摘除（悬空 bridge 静默黑帧）；§8.2 补对应用例 |
-| 集成 #1 + 对抗 #2 | §5.1 insert 同实例幂等（记忆已插入引用）；§5.2 removeAndDestroy 加 isDestroyed 防御 |
-| 对抗 #3 | §5.2 insert 原子性：contains 前置 + try/catch 回滚 |
-| 集成 #3 | §5.2 atmosphere 句柄 destroyed guard（insert/setMode/destroy no-op + warn） |
-| 集成 #10 + 图形 F6 | §11 文档承载：根 README 建 clouds API 段；cloudsExposure 注释 10→6 三处修正 |
-| 集成 #13/#15/#17 + 对抗 #6 | §8 补 mock 升级清单（remove spy 化 + invocationCallOrder、createLensFlareStage vi.mock、有状态 remove、旧用例反向修订）+ dt 共存用例 |
-| 图形 F4 + 对抗 #4 | §5.2 rebuild 后按旧 enabled 回写 |
-| 图形 F2 + 对抗 #8 | §9.2 补 lf 亮度阈值源含云（第二视觉变化）|
-| 三方 | §7 demo 作用域提升（「两行」→实际四行）+ insert 失败处置 |
-| 图形 F5 + 对抗 #9 | §9.6 profile=1 组合限制 |
-| 图形 F1 | §9.3/V6 ?hdr=0 覆盖面文案修正（只压 atmosphere RT） |
-| 对抗 #5 | §3 dt 脚注修正（默认无 depthTemporal） |
-| 集成 #8 | §9.4 rebuild 成本修正（textureCache 全链 RT 重建） |
-| 三方核实 | §5.2 lfHandle 形态结论关闭（plain handle 无 destroy 无泄漏） |
-| 集成 task 建议 | §12 实现拆分建议（供 writing-plans 参考） |
+| 对抗 C1 | §5.1/§5.2 insert 入口补 `stage.isDestroyed()` 拒绝——已销毁 stage 的 contains 为 false、add 不抛错，但下一帧 collection.update 调 stage.update 直接崩渲染 |
+| 对抗 C2 | §5.1/§5.2 原子回滚三缺口：回滚序列补 removeAndDestroy(插入物)（失败点在 add 之后时不残留）；回滚自身独立 try/catch（失败保原始异常 rethrow + console.error 记回滚异常）；承诺措辞降级「尽力回滚至原状」 |
+| 对抗 C3 | §5.2 幂等条件补 `!stage.isDestroyed()`——消费者自行摘除后同实例 insert 不再静默 no-op |
+| 对抗 C4 + 图形草图注 | §7 伪代码修正：clouds 块是与 else 平级的兄弟块；demo 语义下 fallback add 分支不可达（示意保留但注明） |
+| 对抗 C5 | §9.7 记录：destroyed guard no-op 不抛错、demo 的 try/catch 无法感知（维持宽容风格，可选返回 boolean 不做） |
+| 集成 #7/#8 | §8.1 补 isDestroyed 防御分支用例（外部摘旧再 insert(B) 替换成功）+ 原子回滚用例（add 抛错 → 集合恢复原状 + insertedStage 不变 + rethrow） |
+| 集成 #5 | §8.0 补：clouds mock PostProcessStage 构造补 `isDestroyed: () => false` 桩 |
+| 图形 F2 修正 | §9.2 阈值数字修正（thresholdLevel=3.0 非 0.6）+ ghost/halo 几何修正（屏幕中心镜像 + bloom 局部辉光，非以云为中心）+ E 与 flare 阈值强耦合指导（V2 同屏看 lf） |
+| 图形新 MINOR | §9.4 补半句：clouds 摘除（handle.destroy/setQuality 失败）同触发一次全链 RT 重建帧，防验收误判回归 |
 
 ## 1. 问题与根因（systematic-debugging Phase 1 结论）
 
@@ -116,14 +110,18 @@ void main() {
 ```ts
 /**
  * 把外部 stage 插入 atmosphere 与 lensFlare 之间（云 overlay 线性域合成用）。
- * 语义（v2 评审修订）：
- * - 同实例重复调用 = no-op（真幂等）；
- * - 不同实例 = 替换：先摘旧插入物（isDestroyed 防御）再重排；
- * - 传入已 add 到集合的 stage = 抛清晰错误（前置 contains 检查）——add 时名字冲突
+ * 语义（v2.1 闭环）：
+ * - 入口拒绝：stage.isDestroyed() 为 true → 抛清晰错误（已销毁 stage 的 add 不抛错，
+ *   但下一帧 collection.update 调 stage.update 直接崩渲染）；
+ * - 传入已 add 到集合的 stage → 抛清晰错误（前置 contains 检查）——add 时名字冲突
  *   抛错会留下「lf/tm 已 remove、链残缺」的半途状态，必须前置拦截；
- * - 原子性：内部 remove lf/tm → add(stage) → rebuild lf → add(tm) 全程 try/catch，
- *   失败时回滚（重建 lf/tm 并 re-add）后 rethrow——调用方拿到的要么全成功要么原状；
- * - handle.destroy 后调用 = no-op + console.warn；
+ * - 同实例且未销毁 → no-op（真幂等）；同实例但已被外部摘除销毁 → 视为替换重排；
+ * - 不同实例 = 替换：先摘旧插入物（isDestroyed 防御）再重排；
+ * - 原子性（尽力回滚）：内部 remove lf/tm → add(stage) → rebuild lf → add(tm)
+ *   全程 try/catch，失败时尽力回滚（removeAndDestroy(插入物) + 重建 lf/tm + re-add）
+ *   后 rethrow 原始异常；回滚自身独立 try/catch，回滚失败时保原始异常 rethrow 并
+ *   console.error 记回滚异常。承诺为「尽力回滚至原状」，非绝对原子；
+ * - handle.destroy 后调用 = no-op + console.warn（不抛错，见 §9.7）；
  * - lensFlare 不存在（创建时 lensFlare=false）时只重排 tonemap；
  * - rebuild 的 lf 继承旧 lf 的 enabled 状态（§5.2）。
  * 摘除由 stage 拥有者自行 removeAndDestroy——摘除后链自动闭合（lf 紧贴 atmo）。
@@ -137,10 +135,11 @@ insertStageBeforeLensFlare(stage: PostProcessStage | PostProcessStageComposite):
 ### 5.2 实现要点
 
 - **destroyed guard（v2 新增）**：atmosphere 句柄加 destroyed 布尔；`destroy()` 幂等；destroy 后 `insertStageBeforeLensFlare`/`setMode` no-op + console.warn（对齐 clouds 句柄宽容风格）。
-- **同实例幂等（v2 新增）**：闭包记忆 `insertedStage` 引用；同实例调用直接 return；不同实例先 `removeAndDestroy(旧)`（经 isDestroyed 防御）再重排。
+- **入口拒绝（v2.1）**：`stage.isDestroyed()` 为 true → 抛清晰 `DeveloperError`（提示「stage 已销毁」）。与 contains 前置并列。
+- **同实例幂等（v2 新增，v2.1 收紧）**：闭包记忆 `insertedStage` 引用；同实例且 `!stage.isDestroyed()` 调用直接 return（已销毁的同实例不 no-op，走替换重排——防「消费者自行摘除后同实例 insert 静默无云」）；不同实例先 `removeAndDestroy(旧)`（经 isDestroyed 防御）再重排。
 - **removeAndDestroy 防御（v2 新增）**：函数入口判 `s.isDestroyed()` 为 true 则跳过（不调 `.destroy()`——destroyObject 会把 destroy 替换成 throwOnDestroyed，对已销毁 stage 的 fallback 分支会抛「This object was destroyed」断链）。现有实现（AtmosphereStage.ts:665-669）同步加此防御（setMode dead code 从未触发过该雷，insert 是活代码必须堵）。
 - **contains 前置（v2 新增）**：`scene.postProcessStages.contains(stage)` 为 true 时抛清晰 `DeveloperError`（提示「stage 已在集合中，insert 要求传入未 add 的 stage」）。
-- **原子性 try/catch（v2 新增）**：重排序列包 try/catch；失败时回滚（rebuild lf/tm + re-add 已摘的），rethrow。
+- **原子回滚（v2 新增，v2.1 补三缺口）**：重排序列包 try/catch；失败时**尽力回滚**——回滚序列 = `removeAndDestroy(插入物)`（失败点在 add 之后时不残留链中）+ rebuild lf/tm + re-add，回滚自身包独立 try/catch（回滚失败保原始异常 rethrow，console.error 记回滚异常）。承诺措辞「尽力回滚至原状」。
 - 创建时留存 lensFlare rebuild 参数：`resolved` 的 flare 五参（**读闭包变量当前值**，与 setMode 重建语义一致，非创建时快照——v2 措辞修正）+ `temporalEmaEnabled ? 'czm_depth_temporal' : undefined`（创建时常量）——封装为闭包内 `rebuildLensFlare()` 内部函数，与 `buildAtmosphereStage()`/`buildTonemapStage()` 同款风格。
 - **enabled 继承（v2 新增）**：rebuild 后按旧 `lensFlareStage.enabled` 回写一行（消费者运行时 `lensFlareStage.enabled=false` 的 M1 切换路径不被 rebuild 重置）。
 - `lensFlareStage` 变量 reassign（`let`，现状已是）+ handle getter 自动反映。
@@ -187,17 +186,19 @@ clouds 顶层创建 overlay 后**不自动 add**。正确层级由消费者编�
 ## 7. demo 接线（apps/demo）
 
 ```ts
-// 作用域提升（v2 评审修订：atmosphereHandle 现为 else 块内 const :281，clouds 块在块外不可见）：
-let atmosphereHandle: AtmosphereStageHandle | undefined   // 块外声明
+// v2.1 修正：clouds 块是与 else 平级的兄弟块（main.ts:357），非嵌套——伪代码示意结构：
+let atmosphereHandle: AtmosphereStageHandle | undefined   // 块外声明（v2 作用域提升）
 if (skipAtmosphere) { ... } else {
   atmosphereHandle = createAtmosphereStage(scene, luts, {...})   // 现状逻辑
-  // ... weather 异步加载后（现有 cloudsHandle != null 块内）：
-  const cloudsHandle = createCloudsStage(scene, luts, weather, {...}) // overlay 已创建未 add
-  if (atmosphereHandle != null) {
-    atmosphereHandle.insertStageBeforeLensFlare(cloudsHandle.overlayStage)
-  } else {
-    scene.postProcessStages.add(cloudsHandle.overlayStage) // 无 atmosphere 编排的 fallback
-  }
+}
+// ... weather 异步加载后（clouds 块，条件含 !skipAtmosphere —— demo 语义下
+//     atmosphereHandle 恒非空，下方 else fallback 在 demo 不可达，仅示意
+//     「无 atmosphere 编排的库消费者」的独立用法）：
+const cloudsHandle = createCloudsStage(scene, luts, weather, {...}) // overlay 已创建未 add
+if (atmosphereHandle != null) {
+  atmosphereHandle.insertStageBeforeLensFlare(cloudsHandle.overlayStage)
+} else {
+  scene.postProcessStages.add(cloudsHandle.overlayStage) // 独立消费者 fallback（demo 死分支，示意）
 }
 ```
 
@@ -212,7 +213,7 @@ if (skipAtmosphere) { ... } else {
 1. core `mockSceneWithAddSpy`：`postProcessStages.remove` 从裸函数 `() => false` 改 **vi.fn 可控返回值**；跨方法相对顺序断言用 vitest 原生 `mock.invocationCallOrder`（add/remove/contains 各 spy 的调用序统一可比）。
 2. core 新增 `vi.mock('./lensFlare/createLensFlareStage')`（现状测试用真实实现直跑）——rebuild 参数断言与新旧实例区分依赖它。
 3. 真实 `PostProcessStage.destroy()` 在 node 下可跑（releaseResources 对未初始化字段短路 + destroyObject）；destroyObject 后 `isDestroyed()===true` 可作「旧 stage 已销毁」断言探针。
-4. clouds mock：remove 需**有状态**（记录 add 过的 stage 才返回 true）——覆盖 §8.2.4 已 add/未 add 两分支。
+4. clouds mock：remove 需**有状态**（记录 add 过的 stage 才返回 true）——覆盖 §8.2.4 已 add/未 add 两分支；mock PostProcessStage 构造补 `isDestroyed: () => false` 桩（v2.1——clouds 侧摘除若带 isDestroyed 防御，现 mock 无此方法会 TypeError）。
 5. **旧用例反向修订**：现有「clouds:true → add 到 postProcessStages」（createCloudsStage.test.ts:203-214）与新语义（不自动 add）矛盾，须改写为「创建后集合零 add」。
 
 ### 8.1 core（AtmosphereStage.test.ts 增补）
@@ -226,6 +227,8 @@ if (skipAtmosphere) { ... } else {
 7. **destroyed guard（v2）**：handle.destroy 后 insert → no-op + warn；destroy 幂等。
 8. **enabled 继承（v2）**：旧 lf.enabled=false → rebuild 后新 lf.enabled===false。
 9. **depthTemporal 共存（v2）**：`[dt, atmo, clouds, lf', tm']`——dt 不动 + rebuild lf 的 depthSource='czm_depth_temporal'。
+10. **isDestroyed 防御分支（v2.1）**：外部 removeAndDestroy 旧插入物后再 insert(B) → 替换成功不抛（走 isDestroyed 跳过分支）；insert(已销毁 stage) → 抛清晰错误且集合零变更。
+11. **原子回滚（v2.1）**：mock add(clouds) 抛错 → 断言集合恢复原状（lf'/tm' 重建 re-add、插入物被 removeAndDestroy）、`insertedStage` 记忆不变、原始错误 rethrow；回滚自身失败路径（mock rebuild 再抛）→ rethrow 的是原始异常。
 
 ### 8.2 clouds（createCloudsStage.test.ts 增补 + 修订）
 
@@ -251,13 +254,14 @@ if (skipAtmosphere) { ... } else {
 ## 9. 已知限制与风险
 
 1. **太阳被云遮挡时 halo 仍显示**：lensFlare occlusion 只读 globe depth，云不在 depth。修复后「云后太阳」halo 画在云上（物理上应被云 transmittance 调制减弱）。后续增强立项，不在本次。
-2. **云视觉两处变化（v2 合并图形 F2/对抗 #8）**：① 双 ACES → 单 ACES（亮度/对比，V2 重标）；② **lf 亮度阈值源变化**——lf_threshold 从读 atmosphere 输出变为读 clouds overlay 输出（lf 前移到云后），被照亮的亮云（线性 ≥0.6 > threshold）将参与 flare 能量提取，多云场景 flare 总能量上升、亮云局部可能产生以云为中心的 ghost/halo。与参考库行为一致（flare 读含云合成场景）、方向正确，但属层级修正之外的第二视觉变化，V1/V2 验收时一并目测。
+2. **云视觉两处变化（v2 合并图形 F2/对抗 #8，v2.1 数字修正）**：① 双 ACES → 单 ACES（亮度/对比，V2 重标）；② **lf 亮度阈值源变化**——lf_threshold 从读 atmosphere 输出变为读 clouds overlay 输出（lf 前移到云后），且 lf threshold 是 luminance 软阈值（`THRESHOLD_LEVEL_DEFAULT=3.0`、RANGE=1.0，soft knee 3.0→4.0）——默认参数下典型太阳照亮云（E=6×rgb~0.1≈0.6）**过不了阈值**，只有线性 ≥3 的极亮云才进 flare 提取；过阈亮云的 artifacts 为「屏幕中心对称点上的 tinted ghost blob + bloom 金字塔屏幕局部辉光」（ghost/halo 均为屏幕中心镜像几何，**不存在以云为中心的 ghost/halo**）。与参考库行为一致（flare 读含云合成场景）。**E 与 flare 阈值强耦合（V2 关键指导）**：cloudsExposure 调高会把云像素批量推过 3.0 → flare 骤增，E 定稿即同时定 flare 表现——V2 挑值时必须同屏目测 lf。
 3. **UNSIGNED_BYTE 兜底的真实边界（v2 修正）**：`?hdr=0` 只压 atmosphere RT；真 8-bit 设备上 march/overlay/lf 全 RGBA8，云 >1 线性值 clip（太阳周边死白）——客观降级，本机无法复现，记录（V6）。
-4. **insert 一次性长帧（v2 成本修正）**：remove/add 触发 collection 级 `_textureCacheDirty` → textureCache 重建**全部** framebuffers（不只 lf 的 RT——atmosphere/tonemap/depthTemporal/clouds 的 RT 同帧全重分配）+ lf 15 子 stage shader 编译。一次性、demo weather 加载完成帧窗口，可接受；比 v1 估计更长。
+4. **insert 一次性长帧（v2 成本修正，v2.1 补半句）**：remove/add 触发 collection 级 `_textureCacheDirty` → textureCache 重建**全部** framebuffers（不只 lf 的 RT——atmosphere/tonemap/depthTemporal/clouds 的 RT 同帧全重分配）+ lf 15 子 stage shader 编译。一次性、demo weather 加载完成帧窗口，可接受；比 v1 估计更长。**clouds 摘除（handle.destroy / setQuality 失败分支摘 overlay）同样触发一次同机制全链 RT 重建帧——验收时勿把该一次性长帧误判为回归**。
 5. **setMode（dead code）**：插入后行为未定义（其已有顺序 TODO），方法注释 warn，不修。
 6. **profile=1 与 clouds=1 组合（v2 记录）**：GPU 计时包装发生在启动期（链=atmo/lf/tm），insert 在 weather 加载后——rebuild 出的新 lf'/tm' 不被包装，`?profile=1&clouds=1` 输出缺 lf/tm/clouds_overlay 计时键。已知限制，记录不修。
 7. **薄云边缘大气段双重计入（pre-existing，仅记录）**：march 内 applyAerialPerspective 已对云 rgb 施加 camera→cloudFront 大气段，overlay 的 (1-a) 背景又含同段大气——该段在云与背景各计一次。现状 display 域同样存在，本次不恶化，不修。
 8. **dFdx/dFdy、LUT half-float 精度**等既有约束不受影响（overlay 改动不触 shader 控制流分支）。
+9. **destroyed guard 与 demo 失败处置不咬合（v2.1 记录，对抗 C5）**：atmosphere 句柄 destroy 后 insert 走 no-op + warn **不抛错**——demo 的 try/catch 不会触发、cloudsHandle 不会被回收（primitive 白跑、静默无云）。宽容风格与 clouds 句柄一致，可选修法为 insert 返回 boolean 供 demo 判定，**不做**（记录）；demo 生命周期内先 destroy atmosphere 再建 clouds 的顺序本身即误用。
 
 ## 10. 不做的事
 
