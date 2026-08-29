@@ -25,6 +25,7 @@ import {
   PixelDatatype,
   PixelFormat,
   Texture,
+  DeveloperError,
   type Context,
   type Scene,
   type Camera,
@@ -348,6 +349,15 @@ export interface AtmosphereStageHandle {
   readonly lensFlareStage?: PostProcessStageComposite
   readonly tonemapStage: PostProcessStage
   readonly postHdrDatatype: PixelDatatype
+  /**
+   * 把外部 stage 插入 atmosphere 与 lensFlare 之间（云 overlay 线性域合成用，v2.1 spec §5.1）。
+   * 语义：入口拒已销毁/已 add 的 stage（抛错）；同实例未销毁幂等 no-op；不同实例替换；
+   * 尽力回滚（失败撤插入物 + 重建 lf/tm，回滚自身失败保原始异常）；destroy 后 no-op+warn；
+   * lensFlare 不存在时只重排 tonemap；rebuild 的 lf 继承旧 enabled。
+   * 摘除由 stage 拥有者自行 removeAndDestroy——摘除后链自动闭合（lf 紧贴 atmosphere）。
+   * 限制：setMode（dead code）在插入后行为未定义（其已有顺序 TODO）。
+   */
+  insertStageBeforeLensFlare(stage: PostProcessStage | PostProcessStageComposite): void
   setMode(newOptions: AtmosphereStageOptions): void
   /** 注入 depthTemporal postRender blit 的计时 hook（Phase 0 profiling，demo ?profile=1 用）。 */
   setBlitTimerHook(hook: ((fn: () => void) => void) | undefined): void
@@ -613,6 +623,92 @@ export function createAtmosphereStage(
   if (lensFlareStage) scene.postProcessStages.add(lensFlareStage) // atmosphere → lensflare → tonomap
   scene.postProcessStages.add(tonemapStage) // 链尾，读 lensflare（或 atmosphere）线性输出
 
+  // ── v2.1 insertStageBeforeLensFlare（spec §5）：把外部 stage（云 overlay）插入
+  //    atmosphere 与 lensFlare 之间。重挂式：摘 lf/tm → 插入 → rebuild lf → re-add tm。──
+  let destroyed = false
+  let insertedStage: PostProcessStage | PostProcessStageComposite | undefined
+
+  // lf rebuild：参数读闭包 resolved 当前值（与 setMode 重建语义一致，非创建时快照）；
+  // depthSource 是创建时常量（temporalEmaEnabled）。lfHandle 无 destroy（三方核实：
+  // plain handle 纯引用），composite remove 即级联销毁子 stage，无泄漏。
+  function rebuildLensFlare(): PostProcessStageComposite | undefined {
+    if (!resolved.lensFlare) return undefined
+    const lfHandle = createLensFlareStage(
+      scene,
+      state,
+      {
+        intensity: resolved.lensFlareIntensity,
+        thresholdLevel: resolved.lensFlareThreshold,
+        ghostAmount: resolved.lensFlareGhost,
+        haloAmount: resolved.lensFlareHalo,
+        ...(resolved.lensFlarePreBlur != null
+          ? { preBlurRadius: resolved.lensFlarePreBlur }
+          : {})
+      },
+      temporalEmaEnabled ? 'czm_depth_temporal' : undefined
+    )
+    return lfHandle.lensflareComposite
+  }
+
+  function insertStageBeforeLensFlare(
+    stage: PostProcessStage | PostProcessStageComposite
+  ): void {
+    if (destroyed) {
+      console.warn('[atmosphere] insertStageBeforeLensFlare 于 destroy 后调用，no-op')
+      return
+    }
+    // 入口拒绝（v2.1 C1）：已销毁 stage 的 add 不抛错，但下一帧 collection.update 调
+    // stage.update 直接崩渲染（destroyObject 遮蔽 prototype 方法）。
+    if (stage.isDestroyed()) {
+      throw new DeveloperError('insertStageBeforeLensFlare: stage 已销毁，不可插入')
+    }
+    // 同实例幂等（v2.1 C3 收紧：仅未销毁时 no-op——已销毁的同实例走替换，防静默无云）。
+    // 顺序：必须在 contains 前置**之前**——首次 insert 成功后 stage 已在集合中，若 contains
+    // 先判会抛错，幂等 no-op 永远不可达（§8.1.5）。幂等路径不重排链、无 add 冲突风险，安全。
+    if (insertedStage === stage && !stage.isDestroyed()) return
+    // contains 前置（v2）：已在集合中——后续 add 名字冲突抛错会留「lf/tm 已摘、链残缺」半途状态。
+    if (scene.postProcessStages.contains(stage)) {
+      throw new DeveloperError(
+        'insertStageBeforeLensFlare: stage 已在集合中，须传入未 add 的 stage'
+      )
+    }
+
+    const prevLfEnabled = lensFlareStage?.enabled
+    try {
+      // 替换场景：摘旧插入物（isDestroyed 防御在 removeAndDestroy 内）
+      if (insertedStage != null) removeAndDestroy(insertedStage)
+      // 摘序 = spec §8.1.1：先 lf 后 tm（回滚/测试时间线断言与此对齐）
+      if (lensFlareStage) removeAndDestroy(lensFlareStage)
+      removeAndDestroy(tonemapStage)
+      scene.postProcessStages.add(stage)
+      const newLf = rebuildLensFlare()
+      if (newLf != null) {
+        if (prevLfEnabled === false) newLf.enabled = false // enabled 继承（spec §5.2）
+        lensFlareStage = newLf
+        scene.postProcessStages.add(newLf)
+      }
+      tonemapStage = buildTonemapStage()
+      scene.postProcessStages.add(tonemapStage)
+      insertedStage = stage // 成功才记忆（回滚不动它）
+    } catch (e) {
+      // 尽力回滚（v2.1 C2：撤插入物 + 重建 lf/tm；回滚自身独立 try/catch 保原始异常）
+      try {
+        removeAndDestroy(stage)
+        const rbLf = rebuildLensFlare()
+        if (rbLf != null) {
+          if (prevLfEnabled === false) rbLf.enabled = false
+          lensFlareStage = rbLf
+          scene.postProcessStages.add(rbLf)
+        }
+        tonemapStage = buildTonemapStage()
+        scene.postProcessStages.add(tonemapStage)
+      } catch (rollbackErr) {
+        console.error('[atmosphere] insertStageBeforeLensFlare 回滚失败', rollbackErr)
+      }
+      throw e // 原始异常
+    }
+  }
+
   // 每帧更新：altitudeCorrection + sunDirection（Simon1994）+ 动态曝光
   const removePreRender = scene.preRender.addEventListener((_scene: Scene, time: JulianDate) => {
     const camera = scene.camera
@@ -661,8 +757,11 @@ export function createAtmosphereStage(
    * 从集合移除并销毁；remove 成功时集合内部已 destroy，失败（不在集合中）则自行销毁。
    * 接受 PostProcessStage 或 PostProcessStageComposite（Cesium remove/add 重载都收两者；
    * lensflare 外层是 Composite，destroy 链尾时走本路径）。
+   * v2 防御（spec §5.2）：已销毁的 stage 直接跳过——destroyObject 把 destroy 替换成
+   * throwOnDestroyed，对已销毁 stage 再 .destroy() 会抛「This object was destroyed」断链。
    */
   function removeAndDestroy(s: PostProcessStage | PostProcessStageComposite): void {
+    if (s.isDestroyed()) return
     if (!scene.postProcessStages.remove(s)) {
       s.destroy()
     }
@@ -690,7 +789,12 @@ export function createAtmosphereStage(
     setBlitTimerHook(hook) {
       blitTimerHook = hook
     },
+    insertStageBeforeLensFlare,
     setMode(newOptions: AtmosphereStageOptions) {
+      if (destroyed) {
+        console.warn('[atmosphere] setMode 于 destroy 后调用，no-op')
+        return
+      }
       // setMode/destroy 全仓库 0 调用属 dead code（demo 切 mode 靠页面重载）。
       // 既有逻辑：rebuild atmosphere+tonomap（不 removePreRender——preRender 闭包持 state/resolved
       // 引用，resolved 更新后自动生效）。两 stage uniform 同源 u_debugMode 同步重建。
@@ -722,6 +826,8 @@ export function createAtmosphereStage(
       scene.postProcessStages.add(tonemapStage)
     },
     destroy() {
+      if (destroyed) return
+      destroyed = true
       removePreRender()
       if (removeDtPreRender) removeDtPreRender()
       if (removeDtPostRender) removeDtPostRender()

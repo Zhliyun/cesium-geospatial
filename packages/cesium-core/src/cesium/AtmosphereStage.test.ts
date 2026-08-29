@@ -421,11 +421,31 @@ describe('resolvePostHdrDatatype（PostProcessStage HDR 像素数据类型检测
 // preRender 闭包内的 camera 访问不在构造期触发，故 camera mock 仅占位。
 function mockSceneWithAddSpy(
   opts: { halfFloat?: boolean } = {}
-): { scene: import('cesium').Scene; addSpy: ReturnType<typeof vi.fn> } {
+): {
+  scene: import('cesium').Scene
+  addSpy: ReturnType<typeof vi.fn>
+  removeSpy: ReturnType<typeof vi.fn>
+  containsSpy: ReturnType<typeof vi.fn>
+  /** add/remove/contains 跨方法调用序（invocationCallOrder 的便捷替身）：按时间序的 'add:x'/'remove:x' 描述串 */
+  ops: () => string[]
+} {
   // halfFloat=true（默认）：context caps 让 resolvePostHdrDatatype 返回 HALF_FLOAT（与既有用例一致）。
   // halfFloat=false：全 false → 返回 UNSIGNED_BYTE（depthTemporal 兜底测试用）。
   const half = opts.halfFloat ?? true
   const addSpy = vi.fn()
+  // 初始签名带 s 参数：vi.fn(() => false) 会锁定无参签名，下方 mockImplementation((s) => …)
+  // 因源参数多于目标而 TS2345（brief 原稿类型缺陷，行为不变仅修签名）。
+  const removeSpy = vi.fn((_s: { name?: string }) => false)
+  const containsSpy = vi.fn(() => false)
+  const timeline: string[] = []
+  addSpy.mockImplementation((s: { name?: string }) => {
+    timeline.push(`add:${String(s?.name ?? 'unnamed')}`)
+  })
+  removeSpy.mockImplementation((s: { name?: string }) => {
+    timeline.push(`remove:${String(s?.name ?? 'unnamed')}`)
+    return false
+  })
+  containsSpy.mockImplementation(() => false)
   const scene = {
     context: {
       halfFloatingPointTexture: half,
@@ -439,9 +459,9 @@ function mockSceneWithAddSpy(
     drawingBufferHeight: 1080,
     preRender: { addEventListener: () => () => {} },
     postRender: { addEventListener: () => () => {} }, // Task 8 lifecycle 注册 postRender listener（assembly 测试不 trigger，仅需属性存在）
-    postProcessStages: { add: addSpy, remove: () => false }
+    postProcessStages: { add: addSpy, remove: removeSpy, contains: containsSpy }
   } as unknown as import('cesium').Scene
-  return { scene, addSpy }
+  return { scene, addSpy, removeSpy, containsSpy, ops: () => [...timeline] }
 }
 
 describe('createAtmosphereStage（phase2b 三 stage 集成）', () => {
