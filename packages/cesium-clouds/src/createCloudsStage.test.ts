@@ -300,6 +300,8 @@ describe('createCloudsStage', () => {
     handle!.destroy()
     expect(scene.postProcessStages.remove).toHaveBeenCalledWith(overlay)
     expect(overlay.destroy).not.toHaveBeenCalled() // remove 成功 → 不走直调
+    // listener 摘除：destroy 后 preRender 归零（removePreRender 被调——补 T3 concern #1 缺口）
+    expect(scene._listeners.preRender).toHaveLength(0)
     // 分支 B：未 add 的句柄 → remove 返 false → overlay.destroy 直调
     const handle2 = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
     const overlay2 = handle2!.overlayStage
@@ -1047,10 +1049,13 @@ describe('setQuality 行为（spec §7 v3）', () => {
     const bridgeBefore = (overlay.uniforms.u_cloudsBuffer as () => unknown)()
     handle!.setQuality('low')
     expect(handle!.overlayStage).toBe(overlay) // 引用恒定
-    const newCloudsPass = (createCloudsPass as any).mock.calls.at(-1) // 新 impl 的 pass
+    const newCloudsPass = (createCloudsPass as any).mock.results.at(-1)!.value // 新 impl 的 pass（results 取返回值；calls 是参数数组）
     expect(handle!.cloudsPass).not.toBe(undefined)
-    // u_cloudsBuffer 闭包切到新 impl 的 bridge（非 temporal → getColorBridge）
+    // u_cloudsBuffer 闭包切到新 impl 的 bridge（非 temporal → getColorBridge）。
+    // 强断言：bridgeAfter 经新 pass 的 getColorBridge 产出——若闭包直捕旧 impl（错误形态），
+    // 被调的是旧 pass 的函数、新 pass 的 getColorBridge 恒 0 次，此处即翻车
     const bridgeAfter = (overlay.uniforms.u_cloudsBuffer as () => unknown)()
+    expect(newCloudsPass.getColorBridge).toHaveBeenCalled()
     expect(bridgeAfter).not.toBe(bridgeBefore) // 新 bridge 对象
     handle!.destroy()
   })
