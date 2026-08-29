@@ -1,7 +1,7 @@
 # 夜间光照：方向性月光 + 月相（方向 C）设计
 
 - **日期**：2026-08-30
-- **状态**：r1（三专家评审全处置：红队 2C+7I / 图形学 2C+6I / 工程 2C+4I；处置表见 §11）
+- **状态**：r2（r1 三专家复审全处置：r0 处置核对 16/16+12/13+9/9 全绿；新 4 Important（注入点通道方案/量级链补 diffuse/小半径 UB/ω² 补偿方向）+12 Minor 处置见 §11.2）
 - **用户拍板记录**：①范围=月光+月盘一起做；②基调=物理基调微亮银灰（倍率可调视觉拍板）；③**月盘无昼夜门、保留物理白天浅月**（2026-08-30 r1 重拍板——r0「白天自动不可见」亮度论证被评审证伪：月面亮度与晴空同量级，真实白天本就隐约见月；白天验收相应改为「云侧 diff=0、月盘侧允许形状差异」）
 - **前置**：`2026-08-29` 夜间云底光修复（nightAmbient，71ada46/c6df0c3/23462ee 两轮收窄）——本设计是其遗留方向 C 的实现；方向 A（夜空大气侧联动）视本设计效果再定，不在本 spec 范围
 
@@ -19,7 +19,7 @@
 
 - 月光云影（BSM 第二套级联阴影——成本翻倍，满月云影真实存在但首版不做，局限记录于 §9）
 - 月光 god rays（lightShafts 太阳专有）
-- 月光 lens flare——仅对默认倍率成立：`moonRadiance` 拉到 ~20+ 时夜盘线性值超 lf 阈值 3.0 会触发 flare（记录边界，不修）
+- 月光 lens flare——仅对默认倍率成立：解耦注入后夜盘线性值超 lf 阈值 3.0 需 moonRadianceScale 达数百量级（默认 60 远低于触发线；实测定界，验收拉高 moonRadiance 时若见意外 flare 核此边界）
 - 月面环形山纹理（均匀灰月面）与地球反照 earthshine
 - 月盘运行时开关切换（moon 参数为**创建期语义**，切换=重建 stage；demo 走页面重载，运行时切换不在范围——同 sun/sky 宏惯例）
 - 方向 A 夜空大气侧联动（月光 inscatter 进大气 LUT——视本设计效果再立项）
@@ -80,7 +80,7 @@ elongation ε = acos(clamp(dot(sunDirECEF, moonDirECEF), -1.0, 1.0))   // clamp 
 云侧照明因子  f = (sin ε − ε·cos ε) / π    // 球面 Lambert 积分：朔 0 / 弦月 0.318 / 望 1（与月盘几何相函数同曲线）
 ```
 
-- r0 的线性 `f=(1−cos ε)/2` 弦月给 0.5，与月盘 Oren-Nayar 几何涌现的物理曲线（弦月≈0.318）不一致——盘亮云暗口径分叉；物理版一行免费对齐（图形学评审 M1），采纳
+- r0 的线性 `f=(1−cos ε)/2` 弦月给 0.5，与月盘几何涌现的物理曲线（弦月≈0.318）不一致——盘亮云暗口径分叉；球面积分版一行免费对齐（图形学评审 M1），采纳。与月盘侧严格关系：Oren-Nayar 积分的 **Lambert 主项**同曲线（中段相位差 ~10-20%，朔/望两端点精确一致——不影响验收措辞）
 - 观察者域 dot 求 ε 与地心域差 <0.01 不可感，运行时直接用 state 两方向
 - 物理近似说明：真实月相照度还含 opposition surge（满月突亮）与月轨偏心（超级月亮），首版用 Lambert 球积分，误差在艺术倍率（§6.3）内不可感
 
@@ -88,7 +88,7 @@ elongation ε = acos(clamp(dot(sunDirECEF, moonDirECEF), -1.0, 1.0))   // clamp 
 
 - **朔望极值扫描**（自洽主验证）：60 天窗口 6h 粗扫 + 极值邻域三分细化。判据（r0 写反已修正）：`dot(sun,moon)` **极大**（ε→0 合相/朔）断言 `f < 0.02`；**极小**（ε→180° 冲/望）断言 `f > 0.98`。注意朔/望每朔望月各一次，两个极大解同判据不区分
 - **农历锚点 sanity**（独立于扫描，不互为依据）：2026-09-25 中秋锚断言 `f > 0.95`（扫描找极值是验证主依据，历法锚只做旁证）
-- **视差修正量级**：同一时刻，地面观察者 vs 地心的月方向角差 ∈ (10′, 57′]——**上下界都要**（r0 只有上界：origin 单位错 1000 倍时视差≈0 也过测，静默失效）。断言形如 `dot(观察者方向, 地心方向) ∈ [cos(1°), cos(10′)]`
+- **视差修正量级**：同一时刻，地面观察者 vs 地心的月方向角差 ∈ (10′, 57′]——**上下界都要**（r0 只有上界：origin 单位错 1000 倍时视差≈0 也过测，静默失效）。两个可构造性前提：测试时刻选**月亮低空**（高角 <30°，近天顶时视差→0 会误报下界；24h 扫最大值亦可）；上界放宽到 **cos(65′)**（近地点水平视差可达 ~61.5′，1° 上限会误杀合法样本）。断言形如 `dot(观察者方向, 地心方向) ∈ [cos(65′), cos(10′)]`
 - **连续性**：时间前推 1 秒，方向与 f 均无跳变（相邻帧稳定）
 - 环境可行性：Simon1994/Transforms 真实实现 node 可跑（createCloudsStage.test.ts 先例）
 
@@ -96,27 +96,29 @@ elongation ε = acos(clamp(dot(sunDirECEF, moonDirECEF), -1.0, 1.0))   // clamp 
 
 ### 5.1 放置、大气透视与 inscatterScale 解耦
 
-月盘加在 `aerialPerspective.frag` 的 **SKY 路径**：
+月盘加在 `aerialPerspective.frag` 的 **SKY 路径**，以**独立输出通道**注入（r1「inscatterScale 之前注入」措辞经复审证伪：按字面「混入 inscatter 变量」则月盘吃 ×u_inscatterScale(25)——红队 C2 劫持复发且叠加 moonRadiance 补偿后满白盘+触发 lf；「finalColor 独立加法」则绕过 hasScene 遮挡与 limbFade——月盘画到地形上。工程评审给出唯一修法）：
 
-- 月盘 radiance × **该视线方向的大气透射率**（transmittance LUT 采样——月盘 38 万 km 远，「无穷远天体」沿视线穿整层大气，视线方向 transmittance 即全部衰减），叠入天空项
-- **注入点钉死在 `inscatter × u_inscatterScale` 之前、以独立项注入**（r0 未定义，红队指出月盘亮度会被雾浓艺术旋钮 inscatterScale(默认 25) 劫持——`?inscatterScale=1` 月盘熄灭）：月盘**不吃** inscatterScale，亮度只由 moonRadiance 与曝光链决定
-- `moonRadiance` 默认 **25**：语义=「内含 inscatterScale(25) 等效补偿」——月盘 display 量级与 r0 预期（约 124/255 显眼银盘）对齐且不随雾旋钮漂移
-- 天空 inscatter 照常叠加；盘随 hasScene mask 被前景雾混掉=地形自动遮月（与太阳盘行为一致）；limbFade/inscatterScale 同路部分与太阳盘保持一致
+- **通道方案**：`getSkyRadiance` 增 `out vec3 moonDisc` 输出参数——函数内 `moonDisc = 视线 transmittance × 盘 radiance × AA`（月盘衰减只走 transmittance，即 38 万 km 远天体沿视线穿整层大气的全部衰减）；radiance 本体不含 moon；ground 分支 `moonDisc` 初始化 0
+- main 中 `moonDisc` 与 inscatter **同受** hasScene 前景雾 mix（=地形自动遮月）与 `inscatter *= limbFade`（**显式 `moonDisc *= limbFade`**，与太阳盘行为一致）
+- finalColor 行改 `… + inscatter·u_inscatterScale + moonDisc`——月盘**不吃** inscatterScale（雾浓旋钮不劫持月盘亮度），亮度只由 moonRadiance 与曝光链决定
+- `moonRadianceScale` 默认 **60**：语义=「inscatterScale(25) 等效补偿 × diffuse 因子」——见 §5.2 量级链，默认下月盘盘心 display ≈75/255（显眼银盘）且不随雾旋钮漂移
+- moon:false 时 `getSkyRadiance` 签名与 finalColor 行均回现状文本——golden 逐字符基线不破
 
 ### 5.2 月面渲染（移植上游 MoonNode 方案，GLSL 重写）
 
-- **判定与盘缘 AA**（r0 公式余弦/角度混比已修正——`dot < ω` 会渲出占半天球的巨月）：
+- **判定与盘缘 AA**（r0 公式余弦/角度混比已修正；r1 又暴露小半径边序 UB，r2 定稿守卫写法）：
 
 ```glsl
-// 照抄本仓库 SUN_DISK_GLSL 范式（acos + fragmentAngle smoothstep，非 dot 与弧度直比）
+// acos 判定（非 dot 与弧度直比）+ 边序恒升序写法（ω<aa 时 smoothstep 降序边=GLSL UB，月盘空洞+闪烁）
 float moonAngle = acos(clamp(dot(rayDirection, moonDirection), -1.0, 1.0));
-float moonDisc = smoothstep(moonAngularRadius, moonAngularRadius - fragmentAngle, moonAngle);
+float moonAA = max(fragmentAngle, 1e-4);   // 小角半径/极小视口守卫
+float moonDisc = 1.0 - smoothstep(moonAngularRadius - moonAA, moonAngularRadius, moonAngle);
 ```
 
-`fragmentAngle` 已在控制流分叉前算好（dFdx/dFdy 纪律），盘缘 ~1px 过渡即 AA；MoonNode 的 chordLength+fwidth 那套是为月面纹理扰动配的，v1 无纹理不用。
+`fragmentAngle` 已在控制流分叉前算好（dFdx/dFdy 纪律），正常 ω 下过渡恒 ~1px（与 ω 大小无关，艺术放大 90px 大盘盘缘 AA 依旧够）；太阳分支同款潜伏雷用户不可达（ω 为 const），月盘 ω 可调故须守卫。MoonNode 的 chordLength+fwidth 那套是为月面纹理扰动配的，v1 无纹理不用。
 
 - **月面法线**：视线与月球球面交点法线（上游 `raySphereIntersectionNormal` 同款：投影 + 半弦长重建）
-- **明暗**：Oren-Nayar 漫反射——**钉死 MoonNode 版**（改进版 mimosa-pudica：A=(1/π)(1−0.5/1.33+0.17/1.13)、B=(1/π)(0.45/1.09)、t=mix(1,max(max(NoL,NoV),0.1),smoothstep(s,0,0.1))），实参序 **(L=sunDirection, V=−rayDirection, N=月面法线)**；**禁用 sky.glsl 旧版**（常量 0.62406/0.41284、无 1/π、实参序相反——照抄会把明暗中段倒相，图形学评审 I4）。月相从几何自动涌现（太阳只照亮半个月球），无显式相位逻辑
+- **明暗**：Oren-Nayar 漫反射——**钉死 MoonNode 版**（改进版 mimosa-pudica：A=(1/π)(1−0.5/1.33+0.17/1.13)、B=(1/π)(0.45/1.09)、t=mix(1,max(max(NoL,NoV),0.1),smoothstep(**0, 0.1, s**))——GLSL edges-first 记法），实参序 **(L=sunDirection, V=−rayDirection, N=月面法线)**；**禁用 sky.glsl 旧版**（常量 0.62406/0.41284、无 1/π、实参序相反——照抄会把明暗中段倒相，图形学评审 I4）。月相从几何自动涌现（太阳只照亮半个月球），无显式相位逻辑
 - **亮度**（上游 `getLunarRadiance` 同公式，**量级基准 0.058**——r0 误算 2.5e-6 漏除 1/(π·ω²)，红队+图形学双验算）：
 
 ```glsl
@@ -124,12 +126,12 @@ vec3 moonDiscRadiance = ATMOSPHERE.solar_irradiance
                       * 2.5e-6                        // 月/日视星等差 14 等 → 亮度比（已含月面反照率）
                       / (PI * moonAngularRadius * moonAngularRadius)
                       * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE   // 对齐上游亮度换算（不乘则相对日盘差 ~1.35× 且 ~7% 色偏）
-                      * moonRadiance;                 // 倍率 uniform（默认 25，语义见 §5.1）
+                      * moonRadiance;                 // 倍率 uniform（默认 60，语义见 §5.1）
 ```
 
-量级链：×solar_irradiance(1.474)×2.5e-6÷(π×0.0045²) ≈ **0.058**（G 0.073 / B 0.075）→ ×25 → ×夜间曝光 0.1 → 0.145 → ACES ≈ **124/255**（显眼银盘）。全程高于 half 最小正规数 5× 以上——**无下溢风险**（r0 §9 风险条目系推导漏项，已改写，见 §9）。
+量级链（**含逐点 Oren-Nayar diffuse 因子**——r1 链漏乘此步致 124/255 锚不可达，图形学复审 A）：盘面 radiance ×solar_irradiance(1.474)×2.5e-6÷(π×0.0045²) ≈ **0.058**（G 0.073 / B 0.075）→ ×diffuse（盘心 0.2465 / 盘均 ~0.16）→ ×moonRadiance(60) → ×夜间曝光 0.1 → 盘心 ≈0.086 线性 → ACES+gamma ≈ **75/255**（显眼银盘、盘均 ~57/255）。全程高于 half 最小正规数百倍以上——**无下溢风险**（r0 §9 风险条目系推导漏项，已改写，见 §9）。
 
-- **角半径视觉决策**：`moonAngularRadius = 0.0045`（≈15.5′，真实值）在 1080p/fov60° 下月盘直径仅 **≈9 px**——物理正确（真实广角照片里月亮就这么大）但月相细节难读。**默认物理值 + demo `?moonAngularRadius=` 可调**（艺术放大 2-10× 是电影惯例）；耦合纪律：放大 ω 同式下总亮度×ω²，只放大不增亮须同步 `moonRadiance ×(ω_phys/ω_art)²`（URL 层组合或文档注明，plan 定实现位置）
+- **角半径视觉决策**：`moonAngularRadius` 默认 0.0045（≈15.5′，真实值，**uniform 而非 const**——可调性要求）在 1080p/fov60° 下月盘直径仅 **≈9 px**——物理正确（真实广角照片里月亮就这么大）但月相细节难读。**默认物理值 + demo `?moonAngularRadius=` 可调**（艺术放大 2-10× 是电影惯例）；耦合纪律（r1 方向写反已修正）：同式下盘**每像素** radiance ∝ 1/ω²，放大 ω_art=k·ω_phys 保持显示亮度须 `moonRadiance × k² = ×(ω_art/ω_phys)²`——**demo 层自动补偿**（解析到 ?moonAngularRadius≠默认时 moonRadianceScale 默认值自动乘 k²，不做则 ω×4 月盘跳暗 16× 被误判 bug）
 
 ### 5.3 无昼夜门（用户拍板保留物理白天浅月）
 
@@ -139,8 +141,9 @@ vec3 moonDiscRadiance = ATMOSPHERE.solar_irradiance
 
 ### 5.4 uniforms / options / state
 
-- AtmosphereStage 新 options：`moon?: boolean`（默认 true；**创建期语义**——false 时 MOON 段不拼入（JS 条件拼接，同 sun/sky 惯例），切换=重建 stage，运行时切换不在范围）、`moonRadianceScale?: number`（默认 25）
-- 月方向 preRender 内部自算（同现有太阳模式）；**origin = viewerPositionWC + altitudeCorrection**（与 reconstructRay 射线起点同帧同源——太空相机 offset 可达 1e4 km，用裸相机位置月盘方位偏 1-2°）
+- AtmosphereStage 新 options：`moon?: boolean`（默认 true；**创建期语义**——false 时 MOON 段不拼入（JS 条件拼接，同 sun/sky 惯例），切换=重建 stage，运行时切换不在范围）、`moonRadianceScale?: number`（默认 60）、`moonAngularRadius?: number`（默认 0.0045，创建期进 options——URL 可调经 demo 透传）
+- MOON 段 shader uniform 清单（ω 可调故为 uniform 非 const）：`moonDirection(vec3)` / `moonAngularRadius(float)` / `u_moonRadiance(float)`——命名映射钉死：option `moonRadianceScale` ↔ uniform `u_moonRadiance` ↔ URL `?moonRadiance=`（同 cloudsExposure→cloudsOverlayExposure→?cloudsExposure 惯例）
+- 月方向 preRender 内部自算（同现有太阳模式）；**origin = viewerPositionWC + altitudeCorrection**（与 reconstructRay 射线起点同帧同源——太空相机 offset 可达 1e4 km，用裸相机位置月盘方位偏 1-2°；state.altitudeCorrection 每帧由 getAltitudeCorrectionOffset 更新，atmosphere 侧可直接取——工程复审确认可实现）
 - `AtmosphereFrameState` 增 `moonDirection: Cartesian3`（每帧更新）
 - **集成要求**：库消费者须自设 `scene.moon.show = false`（Cesium 内置月亮会与本月盘重叠成双月亮；demo main.ts 已关）
 
@@ -150,7 +153,7 @@ vec3 moonDiscRadiance = ATMOSPHERE.solar_irradiance
 
 云的太阳光照 = 平行光 × HG 相函数 × 能量积分。月光物理上同一过程的弱化版——光照循环加一项 moon 项，与 sun/sky/ground/nightAmbient 并列：
 
-- **同构范围**（r0「同款公式」限定）：方向散射项（HG/相位/密度积分）同构；**不含** BSM light march（§9 一致）；**不走** accurate 路径的 GetSunAndSkyScalarIrradiance LUT（夜间 LUT 太阳项归零，月光走简化 HG）
+- **同构范围**（r0「同款公式」限定）：方向散射项（相位/密度积分）同构；**不含** BSM light march（§9 一致）；**不走** accurate 路径的 GetSunAndSkyScalarIrradiance LUT（夜间 LUT 太阳项归零）。相位函数**复用 `approximateMultipleScattering` 入口**——相位随 ACCURATE_PHASE_FUNCTION 编译期 define（Draine/HG）自动与太阳项一致（r1「恒 HG」措辞会让 accurate 档日/月相位分叉，已改）
 - **独立构造**（非「现有 sun 项乘系数」——夜间 LUT sunIrradiance=0，乘系数恒 0）：
 
 ```
@@ -183,7 +186,7 @@ moon 项乘两个 smoothstep 门：
 
 ### 6.5 uniforms / state
 
-- `CloudsFrameState` 增 `moonDirection: Cartesian3` 与 `moonIlluminatedFraction: number`，preRender 内与 sunDirection 同步更新（调 core `computeMoonDirectionECEF`；origin 用与 altitudeCorrection 同源的密切球心位置=clouds 几何域惯例；f 用 state 两方向 dot 求 ε 按物理曲线算，不独立调 §4.1 API）
+- `CloudsFrameState` 增 `moonDirection: Cartesian3` 与 `moonIlluminatedFraction: number`，preRender 内与 sunDirection 同步更新（调 core `computeMoonDirectionECEF`；**origin = camera.positionWC + state.altitudeCorrection（米）**——显式公式，与 §5.4 atmosphere 侧同式同源（「密切球心」措辞二义已删：两种读法视差基线差 6360km，月亮低空时月盘与云照明方向差 ~0.96°）；f 用 state 两方向 dot 求 ε 按物理曲线算，不独立调 §4.1 API）
 - 新 uniforms：`moonDirection(vec3)`、`moonIlluminatedFraction(float)`、`moonLightScale(float)`（uniform 门粒度，不触发重建——与 atmosphere 侧 moon 宏的粒度分野同现状 sun/sky 宏 vs params uniform 惯例）
 - setQuality 换档：走「创建时显式 options 重新 resolve」现有路径，月参数在换档后不丢（工程评审实测确认）
 
@@ -192,8 +195,8 @@ moon 项乘两个 smoothstep 门：
 | 参数 | 语义 | 默认 |
 |---|---|---|
 | `?moon=0` | 总开关：atmosphere 月盘段不拼入 + 云月光项 uniform 乘 0——诊断基线/回退现状 | 开 |
-| `?moonRadiance=N` | 月盘亮度倍率（不吃 inscatterScale，语义见 §5.1） | 25 |
-| `?moonAngularRadius=N` | 月盘角半径 rad（物理 0.0045≈9px；艺术放大时注意 §5.2 亮度耦合纪律） | 0.0045 |
+| `?moonRadiance=N` | 月盘亮度倍率（不吃 inscatterScale；命名映射：URL ?moonRadiance ↔ option moonRadianceScale ↔ uniform u_moonRadiance） | 60 |
+| `?moonAngularRadius=N` | 月盘角半径 rad（物理 0.0045≈9px；**demo 层自动联动**：≠默认时 moonRadianceScale 默认值自动 ×(ω_art/ω_phys)² 保持显示亮度，见 §5.2） | 0.0045 |
 | `?moonLightScale=N` | 云月光倍率 | 50000（估算，视觉拍板） |
 | `?cloudsNightAmbient=N` | 既有，语义不变 | 0.12 |
 
@@ -203,13 +206,13 @@ moon 项乘两个 smoothstep 门：
 
 | 场景 | 判据 |
 |---|---|
-| 满月夜（2026-09-25 中秋锚） | 云银灰微亮；云顶亮/云底暗方向性可见；月盘显眼全圆（默认参数 display ≥80/255 数值锚） |
+| 满月夜（2026-09-25 中秋锚） | 云银灰微亮；云顶亮/云底暗方向性可见；月盘显眼全圆（默认参数**盘心 display ∈ [70,180]/255 且月相明暗分布可辨**——双边区间防满白盘把月相压平也过锚） |
 | 满月夜「月光主导」量化 | 满月 vs 新月云区像素均值比（agent-browser 同批成对录制）≥ 与 nightAmbient×1.5 对应的阈值（实现时随 moonLightScale 默认定标） |
 | 新月夜 | 云回落至 nightAmbient 底光水平（≈现状画面）；无月盘或极细月牙 |
 | 弦月 | 月盘半圆；云明显暗于满月（物理 Lambert 曲线 ≈满月 1/3——非对半，验收措辞按此） |
 | 月落夜（弦月下半夜，月高 <−5° 日期） | 云回落 nightAmbient 基线，无「地下光」云底亮反转 |
 | 满月夜相机转向月亮 | 云被照亮方向与月盘位置一致（方向性自洽） |
-| 白天（现有验收视角） | **云侧**逐像素 diff = 0（?moon 开/关对比，uniform 乘 0 精确 0）；**月盘侧允许 moon 形状差异**（白天浅月=物理正确，用户拍板） |
+| 白天（现有验收视角） | **云侧**逐像素 diff = 0（?moon 开/关对比，uniform 乘 0 精确 0）；**月盘侧允许月盘开/关画面差异**（白天浅月=物理正确，用户拍板；显示端可感度受 day 曝光落点影响，视觉验收时顺带确认非已证事实） |
 | 晨昏带 | 无新过渡反常（月光与底光同变量淡入） |
 | 地平线月亮 | 月盘泛红变暗（大气透视生效） |
 
@@ -217,12 +220,12 @@ moon 项乘两个 smoothstep 门：
 
 ## 9. 风险与局限
 
-- ~~half-float 下溢~~（**r0 条目证伪删除**：月盘 radiance 实为 0.058 而非 2.5e-6——r0 推导漏除 1/(π·ω²)，红队+图形学双验算；0.058×0.05(最暗 transmittance)×25×0.1=7.3e-3，全程高于 half 最小正规数 6.1e-5 两百倍以上，无下溢；moonRadiance 默认 25 是 inscatterScale 解耦补偿语义，非下溢对策）
+- ~~half-float 下溢~~（**r0 条目证伪删除**：月盘 radiance 实为 0.058 而非 2.5e-6——r0 推导漏除 1/(π·ω²)，红队+图形学双验算；最暗链 0.058×0.05(transmittance)×60×0.1 仍高于 half 最小正规数 6.1e-5 百倍以上，无下溢；moonRadiance 默认 60 是 inscatterScale 解耦+diffuse 因子补偿语义，非下溢对策）
 - **月光无云影**：月光散射项不参与 BSM——满月夜云无自阴影，形体感仅来自散射方向项。若观感不足，后续再评估月光 BSM（成本敏感，预期不做）
 - **月盘 additive 不遮星**：月盘背后的星星透出（月盘远亮于星，无感）；月盘不写 depth（sky 后处理内，lf 的太阳 occlusion 无交互——lf 只看太阳）
 - **月相照度简化**：Lambert 球积分无 opposition surge/月轨偏心，误差被艺术倍率吸收
 - **Oren-Nayar 与视星等能量不自洽**（上游同款近似）：视星等 −12.74 是总亮度，Oren-Nayar 只是明暗分布形状，相乘是近似——照抄上游，视觉验收把关
-- **月盘 lf 触发边界**：moonRadiance 拉到 ~20+ 夜盘线性值超 lf 阈值 3.0 会触发 lens flare（「月光 lf 不触发」仅默认倍率成立）
+- **月盘 lf 触发边界**：解耦注入后夜盘线性值超 lf 阈值 3.0 需 moonRadianceScale 达数百量级（默认 60 远低于触发线；实测定界，验收拉高时若见意外 flare 核此边界——「月光 lf 不触发」仅默认倍率成立）
 - **极地白夜**：nightFactor 是太阳仰角门，极地夏季白夜满月当空云无月光（记录不修）
 - **moonLightScale 与 nightAmbient 的比例拍板**：满月夜若观感过亮/过暗，优先调 moonLightScale 默认（视觉验收流程），nightAmbient 兜底不动
 
@@ -259,3 +262,28 @@ moon 项乘两个 smoothstep 门：
 | 其余 Minor | 三方 | 亮度换算补乘/lf 边界/极地白夜/双月亮集成/量级数字/参数入口等 | 全部吸收进对应节（§2/§5.2/§5.4/§7/§8/§9） |
 
 **总体**：架构骨架（core 单源、两处消费、盘走 SKY 分支、云走第四光照项、无新 stage、依赖方向、宏/uniform 分野、setQuality 存活）三方逐点验证通过未动；r1 全部为文本级修正与决策补录。
+
+### 11.2 r1 复审处置（r1 → r2，2026-08-30 三专家第二轮）
+
+r0 处置核对：红队 9/9 ✓（其 r0 单位 km 有误自认，源码结案在米）/ 图形学 16/16 ✓ / 工程 12/13 ✓（origin 一条部分处置，本轮 N2 补齐）。三方一致判断：小修后可进计划、无需第三轮评审。
+
+| 编号 | 来源 | 问题 | r2 处置 |
+|---|---|---|---|
+| N1 注入点（工程）=C2 矛盾（红队） | 工程+红队 | 「inscatterScale 之前注入」两种字面读法都错：混入 inscatter 变量→scale 劫持复发+满白盘事故路径；finalColor 独立加法→丢 hasScene 遮挡与 limbFade（月盘画到地形上） | §5.1 重写为通道方案：getSkyRadiance 增 out vec3 moonDisc，main 中同受 hasScene mix 与显式 `moonDisc *= limbFade`，finalColor 独立加法不吃 scale——三约束全满足；moon:false 文本回现状不破 golden（limbFade 乘否红队持异议，工程+图形学 2:1 裁决乘） |
+| N-A 量级链漏 diffuse（图形学 Important A） | 图形学 | 124/255 锚漏乘逐点 O-N diffuse（盘心 0.2465）——默认 25 实际盘心 48/255，锚不可达 | §5.2 链补 diffuse 步；默认 moonRadianceScale 升 60（盘心 ≈75/255）；§8 锚改双边区间 [70,180]/255+月相可辨（顺带修红队 N8 单边下限洞：满白盘也通过） |
+| N-B 小半径 UB（图形学 Important B） | 图形学 | ω<fragmentAngle 时 smoothstep(ω, ω−aa, ·) 边序降序=GLSL UB（月盘空洞+亚像素闪烁）；?moonAngularRadius 使太阳分支的潜伏雷变可达 | §5.2 判定式改边序恒升序守卫写法 `1.0 − smoothstep(ω−aa, ω, angle)`，aa=max(fragmentAngle,1e-4) |
+| N2 ω² 补偿方向反（红队）+N4 demo 自动（工程） | 红队+工程 | r1 写 ×(ω_phys/ω_art)² 方向反（净误差 k⁴）；且留给 plan 摇摆 | §5.2 改正 ×(ω_art/ω_phys)²=×k²、措辞「每像素亮度」；§5.2/§7 拍板 demo 层自动补偿 |
+| N2' clouds origin 二义（工程） | 工程 | 「密切球心」两种读法视差基线差 6360km（月盘 vs 云照明方向差 ~0.96°） | §6.5 改显式公式 camera.positionWC + state.altitudeCorrection（米），与 §5.4 同式 |
+| N3/N-c lf 边界数字（红队/图形学） | 红队+图形学 | 「~20+ 触发」系 r0 耦合路径遗留（stale 25×；两方链算 517/150 亦不一致） | §2/§9 改「数百量级、实测定界」不留误导数 |
+| N4/N-h 「两百倍」（红队/图形学） | 双方 | 实为 ~119-120× | §9 改「百倍以上」 |
+| N5 视差断言窗口（工程=红队） | 工程+红队 | 月近天顶时视差→0 误报下界；近地点 61.5′>1° 上限误杀 | §4.4 测试时刻选月低空（高角<30° 或 24h 扫最大）+上界放宽 cos(65′) |
+| N3' 命名映射（工程）=N-f（图形学） | 工程+图形学 | option/uniform/URL 三名二拖一 | §5.4/§7 钉死映射（moonRadianceScale/u_moonRadiance/?moonRadiance=） |
+| N-e moonAngularRadius 升 uniform | 图形学 | ω 可调后 const 不成立，§5.4 未枚举 uniform 清单 | §5.4 枚举 moonDirection/moonAngularRadius/u_moonRadiance |
+| N-a 「同曲线」措辞 | 图形学 | O-N≠Lambert，中段差 10-20%（朔望两端点精确一致） | §4.3 改「Lambert 主项同曲线（中段差 ~10-20%）」 |
+| N-b 相位函数措辞 | 图形学 | 「恒 HG」会让 accurate 档日/月相位分叉 | §6.1 改「复用 approximateMultipleScattering，相位随 define 自动一致」 |
+| N-g/N6 t 公式记法 | 图形学+红队 | smoothstep(s,0,0.1) 边序反=转写即 UB | §5.2 改 smoothstep(0,0.1,s) |
+| N7 白天浅月可感度 | 红队 | 线性域结论≠显示端可感（day 曝光落点未知） | §8 白天行改「视觉验收顺带确认，非已证事实」 |
+| N8 80 锚单边下限 | 红队 | 满白盘（月相压平）照样通过 ≥80/255 | 并入 N-A 处置：双边区间+月相可辨 |
+| 工程附注 | 工程 | §8「形状差异」措辞 | 改「月盘开/关画面差异」 |
+
+**r2 结论**：4 Important（注入点通道/量级链 diffuse/小半径 UB/ω² 方向）+12 Minor 全处置；架构与 r0 处置三方核对全绿；spec 可进实现计划。
