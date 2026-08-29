@@ -339,3 +339,31 @@ describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
     expect(ok).toBe(true)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 夜间环境底光（2026-08-29 方向 B）：夜间云照明地板——irradiance LUT 在太阳沉没 ~5° 后
+// 精确归零，云自体辐射 0 → 厚云海 overlay 混成纯黑黑洞（吞星空底光，不符合物理）。
+// 修复 = skyIrradiance 抬 nightAmbient 地板，当地太阳仰角 -5°→-12° 淡入（白天 0 零回归）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('夜间环境底光 nightAmbient（方向 B）', () => {
+  it('uniform 声明 + 光照循环抬地板：skyIrradiance += vec3(nightAmbient) * nightFactor', () => {
+    const src = buildCloudsMainFragmentShader({})
+    expect(src).toContain('uniform float nightAmbient;')
+    // 淡入区间 sin(-12°)=-0.2079 / sin(-5°)=-0.0872（LUT -5° 归零线 → 天文夜满值）
+    expect(src).toContain('1.0 - smoothstep(-0.2079, -0.0872, muSunLocal)')
+    // 抬在 skyIrradiance 上（经 skyGradient × scattering × 能量积分传播 → 云保有形体梯度）
+    expect(src).toContain('skyIrradiance += vec3(nightAmbient) * nightFactor;')
+  })
+
+  it('glslang：含 nightAmbient 的完整 shader 真编译', () => {
+    const src = buildStandaloneCloudsShaderForValidation({})
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(
+        `glslang 编译失败:\n${output}\n` +
+          src.split('\n').slice(0, 60).map((l, i) => `${i + 1}: ${l}`).join('\n')
+      )
+    }
+    expect(ok).toBe(true)
+  })
+})

@@ -416,7 +416,12 @@ async function main(): Promise<void> {
           // M5 云 god rays 开关（默认开）：?cloudsLightShafts=0 诊断基线（无云间体积光柱）
           ...(getString('cloudsLightShafts') === '0' ? { lightShafts: false } : {}),
           // 云 overlay 曝光（默认 12 线性域缩放，2026-08-29 V2 验收定稿；偏灰调大/过曝调小）
-          ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {})
+          ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {}),
+          // 夜间环境底光（方向 B，2026-08-29）：夜间云照明地板（默认 0.12 标定夜空底光量级；
+          // 0 = 关闭回退纯黑夜间云）——调参验收用
+          ...(getNumber('cloudsNightAmbient') != null
+            ? { parameters: { nightAmbient: getNumber('cloudsNightAmbient')! } }
+            : {})
         })
         // 暴露 window.__cloudsStage（调试/控制台 destroy 用，同 __cloudsSpike 模式）
         cloudsShadowBridge = cloudsHandle != null

@@ -124,6 +124,10 @@ export interface CloudsParameters {
   groundBounceScale: number
   powderScale: number
   powderExponent: number
+  /** 夜间环境底光（方向 B，2026-08-29）：夜间云照明地板——LUT 归零后 skyIrradiance 抬此值，
+   *  太阳当地仰角 -5°→-12° 淡入。默认 0.12 标定到与夜空底光同量级（见 clouds.frag 注释）。
+   *  0 = 关闭（回退纯黑夜间云）。不进质量档位（视觉参数，与 march 档无关）。 */
+  nightAmbient: number
 
   // ── weather/shape（uniforms.ts + CloudsEffect 默认）──
   coverage: number
@@ -250,6 +254,8 @@ export function defaultCloudsParameters(): CloudsParameters {
     groundBounceScale: 1.0,
     powderScale: 0.8,
     powderExponent: 150.0,
+    // 夜间环境底光（方向 B；本仓库新增，非 three 移植——上游无夜间光源是已知缺失）
+    nightAmbient: 0.12,
 
     // weather/shape（uniforms.ts:54 + CloudsEffect.ts:180-186）
     coverage: 0.3,

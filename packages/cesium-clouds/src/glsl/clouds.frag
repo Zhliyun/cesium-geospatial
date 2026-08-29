@@ -55,6 +55,12 @@ uniform float skyLightScale;
 uniform float groundBounceScale;
 uniform float powderScale;
 uniform float powderExponent;
+// 夜间环境底光（2026-08-29 方向 B）：irradiance LUT 在当地太阳仰角沉没 ~5° 后精确归零，
+// 云自体辐射 = 0，厚云海在 overlay 混成纯黑黑洞（吞星空底光）。物理世界夜间云由月光/
+// 气辉/城市光照亮——本项为艺术近似地板（非物理光源，方向性月光见后续迭代）。
+// 取值标定：0.12 × RECIPROCAL_PI4 × skyGradient(~0.75) × scattering(~0.9) × overlay E(12)
+// ≈ 18/255 display，与夜空底光（skyBox 星空经大气压暗的残余，实测 16-28/255）同量级。
+uniform float nightAmbient;
 
 // Primary raymarch
 uniform int maxIterationCount;
@@ -534,6 +540,14 @@ vec4 marchClouds(
       vec3 skyIrradiance;
       vec3 sunIrradiance = getCloudsSunSkyIrradiance(position, height, skyIrradiance);
       vec3 surfaceNormal = normalize(position);
+
+      // 夜间环境底光（方向 B）：抬 skyIrradiance 地板，随现有 skyGradient × scattering ×
+      // 能量守恒积分传播 → 夜间云保有形体梯度（深灰云海而非黑洞）。淡入区间 = 当地太阳
+      // 仰角 -5°（LUT 归零线）→ -12°（满值）；白天 nightFactor=0 零回归。muSunLocal 用
+      // 采样点当地天顶（surfaceNormal），与 GetSunAndSkyIrradiance 内 mu_s 同源。
+      float muSunLocal = dot(surfaceNormal, sunDirection);
+      float nightFactor = 1.0 - smoothstep(-0.2079, -0.0872, muSunLocal);
+      skyIrradiance += vec3(nightAmbient) * nightFactor;
 
       // March optical depth to the sun for finer details, which BSM lacks.
       float sunRayDistance = 0.0;

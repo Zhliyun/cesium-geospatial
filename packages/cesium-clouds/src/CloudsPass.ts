@@ -465,6 +465,10 @@ export function createCloudsPass(
     viewReprojectionMatrix: () => params.viewReprojectionMatrix,
     temporalJitter: () => params.temporalJitter,
 
+    // 夜间环境底光（方向 B）：march 专有——shadow.frag 生成端不声明不消费
+    //（shared 段不注入，Cesium 对未声明 uniform 静默忽略的同理反向）
+    nightAmbient: () => params.nightAmbient,
+
     // depth（M6 提前接通，2026-08-14）：真实 globe depthTexture（log-depth 编码，shader 内
     // czm_reverseLogDepthWindow 反演）→ 云被地形正确截断/遮挡（青藏「云浮地形上」修）。
     // globeDepth 未就绪（首帧/_view 缺失）时 fallback 1×1 val=1.0 dummy（远截断，无遮挡降级）。

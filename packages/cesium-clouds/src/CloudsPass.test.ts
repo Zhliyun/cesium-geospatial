@@ -395,12 +395,30 @@ describe('createCloudsPass', () => {
       'minIntervalHeights', 'maxIntervalHeights', 'densityScales', 'shapeAmounts',
       'shapeDetailAmounts', 'weatherExponents', 'shapeAlteringBiases',
       'coverageFilterWidths', 'minHeight', 'maxHeight', 'shadowTopHeight',
-      'shadowBottomHeight', 'shadowLayerMask', 'cameraHeight'
+      'shadowBottomHeight', 'shadowLayerMask', 'cameraHeight', 'nightAmbient'
     ]
     for (const name of expected) {
       expect(um[name], `uniform ${name} 应注入`).toBeDefined()
     }
     pass.destroy()
+  })
+
+  it('夜间环境底光 nightAmbient：默认 0.12；parameters 覆盖生效（夜间云照明地板，方向 B）', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um.nightAmbient(), '默认 0.12（标定推导值：×RECIPROCAL_PI4×skyGradient×scattering×E12 ≈ 18/255 ≈ 夜空底光）').toBe(0.12)
+    pass.destroy()
+
+    vi.clearAllMocks()
+    const params = defaultCloudsParameters()
+    params.nightAmbient = 0.2
+    const pass2 = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state, {
+      parameters: params
+    })
+    const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um2.nightAmbient(), '用户覆盖走 parameters 字段级合并').toBe(0.2)
+    pass2.destroy()
   })
 })
 
