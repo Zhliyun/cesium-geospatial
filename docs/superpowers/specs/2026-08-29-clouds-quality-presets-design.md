@@ -1,7 +1,7 @@
 # 体积云质量档位（quality presets）设计
 
 - 日期：2026-08-29
-- 状态：v2（三专家评审意见全部裁决采纳：管线可行性 4 MAJOR/4 MINOR、移植一致性 1 MAJOR/3 MINOR、对抗性 1 BLOCKER/4 MAJOR）
+- 状态：v3（三专家复审通过框架：A/B v1 findings 全 RESOLVED、C 10/12 RESOLVED——复审新发现 7 条 MINOR/NIT 已全部裁决采纳）
 - 范围：`@cesium-geospatial/clouds` 库 + demo 接入
 - 主参考：`three-geospatial/packages/clouds/src/qualityPresets.ts`（值逐字对齐源）
 
@@ -108,7 +108,7 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
 ```
 
 要点：
-- **单一来源规则**：档位源是 `shadow.cascadeCount`/`shadow.mapSize`；`applyQualityPreset` 把 `shadow.cascadeCount` 投影到 `params.shadowCascadeCount`（消费端 shader 数组长度，uniformMap 沿用现状读取点）。**不投影 `shadowTexelSize`**——其真消费点是 frame state（`state.shadow?.texelSize ?? params.shadowTexelSize`，CloudsPass.ts:454），params 侧保持现状 dummy (1,1) 不动，texel 尺寸单源于 frame state。
+- **单一来源规则**：档位源是 `shadow.cascadeCount`/`shadow.mapSize`；`applyQualityPreset` 把 `shadow.cascadeCount` 投影到 `params.shadowCascadeCount`（消费点 = shader define `SHADOW_CASCADE_COUNT` 与 JS 结构 CascadedShadowMaps/ShadowPass——非 uniformMap 条目）。**不投影 `shadowTexelSize`**——其真消费点是 frame state（`state.shadow?.texelSize ?? params.shadowTexelSize`，CloudsPass.ts:454），params 侧保持现状 dummy (1,1) 不动，texel 尺寸单源于 frame state。
 - 不设 `accuratePhaseFunction`/`haze`/`resolutionScale` 字段（未移植的能力，不造假接口）。
 - `high` 档的 params/shadow 数值必须与 `defaultCloudsParameters()` 对应字段**全等**（`shadowCascadeCount` 恰好相等可不排除；快照测试机器证明，见 §9）。
 - 档位表 fallback dummy（`shadowIntervals`/`shadowMatrices`）由 `applyQualityPreset` 按 cascadeCount 截断（防 cascadeCount=2 + cloudsShadow=0 诊断基线下给 define 2 的数组传 3 元素）。
@@ -122,10 +122,12 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
 2. 档位值（`cloudsQualityPresets[quality]` 三路展开）
 3. 用户显式传参（见下方合并规则）
 
-合并规则（v2 明确）：
-- `CloudsStageOptions.parameters` 类型改为 `Partial<CloudsParameters>`（现状为全量必填类型、整体 `??` 替换——类型变更列入 §13），**字段级浅合并**：档位 params 与用户 parameters 逐字段以用户为准（`!== undefined`）。
+合并规则（v2 明确，v3 收紧）：
+- **`parameters` 类型落点（v3 定死）**：`CloudsStageOptions = Omit<CloudsPassOptions, 'parameters'> & { parameters?: Partial<CloudsParameters> }`——Partial 仅是入口类型；`CloudsPassOptions.parameters` 保持全量契约不变（`createCloudsPass` 的 `?? defaultCloudsParameters()` 整体替换语义不动，`createCloudsStage` 在 resolve 层产出全量对象后下传），CloudsPass.ts **零改动**。
+- **字段级浅合并**：档位 params 与用户 parameters 逐字段以用户为准（`!== undefined`）。
+- **`shadowCascadeCount` 例外（v3 裁决）**：quality 在场时用户显式 `shadowCascadeCount` **忽略 + console.warn**——结构侧（CascadedShadowMaps/ShadowPass/worldIntervals 截断）单源于 `preset.shadow.cascadeCount`，若允许用户覆盖 define 侧会造成 define/结构双源漂移（§4 单一来源规则要防的正是此）。仅 `quality` 未传（=high 缺省路径也显式传了）时用户值生效。
 - **嵌套对象 `shadowMarch` 仅支持整对象覆盖**（不做字段级深合并）：用户要改其一个字段须提供全部 7 字段，JSDoc 写明。
-- `CloudsMainOptions` 显式字段（shapeDetail/turbulence/lightShafts/accurateSunSkyLight/shadowCascadeCount）覆盖档位同名字段。
+- `CloudsMainOptions` 其余显式字段（shapeDetail/turbulence/lightShafts/accurateSunSkyLight）覆盖档位同名字段。
 - **clone 规则**：`applyQualityPreset` 的合并产物必须 deep-clone（用户对象与档位常量都不回写、不共享引用）——现状 preRender 逐帧改写 params（frame++、reprojection 覆写），沿用共享引用会把旧帧状态带进新档、双 stage 互踩。
 - 与参考库 setter 语义**有意不同**：参考库 `qualityPreset` setter 是 Object.assign 直接覆盖实例（档位 > 用户微调、微调丢失）；我们选择「用户显式 > 档位」，§7 setQuality 换档时保留用户显式参数。
 
@@ -149,7 +151,7 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
 - `handle.setQuality(next: CloudsQualityPreset): void`：
   1. `next === 当前档` → no-op（浅比较）。`handle` 已 destroyed → no-op + console.warn（对齐 destroy 幂等的宽容风格；JSDoc 写明）。
   2. 以「创建时用户显式 options + 新 quality」重新 resolve（保留微调，§5 合并规则 + clone）。
-  3. `impl.destroy()` → `buildImpl` 重建 → 换 `handle.impl` 引用。
+  3. `impl.destroy()` → `buildImpl` 重建 → 换 `handle.impl` 引用。**原子性（v3）**：`buildImpl` 抛错（GL 资源创建失败等）时 catch → 置 `destroyed = true` → rethrow——旧 impl 已销毁、句柄半死不可自愈，作废是唯一安全语义（JSDoc 声明「重建失败即句柄作废，须重建 stage」）。
   4. overlay PostProcessStage destroy 旧的、add 新的到 `scene.postProcessStages` 末尾。**已知限制**：若消费者在 clouds 之后又 add 了别的 stage，重建会改变相对顺序（JSDoc 记录，不处理——当前无此用法）。
 - **调用时机约束（JSDoc）**：仅帧间调用（事件回调外）。帧内（preUpdate/preRender 等渲染事件回调中）调用不安全——primitives.remove 发生在 commandList 已建后。demo keydown 在帧间，安全。
 - `CloudsStageHandle` 对外形状不变：公开字段改为 getter 委托内部 `impl` 引用（`cloudsPass`/`overlayStage`/`shadowPass`/`shadowState`/`cascades`/`destroy`），对外仍只读语义。
@@ -168,7 +170,7 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
 | `qualityPresets.test.ts`（新） | ① 四档全字段快照：期望值硬编码并**注释钉死参考源文件与行号**（three-geospatial qualityPresets.ts，参考库在另一 repo 不可 import，对齐本身靠本 spec §3 评审背书）；② high 档 params/shadow 与 `defaultCloudsParameters()` 对应字段全等（零回归机器证明；不含 shadowTexelSize——该字段不投影，见 §4）；③ `shadowCascadeCount` 投影 = shadow.cascadeCount；④ fallback dummy 按 cascadeCount 截断 |
 | `createCloudsStage.test.ts`（增） | ① `quality` 缺省 high = 不传时装配传参与 shader 源逐字一致（零回归）；② low 档：cascadeCount=2、mapSize=256、worldRadii/intervals 截断、**shadowState.far = 21km（§6 不变式）**；③ 用户显式 `parameters.maxIterationCount` 覆盖 low 档 200（字段级合并）；④ `setQuality`：同档 no-op、destroyed 后 no-op+warn、换档断言**完整销毁清单**（含 resolvePass/shadowTurbulenceDummy，temporal=true 组合下）、换档后 shader define 含 `SHADOW_CASCADE_COUNT 2`、**旧 impl 全部 destroy 均被调且 listener 推动新 impl**（§7 零直捕约束）、换档后 params 无共享引用（clone 生效） |
 | `cloudsMain.compile.test.ts`（增） | glslang 编译四档实际 define 组合（含 `SHADOW_CASCADE_COUNT 2` + lightShafts/shapeDetail/turbulence/accurate 全关组合） |
-| `shadowMain.compile.test.ts`（增，v2 新增） | shadow 生成端编译组合：`CASCADE_COUNT 2` × shapeDetail/turbulence 双关组合（档位换档是「BSM 与主 march 编译开关必须同步」约束的最大变更源） |
+| `shadowMain.compile.test.ts`（增补用例，文件已存在，v3 校准） | shadow 生成端编译组合：`CASCADE_COUNT 2` × shapeDetail/turbulence 双关 × **temporalPass=true（velocity 层 `reprojectionMatrices[CASCADE_COUNT]` unroll 恰是 §11.2 风险 1 的隐性假设，v3 补维度）** |
 | `CloudsMaterial.test.ts`（增） | `shadowCascadeCount` define 生成正确（默认 3 / 传 2） |
 
 > 措辞校准（v2）：createCloudsStage.test.ts 为 mock 装配层（vi.mock CloudsPass/ShadowPass），断言粒度是「装配传参 + shader 源串」——不称「bit 级」。
@@ -177,7 +179,7 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
 ## 10. 验收（人工 + agent-browser）
 
 1. **四档视觉对比**：基准云海 URL（`mode=atmosphere&clouds=1`，README 推荐视角）`cloudsQuality` 四值各截图。项目已知低对比画面目测不可靠 → medium/high 追加 `?cloudsDebug=2`（frontDepth）/`?cloudsDebug=5`（cascades）debug 视图截图作客观佐证（minDensity=1e-4 砍薄云、mapSize=256 的 artifact 目测易漏）。low 档无 god rays/细节修饰、**自阴影覆盖仅 0-21km** 属预期降级，云本体不破。
-2. **帧率台阶**（措辞校准：`?fps` 是 `debugShowFramesPerSecond` 显示帧率开关）：四档显示帧率 low ≤ medium ≤ high ≤ ultra，**前提至少一档跌破 vsync 上限**（验收机 M 系列 + 高分辨率下 high/ultra 应跌破；若四档全 vsync 锁帧则判据无区分度，须放大负载重测）；换档瞬间出现 shader 编译长帧 = 档位真切换的旁证。
+2. **帧率台阶**（措辞校准：`?fps` 是 `debugShowFramesPerSecond` 显示帧率开关）：四档**帧时间 low ≤ medium ≤ high ≤ ultra（即显示 FPS low ≥ medium ≥ high ≥ ultra，v3 修正方向）**，**前提至少一档跌破 vsync 上限**（验收机 M 系列 + 高分辨率下 high/ultra 应跌破；若四档全 vsync 锁帧则判据无区分度，须放大负载重测）；换档瞬间出现 shader 编译长帧 = 档位真切换的旁证。
 3. **热切换健壮性**：基准 URL 连按 1→4→2→3→1 多轮，无崩溃、无 WebGL 报错；**追加 `?cloudsTemporal=1` 组合轮次**（resolvePass 销毁重建路径）；切档后稳定帧率与对应档 URL 直开一致（**排除切换当帧**；无资源泄漏）。
 
 ## 11. 风险与任务
@@ -186,9 +188,11 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
 
 评审实证（2026-08-29）：移植版桥接 `BRIDGE_VARYINGS_GLSL`（CloudsMaterial.ts:259-262）把 `vCloudsIrradiance.minSun/maxSun/minSky/maxSky` 四个 varying **无条件零填充**（原注释「ACCURATE define 下不被读」）——`accurateSunSkyLight=false` 分支（clouds.frag:442-449 `#else`）读到的 irradiance 恒 0 → **云全黑**。glslang 编译对此无检出力（变量已声明、编译必过）。
 
-任务：把参考库 clouds.vert 的 min/max 高度 irradiance 预计算移植进 `cloudsBridge_reconstructVaryings`（每像素 4 次 LUT eval，一次性成本，远廉于 per-sample 直算 GetSunAndSkyScalarIrradiance——后者在 march 循环体内逐采样调用，clouds.frag:535）。验收：low 档云照明正常 + `?cloudsDebug` 冒烟。
+任务：把参考库 clouds.vert 的 `sampleSunSkyIrradiance`（shaders/clouds.vert:46-65，纯每调用解析计算、无顶点插值语义依赖，fragment 重建移植直接可行——评审核实）移植进 `cloudsBridge_reconstructVaryings`：**min/max 云高 2 次调用（每次返 sun+sky 双值 = 4 分量），预计算块须 `#ifndef ACCURATE_SUN_SKY_LIGHT` 条件编译**（high/ultra 档不编译，v3）——一次性成本，远廉于 per-sample 直算 GetSunAndSkyScalarIrradiance（后者在 march 循环体内逐采样调用，clouds.frag:535）。
+**ground 2 分量暂不移植（v3 裁决）**：`vGroundIrradiance` 的全部 `#else` 读取路径（getGroundSunSkyIrradiance，clouds.frag:437/468）都在本仓库永不 `#define` 的 HAZE/GROUND_BOUNCE 分支内（复审三方核实为死代码）——完整移植 6 分量违背 YAGNI。**遗留注记**：未来若开启 GROUND_BOUNCE/HAZE，须同步补移植 ground 分量，否则云底 bounce 恒 0。
+验收：low 档云照明正常 + `?cloudsDebug` 冒烟。
 
-若实现复杂度显著超预期（vert 预计算依赖的插值语义在 fragment 重建失真）：降级为「low/medium 该开关保持 `true` 为既定决策」（spec §3 表 + §9① 期望值同源修订，见 §9 退路机制），low 档性能缺口由主 march 步数再降补。
+若实现复杂度显著超预期（v3 勘误：原「插值语义失真」顾虑不成立——参考实现是纯解析计算无插值依赖，退路仅剩复杂度维度）：降级为「low/medium 该开关保持 `true` 为既定决策」（spec §3 表 + §9① 期望值同源修订，见 §9 退路机制），low 档性能缺口由主 march 步数再降补。
 
 ### 11.2 其余风险
 
@@ -214,12 +218,11 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
 | `packages/cesium-clouds/src/CloudsMaterial.ts` | `shadowCascadeCount` define 参数化 + **accurate=false 分桥接线（§11.1，BRIDGE_VARYINGS_GLSL 移植 irradiance 预计算）** |
 | `packages/cesium-clouds/src/ShadowMaterial.ts` | **`ShadowMainOptions.cascadeCount` 参数化（CASCADE_COUNT define，v2 新增）** |
 | `packages/cesium-clouds/src/createCloudsStage.ts` | `quality` 选项、buildImpl 提取（零直捕 listener + 完整销毁清单）、setQuality、mapSize 去硬编码、**shadowState.far 不变式（§6）** |
-| `packages/cesium-clouds/src/CloudsPass.ts` | `parameters` 类型 `Partial<CloudsParameters>` 化（§5 合并语义配套，v2 新增） |
 | `packages/cesium-clouds/src/index.ts` | 导出 `CloudsQualityPreset`/`cloudsQualityPresets`/`ResolvedCloudsQuality` |
 | `packages/cesium-clouds/src/qualityPresets.test.ts` | 新建 |
 | `packages/cesium-clouds/src/createCloudsStage.test.ts` | 增补 |
 | `packages/cesium-clouds/src/cloudsMain.compile.test.ts` | 增补 |
-| `packages/cesium-clouds/src/shadowMain.compile.test.ts` | 增补（v2 新增） |
+| `packages/cesium-clouds/src/shadowMain.compile.test.ts` | 增补用例（文件已存在，v3 校准） |
 | `packages/cesium-clouds/src/CloudsMaterial.test.ts` | 增补（若该文件存在；否则并入 compile.test） |
 | `apps/demo/src/main.ts` | `cloudsQuality` URL 参数 + 1/2/3/4 快捷键 |
 | `README.md` | 参数表补一行 |
