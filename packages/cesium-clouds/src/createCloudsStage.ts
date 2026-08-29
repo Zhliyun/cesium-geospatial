@@ -124,7 +124,7 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   clouds?: boolean
   /**
-   * overlay 云曝光（默认 6，线性域云 premultiplied 值缩放（V2 验收后定稿））。
+   * overlay 云曝光（默认 12，线性域云 premultiplied 值缩放）。
    * demo `?cloudsExposure=N` 调节。
    */
   cloudsOverlayExposure?: number
@@ -233,9 +233,9 @@ void main() {
 `
 
 // 云 overlay 曝光（v2 spec §4.3/D7）：线性域云 premultiplied 值缩放（链尾统一 ACES）。
-// 起点沿用 display 域时代标定 6（不透明云内部新旧式同为 pow(ACES(6·rgb), 1/2.2)），
-// V2 视觉验收后定稿并回改此处 + README。
-const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 6
+// 2026-08-29 V2 视觉验收定稿：用户在 e3/e6/e10/e15 四档目验后拍板 12（黄昏逆光视角云体积感/
+// 亮度平衡；注意 E 与 lf thresholdLevel=3.0 强耦合——E 调高亮云会参与 flare 能量提取）。
+const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 12
 
 /** 模块内 impl（spec §6.1 v2）：一次装配的全部资源 + 每帧逻辑 + 完整销毁。
  *  overlay 已移出 impl（per-handle 资源，spec §6.2）——impl 销毁清单不含 overlay。 */

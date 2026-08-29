@@ -415,7 +415,7 @@ async function main(): Promise<void> {
             : {}),
           // M5 云 god rays 开关（默认开）：?cloudsLightShafts=0 诊断基线（无云间体积光柱）
           ...(getString('cloudsLightShafts') === '0' ? { lightShafts: false } : {}),
-          // 云 overlay 曝光（默认 6 线性域缩放，V2 验收后定稿；偏灰调大/过曝调小）
+          // 云 overlay 曝光（默认 12 线性域缩放，2026-08-29 V2 验收定稿；偏灰调大/过曝调小）
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {})
         })
         // 暴露 window.__cloudsStage（调试/控制台 destroy 用，同 __cloudsSpike 模式）
