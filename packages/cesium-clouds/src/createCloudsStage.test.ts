@@ -771,3 +771,110 @@ function paramsOf(handle: NonNullable<ReturnType<typeof createCloudsStage>>): an
   const call = (createCloudsPass as any).mock.calls.at(-1)
   return call?.[4]?.parameters ?? call?.[4] ?? null
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T4 质量档位装配（spec §6/§7）：buildImpl 提取 + quality 三路接线（编译开关/uniform/
+// BSM 结构）+ far 不变式（world 分支 shadowState.far ≡ worldIntervals[cascadeCount]）
+// ─────────────────────────────────────────────────────────────────────────────
+describe('质量档位装配（spec §6/§7）', () => {
+  // 对拍辅助：收集 createCloudsPass/createShadowPass mock 收到的参数（JSON 深拷贝隔离引用；
+  // 函数字段（uniformMap/bridge）序列化丢弃——对拍的是装配传参形状与值）。mock.calls 跨调用
+  // 累积 → 每次 create 前手动 vi.clearAllMocks()（沿用本文件既有惯例，只清 calls 不清实现）。
+  // quality 剔除：它是编排层字段（CloudsPassOptions 无此契约），...options 透传时作为多余
+  // 键无害存在（CloudsPass 不消费）——对拍聚焦装配实质差异（编译开关/uniform/BSM 结构）。
+  function collectCreateCalls(): unknown {
+    const stripQuality = (calls: unknown[]) =>
+      JSON.parse(JSON.stringify(calls), (k, v) => (k === 'quality' ? undefined : v))
+    return {
+      clouds: stripQuality(vi.mocked(createCloudsPass).mock.calls),
+      shadow: JSON.parse(JSON.stringify(vi.mocked(createShadowPass).mock.calls))
+    }
+  }
+
+  it('quality 缺省：装配传参与显式 high 逐字一致（零回归）', () => {
+    vi.clearAllMocks()
+    const a = createCloudsStage(createMockScene(), createMockLuts(), createMockWeather(), { clouds: true })
+    const callsA = collectCreateCalls()
+    vi.clearAllMocks()
+    const b = createCloudsStage(createMockScene(), createMockLuts(), createMockWeather(), {
+      clouds: true,
+      quality: 'high'
+    })
+    const callsB = collectCreateCalls()
+    expect(callsB).toEqual(callsA)
+    a!.destroy()
+    b!.destroy()
+  })
+
+  it('low 档：cascadeCount=2 / mapSize=256 / far 不变式 21km（spec §6）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      quality: 'low'
+    })
+    // 结构接线（applied.shadow 三路之一）：cascadeCount=2、mapSize=256（去 hardcode）
+    expect(handle!.cascades.cascadeCount).toBe(2)
+    expect(handle!.cascades.mapSize).toBe(256)
+    // worldIntervals 截断语义：类内缺省 [0,10,21,60]km 消费前 cascadeCount+1 项 → [0,10,21]km
+    expect(handle!.cascades.worldIntervals[handle!.cascades.cascadeCount]).toBe(21e3)
+    // preRender 触发一次 update 后 shadowState.far ≡ cascades.far = worldIntervals[2] = 21km
+    //（不变式——world 分支废除 SHADOW_FAR_LIMIT 独立参与，防级联选择归一化域分叉）
+    firePreRender(scene)
+    expect(handle!.shadowState.far).toBe(21e3)
+    // texelSize 随档位 mapSize（1/256）
+    expect(handle!.shadowState.texelSize.x).toBeCloseTo(1 / 256)
+    // shadowState 数组与 cascadeCount 同长（低档 2 元素）
+    expect(handle!.shadowState.matrices).toHaveLength(2)
+    expect(handle!.shadowState.intervals).toHaveLength(2)
+    handle!.destroy()
+  })
+
+  it('low 档：主 march shadowCascadeCount=2（define 单源投影）+ ShadowPass cascadeCount=2', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, quality: 'low' })
+    // Ruling 2：createCloudsPass 被 vi.mock——mock calls 无 shader 源字符串，改字段级断言
+    //（define 由 CloudsMaterial 按该字段生成，define 正确性由 CloudsMaterial.test 覆盖）。
+    // Ruling 1：顶层 shadowCascadeCount 必传——漏传则 low 档主 march define 恒 3。
+    const passOpts = (createCloudsPass as any).mock.lastCall![4] as Record<string, unknown>
+    expect(passOpts.shadowCascadeCount).toBe(2)
+    expect((passOpts.parameters as Record<string, unknown>).shadowCascadeCount).toBe(2)
+    // ShadowPass 侧：JSON 断言可达（cascadeCount 是 mock options 的普通数字字段）
+    expect(JSON.stringify(vi.mocked(createShadowPass).mock.calls)).toContain('cascadeCount":2')
+  })
+
+  it('ShadowPass shaderOptions 读 resolved 值（low 档 shapeDetail=false 不再 ?? true 错位，spec §6 点名）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, quality: 'low' })
+    const opts = (createShadowPass as any).mock.lastCall![0]
+    expect(opts.shaderOptions.shapeDetail).toBe(false)
+    expect(opts.shaderOptions.turbulence).toBe(false)
+  })
+
+  it('主 march 编译开关走 resolved（low 档 accurate/shapeDetail/turbulence/lightShafts 全关）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, quality: 'low' })
+    const passOpts = (createCloudsPass as any).mock.lastCall![4] as Record<string, unknown>
+    expect(passOpts.accurateSunSkyLight).toBe(false)
+    expect(passOpts.shapeDetail).toBe(false)
+    expect(passOpts.turbulence).toBe(false)
+    expect(passOpts.lightShafts).toBe(false)
+  })
+
+  it('temporal=true：resolvePass 进销毁清单（spec §7 v3）', () => {
+    vi.clearAllMocks()
+    resolvePassProbe.instances.length = 0
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      temporal: true
+    })
+    const inst = resolvePassProbe.instances[0]
+    expect(inst).toBeDefined()
+    handle!.destroy()
+    expect(inst.destroy).toHaveBeenCalledTimes(1)
+  })
+})
