@@ -89,7 +89,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `cloudsQuality` | `high` | 质量档位 `low`/`medium`/`high`/`ultra`：march 步数/编译开关（光柱/细节/湍流/精确天光）/BSM 级联数与尺寸整档联动；键盘 `1`-`4` 运行时切换 |
-| `cloudsExposure` | 10 | 云层曝光（偏灰调大、过曝调小） |
+| `cloudsExposure` | 6 | 云层曝光（线性域缩放，链尾统一 tonemap；偏灰调大、过曝调小） |
 | `cloudsShadow=0` | 开 | 关 BSM 自阴影（对比云体积感） |
 | `cloudsShadowAnchor=frustum` | world | 回退视锥锚定 BSM（AB 对照基线；默认 world 世界锚定固定网格，抗移动闪动） |
 | `cloudsShadowScale=N` | 1 | world 锚定 radii × N（诊断用，N=5 → {80,168,480}km 膨胀层） |
@@ -99,6 +99,25 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `cloudsLightShafts=0` | 开 | 关云间 god rays 光柱 |
 | `cloudsGodRays=N` | 1 | god rays 增益（20=艺术放大出明显光柱） |
 | `cloudsShapeDetail=0` / `cloudsTurbulence=0` / `cloudsAccurate=0` | – | 关对应噪声/光照分支（隔离诊断） |
+
+#### 体积云 stage API（库消费者必读）
+
+`createCloudsStage` 返回的 `overlayStage` **不会自动 add** 到 `scene.postProcessStages`——
+add 时机由消费者编排，否则云不可见：
+
+- **配合 atmosphere（推荐，demo 同款）**：把 overlay 插到 atmosphere 与 lensFlare 之间，
+  云在线性 HDR 域合成、halo 光晕叠加在云上：
+
+  ```ts
+  const cloudsHandle = createCloudsStage(scene, luts, weather, { clouds: true })
+  atmosphereHandle.insertStageBeforeLensFlare(cloudsHandle.overlayStage)
+  ```
+
+- **独立使用（无 atmosphere stage）**：自行 add 到链尾（云在 display 域直接上屏，
+  无 halo 层级保证）：`scene.postProcessStages.add(cloudsHandle.overlayStage)`
+
+`insertStageBeforeLensFlare` 语义：同实例幂等、传已 add/已销毁的 stage 抛错、失败尽力回滚；
+云销毁调 `cloudsHandle.destroy()` 即可（链自动闭合）。
 
 ### 诊断
 

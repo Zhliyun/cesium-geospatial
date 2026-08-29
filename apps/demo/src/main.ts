@@ -21,7 +21,8 @@ import {
   GHOST_AMOUNT_DEFAULT,
   HALO_AMOUNT_DEFAULT,
   TEMPORAL_QUALITY_PRESETS,
-  type AtmosphereStageOptions
+  type AtmosphereStageOptions,
+  type AtmosphereStageHandle
 } from '@cesium-geospatial/core'
 import {
   loadWeatherTextures,
@@ -275,10 +276,13 @@ async function main(): Promise<void> {
     let cloudsShadowBridge:
       | (() => { _texture: unknown; _target: number } | undefined)
       | undefined = undefined
+    // atmosphereHandle 作用域提升（v2 spec §7）：else 块创建、下方 clouds 块 insert
+    // overlayStage 到 atmosphere 与 lensFlare 之间——两块平级，需在外层声明共享。
+    let atmosphereHandle: AtmosphereStageHandle | undefined
     if (skipAtmosphere) {
       scene.logarithmicDepthBuffer = false
     } else {
-      const atmosphereHandle = createAtmosphereStage(scene, luts, {
+      atmosphereHandle = createAtmosphereStage(scene, luts, {
         ...options,
         cloudsShadowLengthBridge: () => cloudsShadowBridge?.()
       })
@@ -340,7 +344,9 @@ async function main(): Promise<void> {
           if (frame % 60 === 0) {
             const snap: Record<string, number | null> = {}
             for (const { name } of wrapped) snap[name] = timer.read(name)
-            if (atmosphereHandle.depthTemporalStage) {
+            // atmosphereHandle 是外层 let——闭包内 TS 不保持非空窄化，此处可选链（demo 不回退
+            // undefined，行为等价；与 :334 直流的窄化检查同源）。
+            if (atmosphereHandle?.depthTemporalStage) {
               snap['depthTemporal_blit'] = timer.read('depthTemporal_blit')
             }
             console.log('[profile]', JSON.stringify(snap))
@@ -409,7 +415,7 @@ async function main(): Promise<void> {
             : {}),
           // M5 云 god rays 开关（默认开）：?cloudsLightShafts=0 诊断基线（无云间体积光柱）
           ...(getString('cloudsLightShafts') === '0' ? { lightShafts: false } : {}),
-          // 云 overlay 曝光（默认 10 对齐 three 版 storybook 标定；偏灰调大/过曝调小）
+          // 云 overlay 曝光（默认 6 线性域缩放，V2 验收后定稿；偏灰调大/过曝调小）
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {})
         })
         // 暴露 window.__cloudsStage（调试/控制台 destroy 用，同 __cloudsSpike 模式）
@@ -419,6 +425,20 @@ async function main(): Promise<void> {
         ;(window as unknown as { __cloudsStage?: unknown }).__cloudsStage =
           cloudsHandle
         if (cloudsHandle != null) {
+          // v2 spec §7：云 overlay 编排——插入 atmosphere 与 lensFlare 之间（halo 画在云上）。
+          // insert 失败处置（spec §6.3）：console.error（区别 weather 失败的 warn）+ 回收
+          // cloudsHandle（march primitive 不白跑）+ 清 shadow bridge（防读已销毁 cloudsPass）。
+          if (atmosphereHandle != null) {
+            try {
+              atmosphereHandle.insertStageBeforeLensFlare(cloudsHandle.overlayStage)
+            } catch (e) {
+              console.error('[clouds] 后处理链插入失败，云已回收', e)
+              cloudsHandle.destroy()
+              cloudsShadowBridge = undefined
+            }
+          } else {
+            scene.postProcessStages.add(cloudsHandle.overlayStage) // 独立消费者 fallback（demo 不可达，防御）
+          }
           console.info(
             '[phase3-clouds] 体积云已接线（M3 稳定行为 + M5 云 god rays；?cloudsLightShafts=0 关光柱对比；?cloudsTemporal=1 开 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影；?cloudsShadowAnchor=frustum 回退视锥锚定 AB 基线；?cloudsQuality=N 初始档/按键 1-4 切档）'
           )
