@@ -20,8 +20,15 @@ const DEFINES_GLSL = `
 `
 
 // 内建纹理 uniform（Cesium series input = atmosphere，shader 须显式声明）+ threshold 控制 uniform。
+// lf×云交互 #2（2026-08-30，用户拍板 A）：u_occlusionTexture = lf_occlusion 输出（uniform-name
+// string 接线，1/16 空间常数标量）——输出乘 visibility：太阳被云/地形挡时 bloom 随之衰减。
+// 全图同值乘法对非太阳亮源同衰减——本产品语境近似正确（主要非太阳亮源=水面太阳 specular，
+// 物理上确随太阳遮挡减弱）。原「occlusion 仅乘 ghosts/halo」语义自此扩展为整链（旧设计的
+// 「threshold 天然处理被挡太阳」仅 depth 挡成立——云在 colorTexture 里不衰减）。源由接线层
+// 覆盖 colorTexture="atmosphere"（云前）配套排云。
 const UNIFORMS_GLSL = `
 uniform sampler2D colorTexture;
+uniform sampler2D u_occlusionTexture;   // lf_occlusion 输出（visibility 标量，1=全可见 0=全挡）
 uniform vec2 u_texelSize;        // 源 texture（atmosphere）的 1/w, 1/h
 uniform float u_thresholdLevel;
 uniform float u_thresholdRange;
@@ -56,12 +63,15 @@ void main() {
   vec3 result = color * scale;
   // NaN 守护：half-float 灾消/极端 exposure 下归零，防扩散污染下游 bloom pyramid。
   if (any(isnan(result))) result = vec3(0.0);
+  // lf×云交互 #2：乘 occlusion visibility（lf_occlusion 1/16 空间常数标量，NEAREST 读）——
+  // 太阳被云/地形挡时 bloom 整体随太阳可见度衰减（.r = visibility）。
+  result *= texture(u_occlusionTexture, v_textureCoordinates).r;
   out_FragColor = vec4(result, 1.0);
 }
 `
 
 // 供 Task 3 接线一致性测试：threshold stage 声明的 uniform（colorTexture 是 Cesium 内建白名单）。
-export const THRESHOLD_UNIFORM_NAMES: string[] = ['u_texelSize', 'u_thresholdLevel', 'u_thresholdRange']
+export const THRESHOLD_UNIFORM_NAMES: string[] = ['u_occlusionTexture', 'u_texelSize', 'u_thresholdLevel', 'u_thresholdRange']
 
 // 组装 PostProcessStage 用 fragment shader（供 Cesium 运行时；colorTexture/v_textureCoordinates
 // 由 Cesium 注入值，shader 显式声明；out_FragColor 由 Cesium 注入声明）。

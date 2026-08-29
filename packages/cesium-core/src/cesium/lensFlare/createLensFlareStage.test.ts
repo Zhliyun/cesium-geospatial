@@ -321,3 +321,32 @@ describe('createLensFlareStage Task 10：occlusion 同源 depthTemporal', () => 
     expect(occlusionStage.uniforms.u_sunAngularRadius).toBe(SUN_ANGULAR_RADIUS)
   })
 })
+
+// lf×云交互（2026-08-30）：#1 occlusion 云感知桥 + #2 threshold 源钉 atmosphere/接 occlusion。
+describe('lf×云交互（#1 occlusion 云桥 / #2 threshold 源与调制）', () => {
+  it('#2: threshold uniforms 覆盖 colorTexture="atmosphere"（uniform-name string，排云）+ u_occlusionTexture="lf_occlusion"', () => {
+    const { bloomComposite } = createLensFlareStage(mockScene(), mockState(), {})
+    const threshold = stagesOf(bloomComposite)[0] as unknown as {
+      uniforms: Record<string, unknown>
+    }
+    expect(threshold.uniforms.colorTexture).toBe('atmosphere')
+    expect(threshold.uniforms.u_occlusionTexture).toBe('lf_occlusion')
+  })
+
+  it('#1: 不传 cloudsOcclusionBridge → occlusion 无 u_cloudsTexture uniform + shader 无云采样（零回归）', () => {
+    const { occlusionStage } = createLensFlareStage(mockScene(), mockState(), {})
+    expect(occlusionStage.uniforms.u_cloudsTexture).toBeUndefined()
+    expect(occlusionStage.fragmentShader).not.toContain('u_cloudsTexture')
+  })
+
+  it('#1: 传 cloudsOcclusionBridge → u_cloudsTexture 闭包（就绪返回 bridge 对象）+ shader 编译云采样', () => {
+    const fakeBridge = { _texture: { dummy: true }, _target: 1 }
+    const { occlusionStage } = createLensFlareStage(mockScene(), mockState(), {
+      cloudsOcclusionBridge: () => fakeBridge
+    })
+    expect(typeof occlusionStage.uniforms.u_cloudsTexture).toBe('function')
+    expect((occlusionStage.uniforms.u_cloudsTexture as () => unknown)()).toBe(fakeBridge)
+    expect(occlusionStage.fragmentShader).toContain('u_cloudsTexture')
+    expect(occlusionStage.fragmentShader).toContain('max(')
+  })
+})

@@ -112,6 +112,12 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
    * 被云影调制 = 太阳周围放射状光柱（云内 applyAerialPerspective 路径只产生 subtle 调制）。
    */
   cloudsShadowLengthBridge?: () => { _texture: unknown; _target: number } | undefined
+  /**
+   * lf×云交互 #1（2026-08-30）：云覆盖率 bridge 透传 createLensFlareStage——lf occlusion 36 点
+   * 采样叠加云遮挡（太阳被云挡时 halo/ghost 按覆盖率衰减，不再穿透云层）。云 march att0
+   * premultiplied 输出（.a=覆盖率）。不传（云未开）→ occlusion 不编译云采样（零回归）。
+   */
+  cloudsOcclusionBridge?: () => { _texture: unknown; _target: number } | undefined
 }
 
 // 校验后的完整 options（hdrDepthTemporal 排除：runtime 基于 stageCreated 决定，非用户 option；buildAtmosphereStage 时注入）。
@@ -478,7 +484,8 @@ export function createAtmosphereStage(
         thresholdLevel: resolved.lensFlareThreshold,
         ghostAmount: resolved.lensFlareGhost,
         haloAmount: resolved.lensFlareHalo,
-        preBlurRadius: resolved.lensFlarePreBlur
+        preBlurRadius: resolved.lensFlarePreBlur,
+        cloudsOcclusionBridge: options.cloudsOcclusionBridge // lf×云 #1 透传（云未开=undefined 零回归）
       },
       temporalEmaEnabled ? 'czm_depth_temporal' : undefined
     )
@@ -643,7 +650,8 @@ export function createAtmosphereStage(
         haloAmount: resolved.lensFlareHalo,
         ...(resolved.lensFlarePreBlur != null
           ? { preBlurRadius: resolved.lensFlarePreBlur }
-          : {})
+          : {}),
+        cloudsOcclusionBridge: options.cloudsOcclusionBridge // lf×云 #1：rebuild（overlay 插入重排）后云桥保持
       },
       temporalEmaEnabled ? 'czm_depth_temporal' : undefined
     )

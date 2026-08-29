@@ -276,6 +276,17 @@ async function main(): Promise<void> {
     let cloudsShadowBridge:
       | (() => { _texture: unknown; _target: number } | undefined)
       | undefined = undefined
+    // lf×云交互 #1（2026-08-30）：云覆盖率 bridge（march att0 premultiplied，.a=覆盖率）→ lf
+    // occlusion 36 点采样叠加云遮挡（太阳被云挡时 halo/ghost 按覆盖率衰减）。同 cloudsShadowBridge
+    // 模式：外层声明、clouds 块赋值、闭包惰性求值（云未开=undefined → occlusion 不编译云采样零回归）。
+    let cloudsOcclusionBridge:
+      | (() => { _texture: unknown; _target: number } | undefined)
+      | undefined = undefined
+    // #3 profile 可重入 wrap（lf×云 2026-08-30）：clouds 块 insertStageBeforeLensFlare 会 remove→重建
+    // lf→re-add tm——新实例若不补 wrap，?profile=1 输出缺 lf*/tonemap 键。启动 wrap 后 clouds 块
+    // insert 成功调 rewrapStages?.() 补 wrap（WeakSet 防重；同名 wrap 覆盖 timer query，旧实例已
+    // remove 不再 execute，残留 read 停旧值无害）。
+    let rewrapStages: (() => void) | undefined = undefined
     // atmosphereHandle 作用域提升（v2 spec §7）：else 块创建、下方 clouds 块 insert
     // overlayStage 到 atmosphere 与 lensFlare 之间——两块平级，需在外层声明共享。
     let atmosphereHandle: AtmosphereStageHandle | undefined
@@ -284,7 +295,8 @@ async function main(): Promise<void> {
     } else {
       atmosphereHandle = createAtmosphereStage(scene, luts, {
         ...options,
-        cloudsShadowLengthBridge: () => cloudsShadowBridge?.()
+        cloudsShadowLengthBridge: () => cloudsShadowBridge?.(),
+        cloudsOcclusionBridge: () => cloudsOcclusionBridge?.()
       })
 
       // 性能 profiling（Phase 0）：?profile=1 逐 stage GPU 计时（EXT_disjoint_timer_query_webgl2）。
@@ -299,6 +311,7 @@ async function main(): Promise<void> {
         }
         const stages = scene.postProcessStages
         const wrapped: Array<{ name: string }> = []
+        const wrappedSet = new WeakSet<object>() // #3 防重 wrap（同实例二次 wrap 会计时嵌套错）
         // 评审 Critical：PostProcessStageComposite 没有 execute 方法（集合内部对 composite 递归逐子
         // stage 调 execute），直接 st.execute.bind 会在 lensflare composite 上抛 TypeError。
         // 有 execute → 包之；否则按 composite 公开 API（length + get(i)，子 stage 在私有 _stages，
@@ -314,6 +327,8 @@ async function main(): Promise<void> {
         }
         const wrapStage = (st: WrappableStage): void => {
           if (typeof st.execute === 'function') {
+            if (wrappedSet.has(st)) return // #3 已 wrap 跳过（可重入）
+            wrappedSet.add(st)
             const name = st.name ?? 'unnamed'
             const orig = (st.execute as (...a: unknown[]) => void).bind(st)
             ;(st as { execute: unknown }).execute = timer.wrap(name, orig as (...a: unknown[]) => void)
@@ -326,9 +341,16 @@ async function main(): Promise<void> {
             console.warn('[profile] 无法 wrap stage', st.name)
           }
         }
-        for (let i = 0; i < stages.length; i++) {
-          wrapStage(stages.get(i) as unknown as WrappableStage)
+        // #3 可重入 wrap 入口：遍历当前 postProcessStages 全量（WeakSet 保证已 wrap 实例跳过、
+        // 新实例补 wrap）。启动调一次；clouds 块 insertStageBeforeLensFlare 成功后再调（重建的
+        // lf/tm 新实例补 wrap——否则输出缺 lf*/tonemap 键）。
+        const wrapAllStages = (): void => {
+          for (let i = 0; i < stages.length; i++) {
+            wrapStage(stages.get(i) as unknown as WrappableStage)
+          }
         }
+        wrapAllStages()
+        rewrapStages = wrapAllStages
         // blit 计时归入 depthTemporal（评审 M7）。depthTemporal 默认 off（Phase 1.1 升级）时 stage 不存在、
         // 无 blit lifecycle → 不注册 hook、snap 也不写 depthTemporal_blit（避免 null 占位混淆）
         if (atmosphereHandle.depthTemporalStage) {
@@ -427,6 +449,10 @@ async function main(): Promise<void> {
         cloudsShadowBridge = cloudsHandle != null
           ? () => cloudsHandle.cloudsPass.getShadowLengthBridge()
           : undefined
+        // lf×云 #1：云覆盖率 bridge（march att0 premultiplied，.a=覆盖率）→ lf occlusion
+        cloudsOcclusionBridge = cloudsHandle != null
+          ? () => cloudsHandle.cloudsPass.getColorBridge()
+          : undefined
         ;(window as unknown as { __cloudsStage?: unknown }).__cloudsStage =
           cloudsHandle
         if (cloudsHandle != null) {
@@ -436,10 +462,14 @@ async function main(): Promise<void> {
           if (atmosphereHandle != null) {
             try {
               atmosphereHandle.insertStageBeforeLensFlare(cloudsHandle.overlayStage)
+              // #3 profile 补 wrap：insert 重建了 lf/tm（新实例）——不补则 ?profile=1 输出缺
+              // lf*/tonemap 键（旧实例已 remove 不再 execute，计时永 not-available）。
+              rewrapStages?.()
             } catch (e) {
               console.error('[clouds] 后处理链插入失败，云已回收', e)
               cloudsHandle.destroy()
               cloudsShadowBridge = undefined
+              cloudsOcclusionBridge = undefined
             }
           } else {
             scene.postProcessStages.add(cloudsHandle.overlayStage) // 独立消费者 fallback（demo 不可达，防御）

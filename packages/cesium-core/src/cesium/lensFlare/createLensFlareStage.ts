@@ -36,6 +36,8 @@ import {
   PixelDatatype,
   PixelFormat,
   Cartesian2,
+  Texture,
+  type Context,
   type Scene
 } from 'cesium'
 import { buildThresholdFragmentShader } from './threshold.frag'
@@ -74,6 +76,14 @@ export interface LensFlareOptions {
   chromaticAberration?: number
   /** preBlur 软化核偏移倍数（ghost/halo 模糊半径，1.0=默认 9-tap box；>1 更糊更大半径）。 */
   preBlurRadius?: number
+  /**
+   * lf×云交互 #1（2026-08-30）：云覆盖率 bridge（march att0 premultiplied 输出，.a=覆盖率，
+   * {_texture,_target} 形态——M5 cloudsShadowLengthBridge 同构）。传入时 occlusion 36 点采样
+   * 叠加云遮挡（每点 max(depth 挡, 云 alpha)）——太阳被云挡时 halo/ghost 按覆盖率衰减，
+   * 不再穿透云层。闭包返回 undefined（云未就绪/已销毁帧）→ 1×1 a=0 dummy（不挡，等价无云）。
+   * 不传（云未开）→ 不编译云采样（shader 逐字节零回归）。
+   */
+  cloudsOcclusionBridge?: () => { _texture: unknown; _target: number } | undefined
 }
 
 /** LensFlare stage 树句柄：持所有 stage/composite 引用，便于运行时控制与销毁。 */
@@ -160,10 +170,18 @@ export function createLensFlareStage(
 
   // ── lf_bloom series composite ──────────────────────────────────────────────
   // C2：get0 = lf_threshold（非 down0）。down0 的 series 前驱是 threshold，读阈值化结果。
+  // lf×云交互 #2（2026-08-30，用户拍板 A）：
+  //   - colorTexture 覆盖为 uniform-name string 'atmosphere'（源钉云前——clouds overlay 在 atmo
+  //     与 lf 之间时 bloom 不读含云画面，亮云不误触发光源；clouds=0 时与内建 series input 同源等价；
+  //     显式钉死后不再依赖链上 lf 前级是谁，insertStageBeforeLensFlare 重排免疫）。
+  //   - u_occlusionTexture = 'lf_occlusion'（uniform-name string 强制依赖，I10 同 preBlur）：
+  //     threshold 输出乘 visibility——太阳被云/地形挡时 bloom 整链衰减。
   const threshold = new PostProcessStage({
     name: 'lf_threshold',
     fragmentShader: buildThresholdFragmentShader(),
     uniforms: {
+      colorTexture: 'atmosphere', // string 字面量（lf×云 #2：源钉 atmosphere，排云+重排免疫）
+      u_occlusionTexture: 'lf_occlusion', // string 字面量（lf×云 #2：bloom 随太阳可见度衰减）
       u_texelSize: texelSizeForSourceScale(scene, 1.0), // 源 = atmosphere（全分）
       u_thresholdLevel: thresholdLevel,
       u_thresholdRange: thresholdRange
@@ -251,9 +269,29 @@ export function createLensFlareStage(
     // 为 depthTemporal.outputTexture（getOutputTexture）；combine 优先 user uniform 覆盖内建 scene depth。
     occlusionUniforms.depthTexture = depthTemporalStageName
   }
+  // lf×云交互 #1：云覆盖率 bridge 注入（{_texture,_target}，M5 cloudsShadowLengthBridge 同构）。
+  // 桥未就绪帧 → 1×1 a=0 dummy（不挡，等价无云）——惰性构造（真 GL uniform 闭包每帧首调时建，
+  // node 测试不调闭包不炸，AtmosphereStage dummy 同模式）。
+  if (options.cloudsOcclusionBridge != null) {
+    const cloudsBridge = options.cloudsOcclusionBridge
+    let cloudsDummy: Texture | undefined
+    const cloudsDummyBridge = (): { _texture: unknown; _target: number } => {
+      cloudsDummy ??= new Texture({
+        context: (scene as unknown as { context: Context }).context,
+        source: { width: 1, height: 1, arrayBufferView: new Uint8Array([0, 0, 0, 0]) },
+        pixelFormat: PixelFormat.RGBA,
+        pixelDatatype: PixelDatatype.UNSIGNED_BYTE
+      })
+      return cloudsDummy as unknown as { _texture: unknown; _target: number }
+    }
+    occlusionUniforms.u_cloudsTexture = () => cloudsBridge() ?? cloudsDummyBridge()
+  }
   const occlusion = new PostProcessStage({
     name: 'lf_occlusion',
-    fragmentShader: buildOcclusionFragmentShader({ useSmoothDepth }),
+    fragmentShader: buildOcclusionFragmentShader({
+      useSmoothDepth,
+      cloudsOcclusion: options.cloudsOcclusionBridge != null
+    }),
     uniforms: occlusionUniforms,
     textureScale: OCCLUSION_TEXTURE_SCALE,
     sampleMode: PostProcessStageSampleMode.NEAREST,

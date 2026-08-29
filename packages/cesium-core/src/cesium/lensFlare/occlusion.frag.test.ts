@@ -68,6 +68,45 @@ describe('OCCLUSION_UNIFORM_NAMES', () => {
   })
 })
 
+// lf×云交互 #1（2026-08-30）：occlusion 感知云覆盖率——云是后处理 overlay 不写 depth，
+// 36 点 depth 采样对「太阳被云挡」恒全可见（visibility=1，halo/ghost 穿透云层）。
+// 修复：cloudsOcclusion=true 时每采样点被挡度 = max(depth 二值挡, 云 alpha 覆盖率)，
+// 云部分遮挡按覆盖率线性衰减 visibility。云桥未接（云未开）→ 不编译采样行（零回归）。
+describe('cloudsOcclusion（lf×云交互 #1：云 alpha 参与 36 点遮挡）', () => {
+  it('cloudsOcclusion=true：声明 u_cloudsTexture + max(depth, cloudA) 加权累计', () => {
+    const s = buildOcclusionFragmentShader({ cloudsOcclusion: true })
+    expect(s).toContain('uniform sampler2D u_cloudsTexture')
+    expect(s).toContain('texture(u_cloudsTexture, sampleUV).a')
+    // max( 加权：depth 挡与云覆盖率取大（云完全挡=1.0 与 depth 等价；半覆盖=0.5）
+    expect(s).toMatch(/max\(/)
+  })
+
+  it('cloudsOcclusion=true：occluded float 化（int++ 不能累计分数覆盖）', () => {
+    const s = buildOcclusionFragmentShader({ cloudsOcclusion: true })
+    expect(s).toContain('float occluded = 0.0')
+  })
+
+  it('cloudsOcclusion=false（默认）：无 u_cloudsTexture 采样（云未开零回归）', () => {
+    const s = buildOcclusionFragmentShader()
+    expect(s).not.toContain('u_cloudsTexture')
+  })
+
+  it('默认分支 float 化与原 int 累计数学等价（coverage 分母 36.0 不变，纯二值 0/1 累加）', () => {
+    const s = buildOcclusionFragmentShader()
+    expect(s).toContain('float occluded = 0.0')
+    expect(s).toContain('/ 36.0')
+  })
+
+  it('glslang 编译通过（cloudsOcclusion=true）', () => {
+    const standalone = buildStandaloneShaderForValidation({ cloudsOcclusion: true })
+    const result = compileFragment(standalone)
+    if (!result.ok) {
+      throw new Error(`glslangValidator 编译失败（occlusion cloudsOcclusion）:\n${result.output}`)
+    }
+    expect(result.ok).toBe(true)
+  })
+})
+
 describe('buildStandaloneShaderForValidation', () => {
   it('#version 300 es + czm_* + czm_readDepth 函数桩', () => {
     const s = buildStandaloneShaderForValidation()

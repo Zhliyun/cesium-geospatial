@@ -46,6 +46,15 @@ export interface OcclusionShaderOptions {
    * false = UNSIGNED_BYTE 兜底（无 depthTemporal），读 czm_readDepth scene globe depth。
    */
   useSmoothDepth?: boolean
+  /**
+   * lf×云交互 #1（2026-08-30）：36 点采样叠加云覆盖率遮挡。云是后处理 overlay 不写
+   * depth——太阳被云挡时 36 点 depth 判定恒全可见（visibility=1，halo/ghost 穿透云层）。
+   * true 时每采样点被挡度 = max(depth 二值挡, 云 alpha)，云部分遮挡按覆盖率线性衰减
+   * visibility。接线层须同时注入 u_cloudsTexture（云 march att0 premultiplied 输出，
+   * .a=覆盖率；桥未就绪帧由接线层喂 1×1 a=0 dummy = 不挡，与无云等价）。
+   * 默认 false：不编译采样行（云未开零回归）。
+   */
+  cloudsOcclusion?: boolean
 }
 
 // 内建纹理 uniform（Cesium non-series input + 场景 depth）+ occlusion 控制 uniform。
@@ -60,6 +69,12 @@ uniform vec3 u_cameraPositionWC;          // 相机世界位置（ray origin；�
 uniform float u_sunAngularRadius;         // 太阳盘角半径（rad，约 0.004675）
 uniform vec3 u_ellipsoidRadiiSquared;     // WGS84 椭球三轴半径平方 [a², b², c²]（scene.globe.ellipsoid.radiiSquared）
 #define DEPTH_EPSILON ${DEPTH_EPSILON.toExponential()}    // log 域 epsilon（legacy useSmoothDepth=false 路径用，单源：lensFlareConstants，沿用 cesium-clouds-atmosphere 实测，spec §5.5/I10）
+`
+
+// lf×云交互 #1：云覆盖率纹理（march att0 premultiplied 输出，.a=云覆盖率）。
+// 条件段——cloudsOcclusion=true 时拼入（云未开不编译，零回归）。
+const CLOUDS_UNIFORM_GLSL = `
+uniform sampler2D u_cloudsTexture;         // 云 march att0（premultiplied，.a=覆盖率；接线层经 bridge 注入，未就绪帧=1×1 a=0 dummy）
 `
 
 // 射线-WGS84 椭球求交（spec §5.5 §2 / M9 椭球，从 T7 occlusion.ts::rayEllipsoidIntersect 移植到 GLSL）。
@@ -96,17 +111,24 @@ const vec2 SAMPLE_GRID_36[36] = vec2[](${generateSampleGrid36()
 //     输出 .a=smoothDepth，raw log-depth EMA），阈值 1.0 - FOG_PLANE_LOGDEPTH_EPS(1e-4)。
 //   useSmoothDepth=false（UNSIGNED_BYTE 兜底）：czm_readDepth(depthTexture, sampleUV)（scene globe
 //     depth，log-depth 解码），阈值 1.0 - DEPTH_EPSILON(1e-6)。
-function buildMainGlsl(useSmoothDepth: boolean): string {
+// 累计形态（lf×云交互 #1）：occluded float 化（原 int++ 只能二值累计——云部分遮挡需分数覆盖）。
+//   cloudsOcclusion=true：每点被挡度 = max(depth 二值挡, 云 alpha)——depth 全挡或云覆盖率取大。
+//   cloudsOcclusion=false：纯 depth 二值 0/1 累加，与原 int++ 数学等价（分母 36.0 不变）。
+function buildMainGlsl(useSmoothDepth: boolean, cloudsOcclusion: boolean): string {
   const depthRead = useSmoothDepth
     ? // Task 10：同源 depthTemporal smoothDepth（.a，raw log-depth EMA），与 atmosphere 统一消抖
       `float d = texture(depthTexture, sampleUV).a;`
     : // legacy：scene globe depth（czm_readDepth 解码 log-depth）
       `float d = czm_readDepth(depthTexture, sampleUV);`
-  const threshold = useSmoothDepth
+  const isBlockedExpr = useSmoothDepth
     ? // farPlane/未加载 depth≈1 排除（1e-4 = depthTemporal FOG_PLANE_LOGDEPTH_EPS，与 atmosphere 同源；对齐 aerialPerspective.frag.ts 字面量写法）
-      `if (d < 1.0 - 1e-4) occluded++;`
+      `(d < 1.0 - 1e-4)`
     : // sceneDepth < 1.0 - DEPTH_EPSILON = 几何存在 = 被挡（天空/远面 depth≈1.0 不挡）
-      `if (d < 1.0 - DEPTH_EPSILON) occluded++;`
+      `(d < 1.0 - DEPTH_EPSILON)`
+  const accumulate = cloudsOcclusion
+    ? // 云遮挡按覆盖率线性计入（云完全挡 a=1 与 depth 等价；半覆盖 a=0.5 → 该点半挡）
+      `max(${isBlockedExpr} ? 1.0 : 0.0, texture(u_cloudsTexture, sampleUV).a)`
+    : `${isBlockedExpr} ? 1.0 : 0.0`
   return `
 in vec2 v_textureCoordinates;
 
@@ -125,14 +147,14 @@ void main() {
   // ③ depth 36 点覆盖率：sun 屏幕位置周围 sunAngularRadius 投影圆内 6×6 网格采 depthTexture。
   // NDC 半径 = tan(α) * cot(fovy/2)；czm_projection[1][1]（列主 [col=1][row=1]）= cot(fovy/2)。
   float ndcRadius = tan(u_sunAngularRadius) * czm_projection[1][1];
-  int occluded = 0;
+  float occluded = 0.0;   // float（lf×云 #1）：云部分遮挡需分数覆盖累计（纯 depth 时二值 0/1 与 int++ 等价）
   for (int i = 0; i < 36; ++i) {
     vec2 sampleNDC = sunNDC + SAMPLE_GRID_36[i] * ndcRadius;
     vec2 sampleUV = sampleNDC * 0.5 + 0.5;
     ${depthRead}
-    ${threshold}
+    occluded += ${accumulate};
   }
-  float coverage = float(occluded) / 36.0;   // 被挡比例（0=全可见，1=全挡）
+  float coverage = occluded / 36.0;   // 被挡比例（0=全可见，1=全挡）
   float visibility = 1.0 - coverage;          // 0=全挡，1=全可见
   out_FragColor = vec4(visibility, 0.0, 0.0, 1.0);
 }
@@ -155,12 +177,13 @@ export const OCCLUSION_UNIFORM_NAMES: string[] = [
 export function buildOcclusionFragmentShader(
   options: OcclusionShaderOptions = {}
 ): string {
-  const { useSmoothDepth = true } = options
+  const { useSmoothDepth = true, cloudsOcclusion = false } = options
   return [
     UNIFORMS_GLSL,
+    ...(cloudsOcclusion ? [CLOUDS_UNIFORM_GLSL] : []),
     HELPERS_GLSL,
     SAMPLE_GRID_GLSL,
-    buildMainGlsl(useSmoothDepth)
+    buildMainGlsl(useSmoothDepth, cloudsOcclusion)
   ].join('\n')
 }
 
