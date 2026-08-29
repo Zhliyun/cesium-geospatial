@@ -14,6 +14,12 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
+// Texture 实例探针（终审 Finding 1）：buildImpl 内部的 shadowTurbulenceDummy 经 new Texture
+// 创建、不经 handle 暴露——同 resolvePassProbe 范式在 mock 工厂闭包外持实例引用，供换档×
+// temporal 完整销毁清单断言（destroy 为逐实例 vi.fn）。mock 链路下每次 buildImpl（shadow 开）
+// 恰建 1 个 Texture（全链路唯一 new Texture 点）。
+const textureProbe = { instances: [] as any[] }
+
 // vi.mock('cesium')：仅 mock WebGL 类（PostProcessStage/Sampler），保留真实 math（Cartesian3/Matrix3 等）+
 // Simon1994/Transforms/JulianDate（preRender sunDirection 算法用，真实实现可 node 跑）。
 vi.mock('cesium', async (importOriginal) => {
@@ -41,6 +47,7 @@ vi.mock('cesium', async (importOriginal) => {
       this.pixelDatatype = opts.pixelDatatype
       this.source = opts.source
       this.destroy = vi.fn()
+      textureProbe.instances.push(this)
     }
   }
 })
@@ -924,6 +931,38 @@ describe('setQuality 行为（spec §7 v3）', () => {
     firePreRender(scene)
     expect(handle.shadowState.far).toBe(21e3)
     // getter 反映新 impl（新 cloudsPass 实例）
+    expect(handle.cloudsPass).not.toBe(oldPass)
+  })
+
+  it('换档×temporal：完整销毁清单含 resolvePass 与 shadowTurbulenceDummy（spec §9④ 字面覆盖补齐，终审 Finding 1）', () => {
+    // 弥合既有两条用例的组合缺口：「换档」用例非 temporal（只断言三件），「temporal 销毁」
+    // 用例走 handle.destroy 而非换档。本用例组合 setQuality 换档 × temporal=true，断言
+    // buildImpl destroy 五件套全被调（cloudsPass + resolvePass + shadowPass +
+    // shadowTurbulenceDummy + overlay remove——createCloudsStage.ts destroy() 全清单）。
+    textureProbe.instances.length = 0
+    resolvePassProbe.instances.length = 0
+    const { handle, scene } = createStage({ temporal: true, quality: 'high' })
+    // 换档前捕获旧 impl 五件资源（getter 此刻读旧 impl；resolvePass/dummy 经探针取）
+    const oldPass = handle.cloudsPass
+    const oldShadowDestroy = handle.shadowPass!.destroy as unknown as Mock
+    const oldOverlay = handle.overlayStage
+    const oldResolve = resolvePassProbe.instances[0]
+    // temporal=true 首建恰 1 个 Texture——即生成端 turbulence dummy（shadowPass 默认开；
+    // mock 链路下全链路唯一 new Texture 点）
+    expect(textureProbe.instances).toHaveLength(1)
+    const oldDummyDestroy = textureProbe.instances[0].destroy as unknown as Mock
+    handle.setQuality('low')
+    // 完整销毁清单（spec §9④）：四件 destroy 各恰 1 次 + overlay 从 postProcessStages 摘除
+    expect(oldPass.destroy as unknown as Mock).toHaveBeenCalledTimes(1)
+    expect(oldResolve.destroy).toHaveBeenCalledTimes(1)
+    expect(oldShadowDestroy).toHaveBeenCalledTimes(1)
+    expect(oldDummyDestroy).toHaveBeenCalledTimes(1)
+    expect(scene.postProcessStages.remove).toHaveBeenCalledWith(oldOverlay)
+    // 重建新 impl：temporal/shadow 随用户 options + low 档保留 → 新 dummy/新 resolvePass
+    // 已建且未销毁（销毁的恰是旧实例）
+    expect(textureProbe.instances).toHaveLength(2)
+    expect(textureProbe.instances[1].destroy).not.toHaveBeenCalled()
+    expect(resolvePassProbe.instances[1].destroy).not.toHaveBeenCalled()
     expect(handle.cloudsPass).not.toBe(oldPass)
   })
 
