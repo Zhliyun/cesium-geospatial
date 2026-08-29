@@ -14,7 +14,7 @@
 | 包 | 结果 |
 |---|---|
 | @cesium-geospatial/core | 32 files / **295 passed**（基线 281 + insert API 新增 14） |
-| @cesium-geospatial/clouds | 15 files / **207 passed**（基线 203，改写 1 + 新增 5） |
+| @cesium-geospatial/clouds | 15 files / **207 passed**（基线 203，改写 5 + 新增 4） |
 | tsc --noEmit 三包 | 零错误 |
 
 （T2 fix round 补 §8.1.11b 回滚失败锁；T3 fix round 补跨 impl 强断言与 listener 摘除断言。）
