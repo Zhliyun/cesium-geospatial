@@ -259,6 +259,24 @@ async function main(): Promise<void> {
       ...(getNumber('limbDecay') != null ? { limbGlowDecayKm: getNumber('limbDecay')! } : {}),
       // M5 云 god rays 光柱增益：默认 1 物理精确（subtle 对齐 three）；?cloudsGodRays=20 艺术放大出可见光柱
       ...(getNumber('cloudsGodRays') != null ? { cloudsGodRaysGain: getNumber('cloudsGodRays')! } : {}),
+      // 月光（2026-08-30 方向 C）：?moon=0 全关（月盘不编入+云月光乘 0）——诊断基线；
+      // ?moonRadiance= 月盘倍率（默认 60）；?moonAngularRadius= 月盘角半径 rad（默认 0.0045，
+      // 放大时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 50000）。
+      ...(getString('moon') === '0' ? { moon: false } : {}),
+      ...(getNumber('moonRadiance') != null ? { moonRadianceScale: getNumber('moonRadiance')! } : {}),
+      ...(getNumber('moonAngularRadius') != null
+        ? (() => {
+            const omega = getNumber('moonAngularRadius')!
+            const k = omega / 0.0045 // 物理默认比
+            // ω 可调时倍率**默认值**同步 ×k²（同式下每像素 radiance ∝ 1/ω²，保持显示亮度——
+            // spec §5.2）。仅未显式传 ?moonRadiance= 时补偿；显式值用户自理不补偿（brief 行内
+            // 注释/全局约束/spec 三处一致；守卫式而非 spread 顺序——两参同传语义不随顺序漂移）。
+            // 60 = 库内 moonRadianceScale 默认（AtmosphereStage.ts）。
+            return getNumber('moonRadiance') != null
+              ? { moonAngularRadius: omega }
+              : { moonAngularRadius: omega, moonRadianceScale: 60 * k * k }
+          })()
+        : {}),
       // depthTemporal EMA（Task 12）：默认 EMA 开 + low preset；?temporalEma=0 关闭，?temporalQuality=high 弱平滑
       temporalEma: getString('temporalEma') !== '0',
       temporalLowAlpha: temporalPreset.lowAlpha,
@@ -440,9 +458,21 @@ async function main(): Promise<void> {
           // 云 overlay 曝光（默认 12 线性域缩放，2026-08-29 V2 验收定稿；偏灰调大/过曝调小）
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {}),
           // 夜间环境底光（方向 B，2026-08-29）：夜间云照明地板（默认 0.12 标定夜空底光量级；
-          // 0 = 关闭回退纯黑夜间云）——调参验收用
-          ...(getNumber('cloudsNightAmbient') != null
-            ? { parameters: { nightAmbient: getNumber('cloudsNightAmbient')! } }
+          // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
+          // parameters.moonLightScale，默认 50000）；?moon=0 全关诊断基线 → 云月光强制乘 0
+          // （排在显式 moonLightScale 之后，全关语义优先盖过）
+          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0'
+            ? {
+                parameters: {
+                  ...(getNumber('cloudsNightAmbient') != null
+                    ? { nightAmbient: getNumber('cloudsNightAmbient')! }
+                    : {}),
+                  ...(getNumber('moonLightScale') != null
+                    ? { moonLightScale: getNumber('moonLightScale')! }
+                    : {}),
+                  ...(getString('moon') === '0' ? { moonLightScale: 0 } : {})
+                }
+              }
             : {})
         })
         // 暴露 window.__cloudsStage（调试/控制台 destroy 用，同 __cloudsSpike 模式）
