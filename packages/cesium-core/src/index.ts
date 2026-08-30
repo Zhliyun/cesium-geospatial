@@ -10,6 +10,12 @@ export {
   SUN_ANGULAR_RADIUS
 } from './math/atmosphereParameters'
 export { getAltitudeCorrectionOffset } from './math/altitudeCorrection'
+// 夜间光照月方向/月相单源（spec 2026-08-30 r2 §4）——AtmosphereStage 月盘与 clouds 月光照明共用
+export {
+  computeMoonDirectionECEF,
+  computeMoonIlluminatedFraction,
+  computeMoonIlluminatedFractionFromDirections
+} from './celestial/celestialDirections'
 // Cesium 对数深度反演 GLSL（czm_reverseLogDepthDist/Window 等）——cesium-clouds 的
 // getRayDistanceToScene（globe depth 截断 march）跨包复用，勿重命名 GLSL 内函数名。
 export { LOG_DEPTH_GLSL } from './cesium/logDepth'
