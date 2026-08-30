@@ -122,9 +122,11 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   // ── 月盘（2026-08-30 夜间光照 spec r2 §5）──
   // moon?: boolean 继承自 AerialPerspectiveFragOptions（默认 true；创建期语义：切换=重建 stage，
   // 同 sun/sky 惯例，运行时切换不在范围）。
-  /** 月盘亮度倍率（默认 60=inscatterScale(25) 等效补偿 × diffuse 因子；URL ?moonRadiance=）。 */
+  /** 月盘亮度倍率（默认 120；URL ?moonRadiance=。60=inscatterScale 补偿×diffuse 基准，
+   *  2026-08-30 用户视觉拍板 ×2 提亮）。 */
   moonRadianceScale?: number
-  /** 月盘角半径 rad（默认 0.0045≈15.5′ 真实值；URL ?moonAngularRadius= 艺术放大）。 */
+  /** 月盘角半径 rad（默认 0.0135=物理值×3 艺术放大，2026-08-30 用户拍板「物理 9px 偏小」；
+   *  URL ?moonAngularRadius= 再调）。 */
   moonAngularRadius?: number
 }
 
@@ -263,9 +265,9 @@ export function validateAtmosphereOptions(
     // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5；moon?: boolean 经 Required 传入本 resolved 类型，
     // 缺行会 tsc 报 TS2741——T3 接线在此之上追加 moonDirection/moonAngularRadius/u_moonRadiance uniforms）
     moon: options.moon ?? true,
-    // 月盘亮度/角半径默认（spec r2 §5.4）：60=inscatterScale(25) 等效补偿 × diffuse 因子；0.0045 rad≈15.5′ 真实月盘
-    moonRadianceScale: options.moonRadianceScale ?? 60,
-    moonAngularRadius: options.moonAngularRadius ?? 0.0045,
+    // 月盘亮度/角半径默认（2026-08-30 用户视觉拍板）：120=基准 60×2 提亮；0.0135 rad=物理 0.0045×3
+    moonRadianceScale: options.moonRadianceScale ?? 120,
+    moonAngularRadius: options.moonAngularRadius ?? 0.0135,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,

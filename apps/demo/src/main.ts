@@ -260,21 +260,21 @@ async function main(): Promise<void> {
       // M5 云 god rays 光柱增益：默认 1 物理精确（subtle 对齐 three）；?cloudsGodRays=20 艺术放大出可见光柱
       ...(getNumber('cloudsGodRays') != null ? { cloudsGodRaysGain: getNumber('cloudsGodRays')! } : {}),
       // 月光（2026-08-30 方向 C）：?moon=0 全关（月盘不编入+云月光乘 0）——诊断基线；
-      // ?moonRadiance= 月盘倍率（默认 60）；?moonAngularRadius= 月盘角半径 rad（默认 0.0045，
-      // 放大时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 50000）。
+      // ?moonRadiance= 月盘倍率（默认 120）；?moonAngularRadius= 月盘角半径 rad（默认 0.0135=物理×3，
+      // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 50000）。
       ...(getString('moon') === '0' ? { moon: false } : {}),
       ...(getNumber('moonRadiance') != null ? { moonRadianceScale: getNumber('moonRadiance')! } : {}),
       ...(getNumber('moonAngularRadius') != null
         ? (() => {
             const omega = getNumber('moonAngularRadius')!
-            const k = omega / 0.0045 // 物理默认比
+            const k = omega / 0.0135 // 库默认比（0.0135=物理 0.0045×3，用户拍板）
             // ω 可调时倍率**默认值**同步 ×k²（同式下每像素 radiance ∝ 1/ω²，保持显示亮度——
             // spec §5.2）。仅未显式传 ?moonRadiance= 时补偿；显式值用户自理不补偿（brief 行内
             // 注释/全局约束/spec 三处一致；守卫式而非 spread 顺序——两参同传语义不随顺序漂移）。
-            // 60 = 库内 moonRadianceScale 默认（AtmosphereStage.ts）。
+            // 120 = 库内 moonRadianceScale 默认（AtmosphereStage.ts）。
             return getNumber('moonRadiance') != null
               ? { moonAngularRadius: omega }
-              : { moonAngularRadius: omega, moonRadianceScale: 60 * k * k }
+              : { moonAngularRadius: omega, moonRadianceScale: 120 * k * k }
           })()
         : {}),
       // depthTemporal EMA（Task 12）：默认 EMA 开 + low preset；?temporalEma=0 关闭，?temporalQuality=high 弱平滑
