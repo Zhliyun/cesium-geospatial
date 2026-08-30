@@ -302,7 +302,7 @@ describe('validateAtmosphereOptions', () => {
       cloudsGodRaysGain: 1.0,
       // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5）+ 月盘亮度/角半径默认（T3 接线）
       moon: true,
-      moonRadianceScale: 120, // 基准 60×2 提亮（2026-08-30 用户视觉拍板）
+      moonRadianceScale: 1440, // 基准 60×12（2026-08-30 用户视觉拍板「与现实月面亮度一致」）
       moonAngularRadius: 0.0135, // 物理 0.0045×3 艺术放大（2026-08-30 用户拍板「物理 9px 偏小」）
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
@@ -846,21 +846,21 @@ describe('depthTemporal options 参数化（Task 12）', () => {
 
 // —— 月光 T3：options/state/uniforms/preRender 接线（2026-08-30 夜间光照 spec r2 §5.4）——
 describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
-  it('validate 默认：moonRadianceScale=120 / moonAngularRadius≈0.0135（moon=true 已固化于默认值用例）', () => {
+  it('validate 默认：moonRadianceScale=1440 / moonAngularRadius≈0.0135（moon=true 已固化于默认值用例）', () => {
     const r = validateAtmosphereOptions({})
     expect(r.moon).toBe(true)
-    expect(r.moonRadianceScale).toBe(120)
+    expect(r.moonRadianceScale).toBe(1440)
     expect(r.moonAngularRadius).toBeCloseTo(0.0135, 6)
   })
 
   it('validate 覆盖：moon=false / 自定义亮度与角半径透传', () => {
     const r = validateAtmosphereOptions({
       moon: false,
-      moonRadianceScale: 120,
+      moonRadianceScale: 240,
       moonAngularRadius: 0.01
     })
     expect(r.moon).toBe(false)
-    expect(r.moonRadianceScale).toBe(120)
+    expect(r.moonRadianceScale).toBe(240)
     expect(r.moonAngularRadius).toBe(0.01)
   })
 
@@ -880,7 +880,7 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
     expect(typeof u.moonDirection).toBe('function')
     expect((u.moonDirection as () => Cartesian3)()).toBe(state.moonDirection)
     expect(u.moonAngularRadius).toBeCloseTo(0.0135, 6)
-    expect(u.u_moonRadiance).toBe(120)
+    expect(u.u_moonRadiance).toBe(1440)
   })
 
   it('buildAtmosphereStage fragmentShader 透传 moon（moon=false 时 shader 无 moonDirection）', () => {
