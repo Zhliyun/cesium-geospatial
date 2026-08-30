@@ -62,6 +62,14 @@ uniform float powderExponent;
 // ≈ 18/255 display，与夜空底光（skyBox 星空经大气压暗的残余，实测 16-28/255）同量级。
 uniform float nightAmbient;
 
+// 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
+// （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/
+// 望 1，JS 侧按 sun/moon 两方向 dot 算）；moonLightScale=50000 艺术放大（物理 2.5e-6 不可见，
+// 满月贡献 ≈nightAmbient×1.5 主导；视觉拍板可调）。
+uniform vec3 moonDirection;
+uniform float moonIlluminatedFraction;
+uniform float moonLightScale;
+
 // Primary raymarch
 uniform int maxIterationCount;
 uniform float minStepSize;
@@ -554,6 +562,13 @@ vec4 marchClouds(
       float nightFactor = 1.0 - smoothstep(-0.1045, -0.0175, muSunLocal);
       skyIrradiance += vec3(nightAmbient) * nightFactor;
 
+      // 月光门 2：月升落（spec §6.2）——月落后 moonDirection 在地平线下，无此门云被
+      // 「地下来的光」照亮、云底亮反转（弦月下半夜必现）。窗口 -0.05..0.02 ≈
+      // sin(-2.87°)..sin(+1.15°)：下沿 ≈8km 云层顶的地平俯角。门 1（昼夜分账）复用
+      // 上方 nightFactor——白天精确 0（云侧零回归）、晨昏带与底光同曲线淡入。
+      float moonFactor = moonIlluminatedFraction
+        * smoothstep(-0.05, 0.02, dot(surfaceNormal, moonDirection));
+
       // March optical depth to the sun for finer details, which BSM lacks.
       float sunRayDistance = 0.0;
       float opticalDepth = marchOpticalDepth(
@@ -579,6 +594,26 @@ vec4 marchClouds(
       }
 
       vec3 radiance = sunIrradiance * approximateMultipleScattering(opticalDepth, cosTheta);
+
+      // 月光散射项（spec §6.1）：独立构造 moonIrradiance（非 sun 项乘系数——夜间 LUT 太阳
+      // 项已归零）；朝月独立 march 光深（复用太阳方向会杀死「云顶被月光照亮」主视觉——
+      // 夜间太阳在地平下方向反了；maxIterationCountToSun=2 同预算，成本 +2 采样/受照样本）；
+      // 不采 BSM（月光无云影）、不走 accurate LUT 路径；相位函数复用
+      // approximateMultipleScattering（随 ACCURATE_PHASE_FUNCTION define 与太阳项一致）。
+      // 同构并列于 sun 项——随后自然走 ×scattering/powder/能量积分，形体感与太阳光照一致。
+      float moonRayDistance = 0.0;
+      float moonOpticalDepth = marchOpticalDepth(
+        position,
+        moonDirection,
+        maxIterationCountToSun,
+        mipLevel,
+        jitter,
+        moonRayDistance
+      );
+      float cosThetaMoon = dot(moonDirection, rayDirection);
+      vec3 moonIrradiance = ATMOSPHERE.solar_irradiance
+        * 2.5e-6 * moonLightScale * nightFactor * moonFactor;
+      radiance += moonIrradiance * approximateMultipleScattering(moonOpticalDepth, cosThetaMoon);
 
       #ifdef GROUND_BOUNCE
       // Fudge factor for the irradiance from ground.

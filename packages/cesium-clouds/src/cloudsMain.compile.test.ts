@@ -367,3 +367,37 @@ describe('夜间环境底光 nightAmbient（方向 B）', () => {
     expect(ok).toBe(true)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 月光方向性照明（2026-08-30 方向 C，spec r2 §6）：光照循环第四项——独立构造
+// moonIrradiance（非 sun 项乘系数），朝月独立 march 光深，两道门
+// （nightFactor 昼夜分账 + 月升落 smoothstep），相位复用 approximateMultipleScattering。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('月光光照项（方向 C）', () => {
+  it('三 uniform 声明 + moon march + 两道门 + 独立 moonIrradiance 构造', () => {
+    const src = buildCloudsMainFragmentShader({})
+    expect(src).toContain('uniform vec3 moonDirection;')
+    expect(src).toContain('uniform float moonIlluminatedFraction;')
+    expect(src).toContain('uniform float moonLightScale;')
+    // 朝月独立 march（不复用太阳 opticalDepth——夜间太阳在地平下方向反了）
+    expect(src).toContain('float moonOpticalDepth = marchOpticalDepth(')
+    // 门 1：nightFactor 复用（同 smoothstep 变量，白天精确 0）
+    expect(src).toContain('2.5e-6 * moonLightScale * nightFactor * moonFactor')
+    // 门 2：月升落（surfaceNormal 径向，窗口 sin(-2.87°)..sin(+1.15°)）
+    expect(src).toContain('smoothstep(-0.05, 0.02, dot(surfaceNormal, moonDirection))')
+    // 相函数复用（cosTheta 重算，非太阳 cosTheta）
+    expect(src).toContain('float cosThetaMoon = dot(moonDirection, rayDirection);')
+    expect(src).toContain('approximateMultipleScattering(moonOpticalDepth, cosThetaMoon)')
+    // 与 sun 项同构并列（随后自然走 ×scattering/powder/能量积分）
+    expect(src).toMatch(/radiance \+= moonIrradiance \* approximateMultipleScattering/)
+  })
+
+  it('glslang：含 moon 项完整 shader 真编译', () => {
+    const src = buildStandaloneCloudsShaderForValidation({})
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(`glslang 编译失败:\n${output}\n` + src.split('\n').slice(0, 60).map((l, i) => `${i + 1}: ${l}`).join('\n'))
+    }
+    expect(ok).toBe(true)
+  })
+})
