@@ -299,6 +299,8 @@ describe('validateAtmosphereOptions', () => {
       limbGlowDecayKm: 30.0,
       // M5 云 god rays 光柱增益默认 1（物理精确 subtle 对齐 three）
       cloudsGodRaysGain: 1.0,
+      // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5；uniforms 接线由月光 T3 补）
+      moon: true,
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,

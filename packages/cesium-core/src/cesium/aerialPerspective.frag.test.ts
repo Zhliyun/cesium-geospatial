@@ -250,16 +250,19 @@ describe('M5 atmosphere 路径（cloudsShadowLength 编译分支）', () => {
     expect(src).toContain('#define CLOUDS_SHADOW_LENGTH')
     expect(src).toContain('uniform sampler2D u_cloudsShadowLength;')
     expect(src).toContain('texture(u_cloudsShadowLength, v_textureCoordinates).r')
+    // 只钉前 6 参：月盘 MOON 段（spec r2 §5）默认给调用追加第 7 参 out moonDisc（golden 逐字符守门
+    // 只保 moon=false；默认 moon=true 的调用文本变化属预期，由 compile test 的 MOON 段用例守门）
     expect(src).toContain(
-      'getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance);'
+      'getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance'
     )
   })
 
   it('关（默认）：无 define，天空 shadow_length=0（零回归）', () => {
     const src = buildAerialPerspectiveFragmentShader({})
     expect(src).not.toContain('#define CLOUDS_SHADOW_LENGTH')
+    // 只钉前 6 参（同上：默认 moon=true 时调用多第 7 参 out moonDisc；moon=false 零回归由 golden snapshot 守门）
     expect(src).toContain(
-      'getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance);'
+      'getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance'
     )
     expect(src).toContain('const float cloudsShadowLength = 0.0;')
   })

@@ -245,6 +245,9 @@ export function validateAtmosphereOptions(
     limbGlowDecayKm: options.limbGlowDecayKm ?? 30.0,
     // M5 云 god rays 增益默认 1（物理精确 subtle 对齐 three；demo ?cloudsGodRays= 艺术放大出可见光柱）
     cloudsGodRaysGain: options.cloudsGodRaysGain ?? 1.0,
+    // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5；moon?: boolean 经 Required 传入本 resolved 类型，
+    // 缺行会 tsc 报 TS2741——T3 接线在此之上追加 moonDirection/moonAngularRadius/u_moonRadiance uniforms）
+    moon: options.moon ?? true,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
