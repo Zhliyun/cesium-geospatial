@@ -1089,3 +1089,62 @@ describe('setQuality 行为（spec §7 v3）', () => {
     handle!.destroy()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 月光接线（spec 2026-08-30 r2 §6.5）：moonLightScale 参数默认 + FrameState 月字段 +
+// buildSharedCloudsUniforms 三键 + onPreRender 每帧更新
+// ─────────────────────────────────────────────────────────────────────────────
+import { defaultCloudsParameters } from './cloudsDefaultParameters'
+import { computeMoonIlluminatedFractionFromDirections } from '@cesium-geospatial/core'
+import type { CloudsFrameState } from './CloudsPass'
+
+describe('月光接线（spec r2 §6.5）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('defaultCloudsParameters.moonLightScale 默认 50000', () => {
+    expect(defaultCloudsParameters().moonLightScale).toBe(50000)
+  })
+
+  it('buildSharedCloudsUniforms 含月光三键（moonDirection/moonIlluminatedFraction 闭包直读 state，moonLightScale 读 params）', async () => {
+    // 本文件把 ./CloudsPass mock 成编排骨桩（__sharedProbe）——importActual 取真实实现
+    // 验月光三键（真实共享段已由 CloudsPass.test 覆盖，此处仅锁月光键接线）
+    const actual = await vi.importActual<typeof import('./CloudsPass')>('./CloudsPass')
+    const state: CloudsFrameState = {
+      sunDirection: new Cartesian3(0, 0, 1),
+      moonDirection: new Cartesian3(1, 0, 0),
+      moonIlluminatedFraction: 0.5,
+      altitudeCorrection: new Cartesian3()
+    }
+    const uniforms = actual.buildSharedCloudsUniforms(
+      createMockScene(),
+      createMockLuts(),
+      createMockWeather(),
+      state,
+      defaultCloudsParameters(),
+      {} as any // turbulence dummy：buildSharedCloudsUniforms 仅闭包透传，不消费
+    )
+    expect((uniforms.moonDirection as () => Cartesian3)()).toBe(state.moonDirection)
+    expect((uniforms.moonIlluminatedFraction as () => number)()).toBe(0.5)
+    expect((uniforms.moonLightScale as () => number)()).toBe(50000)
+  })
+
+  it('preRender 月光接线：state.moonDirection 更新为单位向量 + moonIlluminatedFraction = FromDirections(sun, moon)（同帧同源自洽）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    firePreRender(scene)
+    // 初始 (0,0,1)/0 已被覆盖：moonDirection 为 ECEF 单位向量、月相因子 ∈ (0,1]
+    expect(Cartesian3.magnitude(stateArg.moonDirection)).toBeCloseTo(1, 5)
+    expect(stateArg.moonIlluminatedFraction).toBeGreaterThan(0)
+    expect(stateArg.moonIlluminatedFraction).toBeLessThanOrEqual(1)
+    // 与 core FromDirections 版自洽（preRender 用 state 两方向 dot 求 elongation）
+    const expected = computeMoonIlluminatedFractionFromDirections(
+      stateArg.sunDirection,
+      stateArg.moonDirection
+    )
+    expect(stateArg.moonIlluminatedFraction).toBeCloseTo(expected, 12)
+    handle!.destroy()
+  })
+})

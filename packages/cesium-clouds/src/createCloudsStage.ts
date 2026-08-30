@@ -3,6 +3,9 @@
 // M2 T3：顶层工厂——编排 CloudsPass + cloudsBuffer bridge → 接 createAtmosphereStage PostProcess 链
 // （cloudsBuffer overlay 在 atmosphere 之后，spec §4.3）。czm 桥接（spec §4.2）：
 //   - sunDirection：Simon1994 + ICRF→Fixed → ECEF（preRender 每帧更新，仿 AtmosphereStage）
+//   - moonDirection/moonIlluminatedFraction：月光照明（方向 C，spec r2 §6.5）——Simon1994 月位置
+//     复用太阳段 icrfToFixed + 视差修正 origin=camera+altitudeCorrection；月相因子由 state
+//     两方向 dot 算（computeMoonIlluminatedFractionFromDirections，同帧同源）
 //   - altitudeCorrection：getAltitudeCorrectionOffset（密切球再中心化，R2 防大坐标单精度失效）
 //   - reprojectionMatrix/viewReprojectionMatrix/temporalJitter：M2 dummy identity/0（M4 temporal 接通）
 //
@@ -82,6 +85,8 @@ import {
 import {
   getAltitudeCorrectionOffset,
   ATMOSPHERE_BOTTOM_RADIUS_M,
+  computeMoonDirectionECEF,
+  computeMoonIlluminatedFractionFromDirections,
   type AtmosphereLUTs
 } from '@cesium-geospatial/core'
 import {
@@ -294,9 +299,12 @@ function buildCloudsStageImpl(
   // ── 每帧可变状态（createCloudsStage 持有；preRender 更新；CloudsPass uniformMap 闭包读引用）──
   const state: CloudsFrameState = {
     sunDirection: new Cartesian3(0, 0, 1),
+    moonDirection: new Cartesian3(0, 0, 1),
+    moonIlluminatedFraction: 0,
     altitudeCorrection: new Cartesian3()
   }
   const sunInertialScratch = new Cartesian3()
+  const moonOriginScratch = new Cartesian3()
   const icrfScratch = new Matrix3()
   const normalScratch = new Cartesian3()
   // world 分支量化太阳 scratch（spec §3.1.8：仅矩阵输入量化，逐帧覆写复用）
@@ -495,6 +503,18 @@ function buildCloudsStageImpl(
       if (Number.isFinite(sunMag) && sunMag > 1e-15) {
         Cartesian3.normalize(sunFixed, state.sunDirection)
       }
+
+      // 月方向（方向 C，spec §6.5）：origin = camera.positionWC + altitudeCorrection（米）——
+      // 与 atmosphere 侧同式同源（spec r2 N2：显式公式，弃「密切球心」二义措辞）。icrfToFixed
+      // 复用上方太阳段（同帧共享）。
+      Cartesian3.add(camera.positionWC, state.altitudeCorrection, moonOriginScratch)
+      computeMoonDirectionECEF(time, icrfToFixed, moonOriginScratch, state.moonDirection)
+      // 月相因子：state 两方向 dot 求 elongation（Lambert 球积分；不独立调 core 独立版——
+      // 每帧省 Simon1994×2+ICRF×1，spec §4.1 注）
+      state.moonIlluminatedFraction = computeMoonIlluminatedFractionFromDirections(
+        state.sunDirection,
+        state.moonDirection
+      )
     }
 
     // ── M4 temporal：Bayer jitter + reprojection 矩阵（march ray 重建偏移 + velocity 两分支消费）──

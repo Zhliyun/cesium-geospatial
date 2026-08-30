@@ -114,6 +114,8 @@ import { Cartesian2, Cartesian3, Matrix4 } from 'cesium'
 describe('createCloudsPass', () => {
   const state: CloudsFrameState = {
     sunDirection: { x: 1, y: 0, z: 0 } as any,
+    moonDirection: { x: 1, y: 0, z: 0 } as any,
+    moonIlluminatedFraction: 0.5,
     altitudeCorrection: { x: 0, y: 0, z: 0 } as any
   }
 
@@ -228,6 +230,8 @@ describe('createCloudsPass', () => {
     const texelSize = new Cartesian2(1 / 512, 1 / 512)
     const st: CloudsFrameState = {
       sunDirection: { x: 1, y: 0, z: 0 } as any,
+      moonDirection: { x: 1, y: 0, z: 0 } as any,
+      moonIlluminatedFraction: 0.5,
       altitudeCorrection: { x: 0, y: 0, z: 0 } as any,
       shadow: {
         matrices,
@@ -264,6 +268,8 @@ describe('createCloudsPass', () => {
     vi.clearAllMocks()
     const st: CloudsFrameState = {
       sunDirection: { x: 1, y: 0, z: 0 } as any,
+      moonDirection: { x: 1, y: 0, z: 0 } as any,
+      moonIlluminatedFraction: 0.5,
       altitudeCorrection: { x: 0, y: 0, z: 0 } as any,
       shadow: {
         matrices: [Matrix4.IDENTITY, Matrix4.IDENTITY, Matrix4.IDENTITY],
@@ -302,6 +308,8 @@ describe('createCloudsPass', () => {
     vi.clearAllMocks()
     const st: CloudsFrameState = {
       sunDirection: { x: 1, y: 0, z: 0 } as any,
+      moonDirection: { x: 1, y: 0, z: 0 } as any,
+      moonIlluminatedFraction: 0.5,
       altitudeCorrection: { x: 10, y: 20, z: 30 } as any
     }
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), st)
@@ -435,6 +443,8 @@ import { defaultCloudsParameters } from './cloudsDefaultParameters'
 describe('M4 T6 temporalUpscale 低分模式', () => {
   const st = (): CloudsFrameState => ({
     sunDirection: new Cartesian3(0, 0, 1),
+    moonDirection: new Cartesian3(1, 0, 0),
+    moonIlluminatedFraction: 0.5,
     altitudeCorrection: new Cartesian3()
   })
 
@@ -499,6 +509,8 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
 describe('M5 T2 SHADOW_LENGTH MRT/参数', () => {
   const st5 = (): CloudsFrameState => ({
     sunDirection: new Cartesian3(0, 0, 1),
+    moonDirection: new Cartesian3(1, 0, 0),
+    moonIlluminatedFraction: 0.5,
     altitudeCorrection: new Cartesian3()
   })
 

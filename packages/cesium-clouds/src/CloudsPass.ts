@@ -116,6 +116,10 @@ const SKY_SPECTRAL_RADIANCE_TO_LUMINANCE = new Cartesian3(
  */
 export interface CloudsFrameState {
   sunDirection: Cartesian3
+  /** 观察者月方向（ECEF 单位向量，视差修正后）——月光照明用（方向 C）。 */
+  moonDirection: Cartesian3
+  /** Lambert 球积分月相因子（朔 0/弦 0.318/望 1，preRender 由 sun/moon 两方向 dot 算）。 */
+  moonIlluminatedFraction: number
   altitudeCorrection: Cartesian3
   /**
    * M3 BSM 状态（T5 createCloudsStage preRender 填：CascadedShadowMaps.update + ShadowPass.render）。
@@ -141,8 +145,9 @@ export interface CloudsPassOptions extends CloudsMainOptions {
  * （T5 从 createCloudsPass uniformMap 逐项搬移，纯重构不改语义）。
  *
  * 覆盖：大气 LUT / SUN-SKY 光度 / 大气（bottomRadius/worldToECEF/ecefToWorld/
- * altitudeCorrection/sunDirection）/ 参与 medium / scatter 视觉 / weather+shape /
- * 云层 packed / frame / stbnTexture。**不含**：主 march/次 march 档参数（shadow.frag 声明
+ * altitudeCorrection/sunDirection/月光三键 moonDirection·moonIlluminatedFraction·moonLightScale）/
+ * 参与 medium / scatter 视觉 / weather+shape / 云层 packed / frame / stbnTexture。**不含**：主
+ * march/次 march 档参数（shadow.frag 声明
  * 同名 maxIterationCount 等、值取 params.shadowMarch 不同档——必须各端自绑）、BSM 消费段
  * （shadowBuffer 等）、reprojection/depth/cameraHeight/resolution/targetUvScale（clouds.frag
  * 专有，生成端无此 uniform）。
@@ -176,6 +181,11 @@ export function buildSharedCloudsUniforms(
     ecefToWorldMatrix: () => params.ecefToWorldMatrix,
     altitudeCorrection: () => state.altitudeCorrection,
     sunDirection: () => state.sunDirection,
+    // 月光三键（方向 C，clouds.frag 声明同名 uniform；ShadowPass 生成端 shadow.frag 无声明——
+    // Cesium 静默忽略未消费 uniform，同 skyLightScale 先例，无害）
+    moonDirection: () => state.moonDirection,
+    moonIlluminatedFraction: () => state.moonIlluminatedFraction,
+    moonLightScale: () => params.moonLightScale,
 
     // 参与 medium
     scatteringCoefficient: () => params.scatteringCoefficient,
