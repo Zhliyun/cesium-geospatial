@@ -93,6 +93,7 @@ const stubLuts = {
 function makeState(): AtmosphereFrameState {
   return {
     sunDirection: new Cartesian3(0, 0, 1),
+    moonDirection: new Cartesian3(1, 0, 0),
     altitudeCorrection: new Cartesian3(),
     exposure: 1.5
   }
@@ -299,8 +300,10 @@ describe('validateAtmosphereOptions', () => {
       limbGlowDecayKm: 30.0,
       // M5 云 god rays 光柱增益默认 1（物理精确 subtle 对齐 three）
       cloudsGodRaysGain: 1.0,
-      // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5；uniforms 接线由月光 T3 补）
+      // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5）+ 月盘亮度/角半径默认（T3 接线）
       moon: true,
+      moonRadianceScale: 60, // inscatterScale(25) 等效补偿 × diffuse 因子
+      moonAngularRadius: 0.0045, // ≈15.5′ 真实月盘角半径
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
@@ -838,5 +841,74 @@ describe('depthTemporal options 参数化（Task 12）', () => {
     // 次帧 postRender：首帧已更新 prevPos==camera.positionWC（静止）→ motion=0 → lowAlpha=0.1（自定义）
     triggerPostRender(scene)
     expect((uniforms.u_temporalAlpha as () => number)()).toBeCloseTo(0.1, 5)
+  })
+})
+
+// —— 月光 T3：options/state/uniforms/preRender 接线（2026-08-30 夜间光照 spec r2 §5.4）——
+describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
+  it('validate 默认：moonRadianceScale=60 / moonAngularRadius≈0.0045（moon=true 已固化于默认值用例）', () => {
+    const r = validateAtmosphereOptions({})
+    expect(r.moon).toBe(true)
+    expect(r.moonRadianceScale).toBe(60)
+    expect(r.moonAngularRadius).toBeCloseTo(0.0045, 6)
+  })
+
+  it('validate 覆盖：moon=false / 自定义亮度与角半径透传', () => {
+    const r = validateAtmosphereOptions({
+      moon: false,
+      moonRadianceScale: 120,
+      moonAngularRadius: 0.01
+    })
+    expect(r.moon).toBe(false)
+    expect(r.moonRadianceScale).toBe(120)
+    expect(r.moonAngularRadius).toBe(0.01)
+  })
+
+  it('buildAtmosphereUniforms 含月盘三件：moonDirection 闭包 + 静态 ω/radiance', () => {
+    const state: AtmosphereFrameState = {
+      sunDirection: new Cartesian3(0, 0, 1),
+      moonDirection: new Cartesian3(1, 0, 0),
+      altitudeCorrection: new Cartesian3(),
+      exposure: 1
+    }
+    const u = buildAtmosphereUniforms(
+      stubLuts,
+      validateAtmosphereOptions({}),
+      state
+    )
+    // moonDirection 闭包持 state 引用（preRender 原地更新自动生效）
+    expect(typeof u.moonDirection).toBe('function')
+    expect((u.moonDirection as () => Cartesian3)()).toBe(state.moonDirection)
+    expect(u.moonAngularRadius).toBeCloseTo(0.0045, 6)
+    expect(u.u_moonRadiance).toBe(60)
+  })
+
+  it('buildAtmosphereStage fragmentShader 透传 moon（moon=false 时 shader 无 moonDirection）', () => {
+    // 经 createAtmosphereStage 太重（需 scene）；resolved 经 {...resolved} 展开自动透传
+    // buildAerialPerspectiveFragmentShader（结构 typing 已覆盖）——此处断言 fragment 产物两态差异
+    //（详测在 Task 2 的 frag 测试文件）。
+    const r = validateAtmosphereOptions({ moon: false })
+    expect(r.moon).toBe(false)
+    expect(buildAerialPerspectiveFragmentShader({ moon: false })).not.toContain('moonDirection')
+    expect(buildAerialPerspectiveFragmentShader({ moon: true })).toContain(
+      'uniform vec3 moonDirection;'
+    )
+  })
+
+  it('preRender 更新 state.moonDirection（视差修正 origin=viewerPositionWC+altitudeCorrection）', () => {
+    const { scene } = mockSceneWithDepthTemporal()
+    const handle = createAtmosphereStage(scene, stubLuts, { lensFlare: false })
+    // 初始占位 (0,0,1)；相机在赤道 x 轴上空——node GMST fallback 下月方向应有有限单位向量
+    const uniforms = (handle.atmosphereStage as unknown as {
+      uniforms: Record<string, unknown>
+    }).uniforms
+    const stateDir = (uniforms.moonDirection as () => Cartesian3)()
+    expect(stateDir).toEqual(new Cartesian3(0, 0, 1))
+    triggerPreRender(scene)
+    const after = (uniforms.moonDirection as () => Cartesian3)()
+    expect(Number.isFinite(after.x)).toBe(true)
+    expect(Math.abs(Cartesian3.magnitude(after) - 1)).toBeLessThan(1e-6)
+    // 单位化后必非初始占位方向（月不会恰在地球北极天顶）
+    expect(after).not.toEqual(new Cartesian3(0, 0, 1))
   })
 })

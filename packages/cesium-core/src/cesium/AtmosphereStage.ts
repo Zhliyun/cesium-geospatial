@@ -48,6 +48,7 @@ import {
   ATMOSPHERE_BOTTOM_RADIUS_M,
   SUN_ANGULAR_RADIUS
 } from '../math/atmosphereParameters'
+import { computeMoonDirectionECEF } from '../celestial/celestialDirections'
 import type { AtmosphereLUTs } from './lutLoader'
 import { buildDepthTemporalFragmentShader } from './depthTemporal/depthTemporal.frag'
 import {
@@ -118,6 +119,13 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
    * premultiplied 输出（.a=覆盖率）。不传（云未开）→ occlusion 不编译云采样（零回归）。
    */
   cloudsOcclusionBridge?: () => { _texture: unknown; _target: number } | undefined
+  // ── 月盘（2026-08-30 夜间光照 spec r2 §5）──
+  // moon?: boolean 继承自 AerialPerspectiveFragOptions（默认 true；创建期语义：切换=重建 stage，
+  // 同 sun/sky 惯例，运行时切换不在范围）。
+  /** 月盘亮度倍率（默认 60=inscatterScale(25) 等效补偿 × diffuse 因子；URL ?moonRadiance=）。 */
+  moonRadianceScale?: number
+  /** 月盘角半径 rad（默认 0.0045≈15.5′ 真实值；URL ?moonAngularRadius= 艺术放大）。 */
+  moonAngularRadius?: number
 }
 
 // 校验后的完整 options（hdrDepthTemporal 排除：runtime 基于 stageCreated 决定，非用户 option；buildAtmosphereStage 时注入）。
@@ -151,11 +159,16 @@ export interface ResolvedAtmosphereStageOptions
   temporalDepthThreshold: number
   // depthTemporal stage 创建开关 resolved（Phase 1.1）
   depthTemporal: boolean
+  // 月盘 resolved（moon 经 Required<AerialPerspectiveFragOptions> 传入本类型）
+  moonRadianceScale: number
+  moonAngularRadius: number
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
 export interface AtmosphereFrameState {
   sunDirection: Cartesian3
+  /** 月方向（ECEF 单位向量，spec r2 §4：含视差修正，preRender 每帧更新）。 */
+  moonDirection: Cartesian3
   altitudeCorrection: Cartesian3
   exposure: number
 }
@@ -213,6 +226,8 @@ export function getEffectiveAtmosphereExposure(
 
 const exposureSurfaceScratch = new Cartesian3()
 const exposureNormalScratch = new Cartesian3()
+// 月方向视差修正 origin scratch（preRender 每帧：camera.positionWC + altitudeCorrection）
+const moonOriginScratch = new Cartesian3()
 
 /**
  * 校验并补全 options。
@@ -248,6 +263,9 @@ export function validateAtmosphereOptions(
     // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5；moon?: boolean 经 Required 传入本 resolved 类型，
     // 缺行会 tsc 报 TS2741——T3 接线在此之上追加 moonDirection/moonAngularRadius/u_moonRadiance uniforms）
     moon: options.moon ?? true,
+    // 月盘亮度/角半径默认（spec r2 §5.4）：60=inscatterScale(25) 等效补偿 × diffuse 因子；0.0045 rad≈15.5′ 真实月盘
+    moonRadianceScale: options.moonRadianceScale ?? 60,
+    moonAngularRadius: options.moonAngularRadius ?? 0.0045,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
@@ -313,6 +331,11 @@ export function buildAtmosphereUniforms(
     irradiance_texture: () => luts.irradiance,
     higher_order_scattering_texture: () => luts.higherOrderScattering, // C9：云 god rays 防过暗（HAS_HIGHER_ORDER_SCATTERING_TEXTURE 分支）
     sunDirection: () => state.sunDirection,
+    // 月方向闭包（preRender 每帧更新）；ω/radiance 静态值。moon=false 时 shader 无这三件声明，
+    // Cesium 静默忽略（同 u_cloudsGodRaysGain 先例，无条件绑定零分支）
+    moonDirection: () => state.moonDirection,
+    moonAngularRadius: options.moonAngularRadius,
+    u_moonRadiance: options.moonRadianceScale,
     altitudeCorrection: () => state.altitudeCorrection,
     exposure: () => state.exposure, // 动态（preRender 更新）
     u_debugMode: options.debugMode,
@@ -396,6 +419,7 @@ export function createAtmosphereStage(
   const ellipsoid = scene.globe.ellipsoid
   const state: AtmosphereFrameState = {
     sunDirection: new Cartesian3(0, 0, 1),
+    moonDirection: new Cartesian3(0, 0, 1),
     altitudeCorrection: new Cartesian3(),
     exposure: resolved.exposureDay
   }
@@ -749,6 +773,12 @@ export function createAtmosphereStage(
       if (Number.isFinite(sunMag) && sunMag > 1e-15) {
         Cartesian3.normalize(sunFixed, state.sunDirection)
       }
+
+      // 月方向（spec r2 §4）：复用上方 icrfToFixed（同帧共享，省重复旋转矩阵）；
+      // 视差修正 origin = viewerPositionWC + altitudeCorrection（米）——与 reconstructRay
+      // 射线起点同帧同源（太空相机 offset 可达 1e4 km，裸相机位置月盘方位偏 1-2°）。
+      Cartesian3.add(camera.positionWC, state.altitudeCorrection, moonOriginScratch)
+      computeMoonDirectionECEF(time, icrfToFixed, moonOriginScratch, state.moonDirection)
     }
 
     // 动态曝光（按相机当地太阳高度角）或手动
