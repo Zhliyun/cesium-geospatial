@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildAerialPerspectiveFragmentShader,
   buildStandaloneShaderForValidation,
   type AerialPerspectiveFragOptions
 } from './aerialPerspective.frag'
@@ -100,5 +101,71 @@ describe('M5 CLOUDS_SHADOW_LENGTH 编译', () => {
       throw new Error(`glslang 编译失败（cloudsShadowLength=true）:\n${output}\n` + src.split('\n').slice(0, 40).map((l, i) => `${i + 1}: ${l}`).join('\n'))
     }
     expect(ok).toBe(true)
+  })
+})
+
+// ── 月盘 MOON（2026-08-30 夜间光照 spec r2 §5）：out 通道方案 + acos 判定 + Oren-Nayar 月相 ──
+describe('月盘 MOON 段（spec r2 §5）', () => {
+  const build = () => buildAerialPerspectiveFragmentShader({ moon: true })
+  const buildOff = () => buildAerialPerspectiveFragmentShader({ moon: false })
+
+  it('moon=true：三 uniform 声明 + getSkyRadiance out moonDisc 签名 + finalColor 加法项', () => {
+    const src = build()
+    expect(src).toContain('uniform vec3 moonDirection;')
+    expect(src).toContain('uniform float moonAngularRadius;')
+    expect(src).toContain('uniform float u_moonRadiance;')
+    expect(src).toMatch(/out vec3 moonDisc/)
+    // finalColor 行：+ moonDisc 独立加法（不吃 u_inscatterScale）
+    expect(src).toContain('+ inscatter * u_inscatterScale + moonDisc;')
+  })
+
+  it('moon=true：acos 判定 + 边序恒升序守卫（禁 dot 直比/降序边）', () => {
+    const src = build()
+    expect(src).toContain('acos(clamp(dot(rayDirection, moonDirection), -1.0, 1.0))')
+    expect(src).toContain('float moonAA = max(fragmentAngle, 1e-4);')
+    expect(src).toContain('1.0 - smoothstep(moonAngularRadius - moonAA, moonAngularRadius, moonAngle)')
+  })
+
+  it('moon=true：Oren-Nayar MoonNode 版常量与实参序（禁 sky.glsl 旧版常量）', () => {
+    const src = build()
+    expect(src).toContain('0.2466') // A=(1/π)(1−0.5/1.33+0.17/1.13)
+    expect(src).toContain('0.1314') // B=(1/π)(0.45/1.09)
+    expect(src).toContain('smoothstep(0.0, 0.1, sOV)') // t 公式 edges-first 记法
+    expect(src).not.toContain('0.62406') // sky.glsl 旧版
+    // 实参序：V = -rayDirection
+    expect(src).toContain('dot(moonNormal, -rayDirection)')
+  })
+
+  it('moon=true：limbFade 显式乘月盘 + hasScene 前景雾 mix 月盘到 0（山遮月）', () => {
+    const src = build()
+    expect(src).toContain('moonDisc *= limbFade;')
+    expect(src).toContain('moonDisc = mix(moonDisc, vec3(0.0), mask);')
+  })
+
+  it('moon=true：亮度公式（2.5e-6 / πω² / SUN_SPECTRAL 换算）', () => {
+    const src = build()
+    expect(src).toContain('2.5e-6')
+    expect(src).toMatch(/PI \* moonAngularRadius \* moonAngularRadius/)
+    expect(src).toContain('SUN_SPECTRAL_RADIANCE_TO_LUMINANCE * u_moonRadiance')
+  })
+
+  it('moon=false golden：产物与现状（无 moon 代码）逐字符一致', () => {
+    const srcOff = buildOff()
+    expect(srcOff).not.toContain('moonDisc')
+    expect(srcOff).not.toContain('moonDirection')
+    expect(srcOff).not.toContain('u_moonRadiance')
+    expect(srcOff).toContain('+ inscatter * u_inscatterScale;') // finalColor 回现状
+    // golden：与 git 上一版（moon 未引入时）moon 无关组合产物比对——用 snapshot 守门
+    //（首个 run 录基线；此后任何 moon=false 产物变化即 fail）
+    expect(srcOff).toMatchSnapshot('moon-off-golden')
+  })
+
+  it('glslang：moon=true 与 moon=false 两态真编译通过', () => {
+    for (const moon of [true, false]) {
+      const src = buildStandaloneShaderForValidation({ moon })
+      const { ok, output } = compileFragment(src) // 文件内既有 compile helper
+      if (!ok) throw new Error(`moon=${moon} 编译失败:\n${output}`)
+      expect(ok).toBe(true)
+    }
   })
 })

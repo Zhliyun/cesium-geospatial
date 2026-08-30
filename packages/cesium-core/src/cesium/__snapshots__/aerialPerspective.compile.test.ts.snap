@@ -1,0 +1,1452 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`月盘 MOON 段（spec r2 §5） > moon=false golden：产物与现状（无 moon 代码）逐字符一致 > moon-off-golden 1`] = `
+"precision highp float;
+precision highp sampler3D;
+#define PI 3.14159265358979323846
+#define TRANSMITTANCE_TEXTURE_WIDTH 256
+#define TRANSMITTANCE_TEXTURE_HEIGHT 64
+#define SCATTERING_TEXTURE_R_SIZE 32
+#define SCATTERING_TEXTURE_MU_SIZE 128
+#define SCATTERING_TEXTURE_MU_S_SIZE 32
+#define SCATTERING_TEXTURE_NU_SIZE 8
+#define IRRADIANCE_TEXTURE_WIDTH 64
+#define IRRADIANCE_TEXTURE_HEIGHT 16
+#define METER_TO_LENGTH_UNIT 0.0010000
+#define COMBINED_SCATTERING_TEXTURES
+#define HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+// Based on: https://github.com/ebruneton/precomputed_atmospheric_scattering/blob/master/atmosphere/definitions.glsl
+
+/**
+ * Copyright (c) 2017 Eric Bruneton
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holders nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#define assert(x)
+
+#define Length float
+#define Wavelength float
+#define Angle float
+#define SolidAngle float
+#define Power float
+#define LuminousPower float
+
+#define Number float
+#define InverseLength float
+#define Area float
+#define Volume float
+#define NumberDensity float
+#define Irradiance float
+#define Radiance float
+#define SpectralPower float
+#define SpectralIrradiance float
+#define SpectralRadiance float
+#define SpectralRadianceDensity float
+#define ScatteringCoefficient float
+#define InverseSolidAngle float
+#define LuminousIntensity float
+#define Luminance float
+#define Illuminance float
+
+// A generic function from Wavelength to some other type.
+#define AbstractSpectrum vec3
+// A function from Wavelength to Number.
+#define DimensionlessSpectrum vec3
+// A function from Wavelength to SpectralPower.
+#define PowerSpectrum vec3
+// A function from Wavelength to SpectralIrradiance.
+#define IrradianceSpectrum vec3
+// A function from Wavelength to SpectralRadiance.
+#define RadianceSpectrum vec3
+// A function from Wavelength to SpectralRadianceDensity.
+#define RadianceDensitySpectrum vec3
+// A function from Wavelength to ScatteringCoefficient.
+#define ScatteringSpectrum vec3
+
+// A position in 3D (3 length values).
+#define Position vec3
+// A unit direction vector in 3D (3 unit-less values).
+#define Direction vec3
+// A vector of 3 luminance values.
+#define Luminance3 vec3
+// A vector of 3 illuminance values.
+#define Illuminance3 vec3
+
+#define TransmittanceTexture sampler2D
+#define AbstractScatteringTexture sampler3D
+#define ReducedScatteringTexture sampler3D
+#define ScatteringTexture sampler3D
+#define ScatteringDensityTexture sampler3D
+#define IrradianceTexture sampler2D
+
+const Length m = 1.0;
+const Wavelength nm = 1.0;
+const Angle rad = 1.0;
+const SolidAngle sr = 1.0;
+const Power watt = 1.0;
+const LuminousPower lm = 1.0;
+
+#if !defined(PI)
+const float PI = 3.14159265358979323846;
+#endif // !defined(PI)
+
+const Length km = 1000.0 * m;
+const Area m2 = m * m;
+const Volume m3 = m * m * m;
+const Angle pi = PI * rad;
+const Angle deg = pi / 180.0;
+const Irradiance watt_per_square_meter = watt / m2;
+const Radiance watt_per_square_meter_per_sr = watt / (m2 * sr);
+const SpectralIrradiance watt_per_square_meter_per_nm = watt / (m2 * nm);
+const SpectralRadiance watt_per_square_meter_per_sr_per_nm = watt / (m2 * sr * nm);
+const SpectralRadianceDensity watt_per_cubic_meter_per_sr_per_nm = watt / (m3 * sr * nm);
+const LuminousIntensity cd = lm / sr;
+const LuminousIntensity kcd = 1000.0 * cd;
+const Luminance cd_per_square_meter = cd / m2;
+const Luminance kcd_per_square_meter = kcd / m2;
+
+struct DensityProfileLayer {
+  Length width;
+  Number exp_term;
+  InverseLength exp_scale;
+  InverseLength linear_term;
+  Number constant_term;
+};
+
+struct DensityProfile {
+  DensityProfileLayer layers[2];
+};
+
+// See AtmosphereParameter.ts for further details.
+struct AtmosphereParameters {
+  IrradianceSpectrum solar_irradiance;
+  Angle sun_angular_radius;
+  Length bottom_radius;
+  Length top_radius;
+  DensityProfile rayleigh_density;
+  ScatteringSpectrum rayleigh_scattering;
+  DensityProfile mie_density;
+  ScatteringSpectrum mie_scattering;
+  ScatteringSpectrum mie_extinction;
+  Number mie_phase_function_g;
+  DensityProfile absorption_density;
+  ScatteringSpectrum absorption_extinction;
+  DimensionlessSpectrum ground_albedo;
+  Number mu_s_min;
+};
+
+const AtmosphereParameters ATMOSPHERE = AtmosphereParameters(
+  IrradianceSpectrum(1.474, 1.8504, 1.91198),
+  0.004675,
+  6360.0,
+  6420.0,
+  DensityProfile(DensityProfileLayer[2](
+    DensityProfileLayer(0.0, 0.0, 0.0, 0.0, 0.0),
+    DensityProfileLayer(0.0, 1.0, -0.125, 0.0, 0.0)
+  )),
+  ScatteringSpectrum(0.005802, 0.013558, 0.0331),
+  DensityProfile(DensityProfileLayer[2](
+    DensityProfileLayer(0.0, 0.0, 0.0, 0.0, 0.0),
+    DensityProfileLayer(0.0, 1.0, -0.833333, 0.0, 0.0)
+  )),
+  ScatteringSpectrum(0.003996, 0.003996, 0.003996),
+  ScatteringSpectrum(0.00444, 0.00444, 0.00444),
+  0.8,
+  DensityProfile(DensityProfileLayer[2](
+    DensityProfileLayer(25.0, 0.0, 0.0, 0.06666667, -0.66666667),
+    DensityProfileLayer(0.0, 0.0, 0.0, -0.06666667, 2.66666667)
+  )),
+  ScatteringSpectrum(0.00065, 0.001881, 0.000085),
+  DimensionlessSpectrum(0.1, 0.1, 0.1),
+  -0.5
+);
+#define GROUND
+#define SUN
+#define SKY
+
+uniform sampler2D colorTexture;
+uniform sampler2D depthTexture;
+
+
+uniform vec3 SUN_SPECTRAL_RADIANCE_TO_LUMINANCE;
+uniform vec3 SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+uniform sampler2D transmittance_texture;
+uniform sampler3D scattering_texture;
+uniform sampler3D single_mie_scattering_texture;
+uniform sampler2D irradiance_texture;
+uniform sampler3D higher_order_scattering_texture;
+
+
+uniform vec3 sunDirection;
+uniform vec3 altitudeCorrection;
+uniform float exposure;
+uniform float u_debugMode;
+uniform float u_groundDim;
+uniform float u_distanceScale;  // 散射距离缩放（方案 A，等效空气密度倍率；1.0=phase1 物理，>1 中近距散射强）
+uniform float u_inscatterScale;  // inscatter 放大（方案 B 远处白雾浓；1.0=phase1 物理，>1 远处雾浓，可超物理饱和）
+uniform float u_limbGlowIntensity;  // limb outer glow 强度（太空视角大气边缘向外扩散辉光；0=关，~0.3-0.8 标定）
+uniform float u_limbGlowDecayKm;  // limb glow 向外指数衰减距离（km；~20-40 控制扩散范围）
+
+
+uniform float cosSunAngularRadius;
+
+// Based on: https://github.com/ebruneton/precomputed_atmospheric_scattering/blob/master/atmosphere/functions.glsl
+
+/**
+ * Copyright (c) 2017 Eric Bruneton
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holders nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Precomputed Atmospheric Scattering
+ * Copyright (c) 2008 INRIA
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holders nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+Number ClampCosine(const Number mu) {
+  return clamp(mu, Number(-1.0), Number(1.0));
+}
+
+Length ClampDistance(const Length d) {
+  return max(d, 0.0 * m);
+}
+
+Length ClampRadius(const AtmosphereParameters atmosphere, const Length r) {
+  return clamp(r, atmosphere.bottom_radius, atmosphere.top_radius);
+}
+
+Length SafeSqrt(const Area a) {
+  return sqrt(max(a, 0.0 * m2));
+}
+
+Length DistanceToTopAtmosphereBoundary(const AtmosphereParameters atmosphere,
+    const Length r, const Number mu) {
+  assert(r <= atmosphere.top_radius);
+  assert(mu >= -1.0 && mu <= 1.0);
+  Area discriminant = r * r * (mu * mu - 1.0) +
+      atmosphere.top_radius * atmosphere.top_radius;
+  return ClampDistance(-r * mu + SafeSqrt(discriminant));
+}
+
+Length DistanceToBottomAtmosphereBoundary(const AtmosphereParameters atmosphere,
+    const Length r, const Number mu) {
+  assert(r >= atmosphere.bottom_radius);
+  assert(mu >= -1.0 && mu <= 1.0);
+  Area discriminant = r * r * (mu * mu - 1.0) +
+      atmosphere.bottom_radius * atmosphere.bottom_radius;
+  return ClampDistance(-r * mu - SafeSqrt(discriminant));
+}
+
+bool RayIntersectsGround(const AtmosphereParameters atmosphere,
+    const Length r, const Number mu) {
+  assert(r >= atmosphere.bottom_radius);
+  assert(mu >= -1.0 && mu <= 1.0);
+  return mu < 0.0 && r * r * (mu * mu - 1.0) +
+      atmosphere.bottom_radius * atmosphere.bottom_radius >= 0.0 * m2;
+}
+
+Number GetTextureCoordFromUnitRange(const Number x, const int texture_size) {
+  return 0.5 / Number(texture_size) + x * (1.0 - 1.0 / Number(texture_size));
+}
+
+vec2 GetTransmittanceTextureUvFromRMu(const AtmosphereParameters atmosphere,
+    const Length r, const Number mu) {
+  assert(r >= atmosphere.bottom_radius && r <= atmosphere.top_radius);
+  assert(mu >= -1.0 && mu <= 1.0);
+  // Distance to top atmosphere boundary for a horizontal ray at ground level.
+  Length H = sqrt(atmosphere.top_radius * atmosphere.top_radius -
+      atmosphere.bottom_radius * atmosphere.bottom_radius);
+  // Distance to the horizon.
+  Length rho =
+      SafeSqrt(r * r - atmosphere.bottom_radius * atmosphere.bottom_radius);
+  // Distance to the top atmosphere boundary for the ray (r,mu), and its minimum
+  // and maximum values over all mu - obtained for (r,1) and (r,mu_horizon).
+  Length d = DistanceToTopAtmosphereBoundary(atmosphere, r, mu);
+  Length d_min = atmosphere.top_radius - r;
+  Length d_max = rho + H;
+  Number x_mu = (d - d_min) / (d_max - d_min);
+  Number x_r = rho / H;
+  return vec2(GetTextureCoordFromUnitRange(x_mu, TRANSMITTANCE_TEXTURE_WIDTH),
+              GetTextureCoordFromUnitRange(x_r, TRANSMITTANCE_TEXTURE_HEIGHT));
+}
+
+DimensionlessSpectrum GetTransmittanceToTopAtmosphereBoundary(
+    const AtmosphereParameters atmosphere,
+    const TransmittanceTexture transmittance_texture,
+    const Length r, const Number mu) {
+  assert(r >= atmosphere.bottom_radius && r <= atmosphere.top_radius);
+  vec2 uv = GetTransmittanceTextureUvFromRMu(atmosphere, r, mu);
+  // @shotamatsuda: Added for the precomputation stage in half-float precision.
+  #ifdef TRANSMITTANCE_PRECISION_LOG
+  // Manually interpolate the transmittance instead of the optical depth.
+  const vec2 size = vec2(TRANSMITTANCE_TEXTURE_WIDTH, TRANSMITTANCE_TEXTURE_HEIGHT);
+  const vec3 texel_size = vec3(1.0 / size, 0.0);
+  vec2 coord = (uv * size) - 0.5;
+  vec2 i = (floor(coord) + 0.5) * texel_size.xy;
+  vec2 f = fract(coord);
+  vec4 t1 = exp(-texture(transmittance_texture, i));
+  vec4 t2 = exp(-texture(transmittance_texture, i + texel_size.xz));
+  vec4 t3 = exp(-texture(transmittance_texture, i + texel_size.zy));
+  vec4 t4 = exp(-texture(transmittance_texture, i + texel_size.xy));
+  return DimensionlessSpectrum(mix(mix(t1, t2, f.x), mix(t3, t4, f.x), f.y));
+  #else // TRANSMITTANCE_PRECISION_LOG
+  return DimensionlessSpectrum(texture(transmittance_texture, uv));
+  #endif // TRANSMITTANCE_PRECISION_LOG
+}
+
+DimensionlessSpectrum GetTransmittance(
+    const AtmosphereParameters atmosphere,
+    const TransmittanceTexture transmittance_texture,
+    const Length r, const Number mu, const Length d,
+    const bool ray_r_mu_intersects_ground) {
+  assert(r >= atmosphere.bottom_radius && r <= atmosphere.top_radius);
+  assert(mu >= -1.0 && mu <= 1.0);
+  assert(d >= 0.0 * m);
+
+  Length r_d = ClampRadius(atmosphere, sqrt(d * d + 2.0 * r * mu * d + r * r));
+  Number mu_d = ClampCosine((r * mu + d) / r_d);
+
+  if (ray_r_mu_intersects_ground) {
+    return min(
+        GetTransmittanceToTopAtmosphereBoundary(
+            atmosphere, transmittance_texture, r_d, -mu_d) /
+        GetTransmittanceToTopAtmosphereBoundary(
+            atmosphere, transmittance_texture, r, -mu),
+        DimensionlessSpectrum(1.0));
+  } else {
+    return min(
+        GetTransmittanceToTopAtmosphereBoundary(
+            atmosphere, transmittance_texture, r, mu) /
+        GetTransmittanceToTopAtmosphereBoundary(
+            atmosphere, transmittance_texture, r_d, mu_d),
+        DimensionlessSpectrum(1.0));
+  }
+}
+
+DimensionlessSpectrum GetTransmittanceToSun(
+    const AtmosphereParameters atmosphere,
+    const TransmittanceTexture transmittance_texture,
+    const Length r, const Number mu_s) {
+  Number sin_theta_h = atmosphere.bottom_radius / r;
+  Number cos_theta_h = -sqrt(max(1.0 - sin_theta_h * sin_theta_h, 0.0));
+  return GetTransmittanceToTopAtmosphereBoundary(
+          atmosphere, transmittance_texture, r, mu_s) *
+      smoothstep(-sin_theta_h * atmosphere.sun_angular_radius / rad,
+                 sin_theta_h * atmosphere.sun_angular_radius / rad,
+                 mu_s - cos_theta_h);
+}
+
+InverseSolidAngle RayleighPhaseFunction(const Number nu) {
+  InverseSolidAngle k = 3.0 / (16.0 * PI * sr);
+  return k * (1.0 + nu * nu);
+}
+
+InverseSolidAngle MiePhaseFunction(const Number g, const Number nu) {
+  InverseSolidAngle k = 3.0 / (8.0 * PI * sr) * (1.0 - g * g) / (2.0 + g * g);
+  return k * (1.0 + nu * nu) / pow(1.0 + g * g - 2.0 * g * nu, 1.5);
+}
+
+vec4 GetScatteringTextureUvwzFromRMuMuSNu(const AtmosphereParameters atmosphere,
+    const Length r, const Number mu, const Number mu_s, const Number nu,
+    const bool ray_r_mu_intersects_ground) {
+  assert(r >= atmosphere.bottom_radius && r <= atmosphere.top_radius);
+  assert(mu >= -1.0 && mu <= 1.0);
+  assert(mu_s >= -1.0 && mu_s <= 1.0);
+  assert(nu >= -1.0 && nu <= 1.0);
+
+  // Distance to top atmosphere boundary for a horizontal ray at ground level.
+  Length H = sqrt(atmosphere.top_radius * atmosphere.top_radius -
+      atmosphere.bottom_radius * atmosphere.bottom_radius);
+  // Distance to the horizon.
+  Length rho =
+      SafeSqrt(r * r - atmosphere.bottom_radius * atmosphere.bottom_radius);
+  Number u_r = GetTextureCoordFromUnitRange(rho / H, SCATTERING_TEXTURE_R_SIZE);
+
+  // Discriminant of the quadratic equation for the intersections of the ray
+  // (r,mu) with the ground (see RayIntersectsGround).
+  Length r_mu = r * mu;
+  Area discriminant =
+      r_mu * r_mu - r * r + atmosphere.bottom_radius * atmosphere.bottom_radius;
+  Number u_mu;
+  if (ray_r_mu_intersects_ground) {
+    // Distance to the ground for the ray (r,mu), and its minimum and maximum
+    // values over all mu - obtained for (r,-1) and (r,mu_horizon).
+    Length d = -r_mu - SafeSqrt(discriminant);
+    Length d_min = r - atmosphere.bottom_radius;
+    Length d_max = rho;
+    u_mu = 0.5 - 0.5 * GetTextureCoordFromUnitRange(d_max == d_min ? 0.0 :
+        (d - d_min) / (d_max - d_min), SCATTERING_TEXTURE_MU_SIZE / 2);
+  } else {
+    // Distance to the top atmosphere boundary for the ray (r,mu), and its
+    // minimum and maximum values over all mu - obtained for (r,1) and
+    // (r,mu_horizon).
+    Length d = -r_mu + SafeSqrt(discriminant + H * H);
+    Length d_min = atmosphere.top_radius - r;
+    Length d_max = rho + H;
+    u_mu = 0.5 + 0.5 * GetTextureCoordFromUnitRange(
+        (d - d_min) / (d_max - d_min), SCATTERING_TEXTURE_MU_SIZE / 2);
+  }
+
+  Length d = DistanceToTopAtmosphereBoundary(
+      atmosphere, atmosphere.bottom_radius, mu_s);
+  Length d_min = atmosphere.top_radius - atmosphere.bottom_radius;
+  Length d_max = H;
+  Number a = (d - d_min) / (d_max - d_min);
+  Length D = DistanceToTopAtmosphereBoundary(
+      atmosphere, atmosphere.bottom_radius, atmosphere.mu_s_min);
+  Number A = (D - d_min) / (d_max - d_min);
+  // An ad-hoc function equal to 0 for mu_s = mu_s_min (because then d = D and
+  // thus a = A), equal to 1 for mu_s = 1 (because then d = d_min and thus
+  // a = 0), and with a large slope around mu_s = 0, to get more texture
+  // samples near the horizon.
+  Number u_mu_s = GetTextureCoordFromUnitRange(
+      max(1.0 - a / A, 0.0) / (1.0 + a), SCATTERING_TEXTURE_MU_S_SIZE);
+
+  Number u_nu = (nu + 1.0) / 2.0;
+  return vec4(u_nu, u_mu_s, u_mu, u_r);
+}
+
+vec2 GetIrradianceTextureUvFromRMuS(const AtmosphereParameters atmosphere,
+    const Length r, const Number mu_s) {
+  assert(r >= atmosphere.bottom_radius && r <= atmosphere.top_radius);
+  assert(mu_s >= -1.0 && mu_s <= 1.0);
+  Number x_r = (r - atmosphere.bottom_radius) /
+      (atmosphere.top_radius - atmosphere.bottom_radius);
+  Number x_mu_s = mu_s * 0.5 + 0.5;
+  return vec2(GetTextureCoordFromUnitRange(x_mu_s, IRRADIANCE_TEXTURE_WIDTH),
+              GetTextureCoordFromUnitRange(x_r, IRRADIANCE_TEXTURE_HEIGHT));
+}
+
+IrradianceSpectrum GetIrradiance(
+    const AtmosphereParameters atmosphere,
+    const IrradianceTexture irradiance_texture,
+    const Length r, const Number mu_s) {
+  vec2 uv = GetIrradianceTextureUvFromRMuS(atmosphere, r, mu_s);
+  return IrradianceSpectrum(texture(irradiance_texture, uv));
+}
+
+// Based on: https://github.com/ebruneton/precomputed_atmospheric_scattering/blob/master/atmosphere/functions.glsl
+
+/**
+ * Copyright (c) 2017 Eric Bruneton
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holders nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Precomputed Atmospheric Scattering
+ * Copyright (c) 2008 INRIA
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holders nor the names of its
+ *    contributors may be used to endorse or promote products derived from
+ *    this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#ifdef COMBINED_SCATTERING_TEXTURES
+vec3 GetExtrapolatedSingleMieScattering(
+    const AtmosphereParameters atmosphere, const vec4 scattering) {
+  // Algebraically this can never be negative, but rounding errors can produce
+  // that effect for sufficiently short view rays.
+  // @shotamatsuda: Avoid division by infinitesimal values.
+  // See https://github.com/takram-design-engineering/three-geospatial/issues/47
+  if (scattering.r < 1e-5) {
+    return vec3(0.0);
+  }
+  return scattering.rgb * scattering.a / scattering.r *
+	    (atmosphere.rayleigh_scattering.r / atmosphere.mie_scattering.r) *
+	    (atmosphere.mie_scattering / atmosphere.rayleigh_scattering);
+}
+#endif // COMBINED_SCATTERING_TEXTURES
+
+IrradianceSpectrum GetCombinedScattering(
+    const AtmosphereParameters atmosphere,
+    const ReducedScatteringTexture scattering_texture,
+    const ReducedScatteringTexture single_mie_scattering_texture,
+    const Length r, const Number mu, const Number mu_s, const Number nu,
+    const bool ray_r_mu_intersects_ground,
+    out IrradianceSpectrum single_mie_scattering) {
+  vec4 uvwz = GetScatteringTextureUvwzFromRMuMuSNu(
+      atmosphere, r, mu, mu_s, nu, ray_r_mu_intersects_ground);
+  Number tex_coord_x = uvwz.x * Number(SCATTERING_TEXTURE_NU_SIZE - 1);
+  Number tex_x = floor(tex_coord_x);
+  Number lerp = tex_coord_x - tex_x;
+  vec3 uvw0 = vec3((tex_x + uvwz.y) / Number(SCATTERING_TEXTURE_NU_SIZE),
+      uvwz.z, uvwz.w);
+  vec3 uvw1 = vec3((tex_x + 1.0 + uvwz.y) / Number(SCATTERING_TEXTURE_NU_SIZE),
+      uvwz.z, uvwz.w);
+#ifdef COMBINED_SCATTERING_TEXTURES
+  vec4 combined_scattering =
+      texture(scattering_texture, uvw0) * (1.0 - lerp) +
+      texture(scattering_texture, uvw1) * lerp;
+  IrradianceSpectrum scattering = IrradianceSpectrum(combined_scattering);
+  single_mie_scattering =
+      GetExtrapolatedSingleMieScattering(atmosphere, combined_scattering);
+#else // COMBINED_SCATTERING_TEXTURES
+  IrradianceSpectrum scattering = IrradianceSpectrum(
+      texture(scattering_texture, uvw0) * (1.0 - lerp) +
+      texture(scattering_texture, uvw1) * lerp);
+  single_mie_scattering = IrradianceSpectrum(
+      texture(single_mie_scattering_texture, uvw0) * (1.0 - lerp) +
+      texture(single_mie_scattering_texture, uvw1) * lerp);
+#endif // COMBINED_SCATTERING_TEXTURES
+  return scattering;
+}
+
+// @shotamatsuda: Added for reading higher-order scattering texture.
+#ifdef HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+IrradianceSpectrum GetScattering(
+    const AtmosphereParameters atmosphere,
+    const ReducedScatteringTexture scattering_texture,
+    const Length r, const Number mu, const Number mu_s, const Number nu,
+    const bool ray_r_mu_intersects_ground) {
+  vec4 uvwz = GetScatteringTextureUvwzFromRMuMuSNu(
+      atmosphere, r, mu, mu_s, nu, ray_r_mu_intersects_ground);
+  Number tex_coord_x = uvwz.x * Number(SCATTERING_TEXTURE_NU_SIZE - 1);
+  Number tex_x = floor(tex_coord_x);
+  Number lerp = tex_coord_x - tex_x;
+  vec3 uvw0 = vec3((tex_x + uvwz.y) / Number(SCATTERING_TEXTURE_NU_SIZE),
+      uvwz.z, uvwz.w);
+  vec3 uvw1 = vec3((tex_x + 1.0 + uvwz.y) / Number(SCATTERING_TEXTURE_NU_SIZE),
+      uvwz.z, uvwz.w);
+  IrradianceSpectrum scattering = IrradianceSpectrum(
+      texture(scattering_texture, uvw0) * (1.0 - lerp) +
+      texture(scattering_texture, uvw1) * lerp);
+  return scattering;
+}
+#endif // HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+
+RadianceSpectrum GetSkyRadiance(
+    const AtmosphereParameters atmosphere,
+    const TransmittanceTexture transmittance_texture,
+    const ReducedScatteringTexture scattering_texture,
+    const ReducedScatteringTexture single_mie_scattering_texture,
+    Position camera, const Direction view_ray, const Length shadow_length,
+    const Direction sun_direction,
+    out DimensionlessSpectrum transmittance) {
+  // Compute the distance to the top atmosphere boundary along the view ray,
+  // assuming the viewer is in space (or NaN if the view ray does not intersect
+  // the atmosphere).
+  Length r = length(camera);
+  Length rmu = dot(camera, view_ray);
+  // @shotamatsuda: Use SafeSqrt instead.
+  // See: https://github.com/takram-design-engineering/three-geospatial/pull/26
+  Length distance_to_top_atmosphere_boundary = -rmu -
+      SafeSqrt(rmu * rmu - r * r +
+          atmosphere.top_radius * atmosphere.top_radius);
+  // If the viewer is in space and the view ray intersects the atmosphere, move
+  // the viewer to the top atmosphere boundary (along the view ray):
+  if (distance_to_top_atmosphere_boundary > 0.0 * m) {
+    camera = camera + view_ray * distance_to_top_atmosphere_boundary;
+    r = atmosphere.top_radius;
+    rmu += distance_to_top_atmosphere_boundary;
+  } else if (r > atmosphere.top_radius) {
+    // If the view ray does not intersect the atmosphere, simply return 0.
+    transmittance = DimensionlessSpectrum(1.0);
+    return RadianceSpectrum(0.0 * watt_per_square_meter_per_sr_per_nm);
+  }
+  // Compute the r, mu, mu_s and nu parameters needed for the texture lookups.
+  Number mu = rmu / r;
+  Number mu_s = dot(camera, sun_direction) / r;
+  Number nu = dot(view_ray, sun_direction);
+
+  // @shotamatsuda: For rendering points below the bottom atmosphere.
+  #ifdef GROUND
+  bool ray_r_mu_intersects_ground = RayIntersectsGround(atmosphere, r, mu);
+  #else // GROUND
+  bool ray_r_mu_intersects_ground = false;
+  #endif // GROUND
+
+  transmittance = ray_r_mu_intersects_ground ? DimensionlessSpectrum(0.0) :
+      GetTransmittanceToTopAtmosphereBoundary(
+          atmosphere, transmittance_texture, r, mu);
+  IrradianceSpectrum single_mie_scattering;
+  IrradianceSpectrum scattering;
+  if (shadow_length == 0.0 * m) {
+    scattering = GetCombinedScattering(
+        atmosphere, scattering_texture, single_mie_scattering_texture,
+        r, mu, mu_s, nu, ray_r_mu_intersects_ground,
+        single_mie_scattering);
+  } else {
+    // Case of light shafts (shadow_length is the total length noted l in our
+    // paper): we omit the scattering between the camera and the point at
+    // distance l, by implementing Eq. (18) of the paper (shadow_transmittance
+    // is the T(x,x_s) term, scattering is the S|x_s=x+lv term).
+    Length d = shadow_length;
+    Length r_p =
+        ClampRadius(atmosphere, sqrt(d * d + 2.0 * r * mu * d + r * r));
+    Number mu_p = (r * mu + d) / r_p;
+    Number mu_s_p = (r * mu_s + d * nu) / r_p;
+
+    scattering = GetCombinedScattering(
+        atmosphere, scattering_texture, single_mie_scattering_texture,
+        r_p, mu_p, mu_s_p, nu, ray_r_mu_intersects_ground,
+        single_mie_scattering);
+    DimensionlessSpectrum shadow_transmittance =
+        GetTransmittance(atmosphere, transmittance_texture,
+            r, mu, shadow_length, ray_r_mu_intersects_ground);
+    // @shotamatsuda: Occlude only single Rayleigh scattering by the shadow.
+#ifdef HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+    IrradianceSpectrum higher_order_scattering = GetScattering(
+        atmosphere, higher_order_scattering_texture,
+        r_p, mu_p, mu_s_p, nu, ray_r_mu_intersects_ground);
+    IrradianceSpectrum single_scattering = scattering - higher_order_scattering;
+    scattering = single_scattering * shadow_transmittance + higher_order_scattering;
+#else // HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+    scattering = scattering * shadow_transmittance;
+#endif // HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+    single_mie_scattering = single_mie_scattering * shadow_transmittance;
+  }
+  return scattering * RayleighPhaseFunction(nu) + single_mie_scattering *
+      MiePhaseFunction(atmosphere.mie_phase_function_g, nu);
+}
+
+// @shotamatsuda: Returns the point on the ray closest to the origin.
+vec3 ClosestPointOnRay(const Position camera, const Position point) {
+  Position ray = point - camera;
+  Number t = clamp(-dot(camera, ray) / dot(ray, ray), 0.0, 1.0);
+  return camera + t * ray;
+}
+
+vec2 RaySphereIntersections(
+    const Position camera, const Direction direction, const Length radius) {
+  float b = 2.0 * dot(direction, camera);
+  float c = dot(camera, camera) - radius * radius;
+  float discriminant = b * b - 4.0 * c;
+  float Q = sqrt(discriminant);
+  return vec2(-b - Q, -b + Q) * 0.5;
+}
+
+// @shotamatsuda: Clip the view ray at the bottom atmosphere boundary.
+bool ClipAtBottomAtmosphere(
+    const AtmosphereParameters atmosphere,
+    const Direction view_ray, inout Position camera, inout Position point) {
+  const Length eps = 0.0;
+  Length bottom_radius = atmosphere.bottom_radius + eps;
+  Length r_camera = length(camera);
+  Length r_point = length(point);
+  bool camera_below = r_camera < bottom_radius;
+  bool point_below = r_point < bottom_radius;
+
+  vec2 t = RaySphereIntersections(camera, view_ray, bottom_radius);
+  Position intersection = camera + view_ray * (camera_below ? t.y : t.x);
+  camera = camera_below ? intersection : camera;
+  point = point_below ? intersection : point;
+
+  return camera_below && point_below;
+}
+
+RadianceSpectrum GetSkyRadianceToPoint(
+    const AtmosphereParameters atmosphere,
+    const TransmittanceTexture transmittance_texture,
+    const ReducedScatteringTexture scattering_texture,
+    const ReducedScatteringTexture single_mie_scattering_texture,
+    Position camera, Position point, const Length shadow_length,
+    const Direction sun_direction, out DimensionlessSpectrum transmittance) {
+  // @shotamatsuda: Avoid artifacts when the ray does not intersect the top
+  // atmosphere boundary.
+  if (length(ClosestPointOnRay(camera, point)) > atmosphere.top_radius) {
+    transmittance = vec3(1.0);
+    return vec3(0.0);
+  }
+
+  Direction view_ray = normalize(point - camera);
+  if (ClipAtBottomAtmosphere(atmosphere, view_ray, camera, point)) {
+    transmittance = vec3(1.0);
+    return vec3(0.0);
+  }
+
+  // Compute the distance to the top atmosphere boundary along the view ray,
+  // assuming the viewer is in space (or NaN if the view ray does not intersect
+  // the atmosphere).
+  Length r = length(camera);
+  Length rmu = dot(camera, view_ray);
+  // @shotamatsuda: Use SafeSqrt instead.
+  // See: https://github.com/takram-design-engineering/three-geospatial/pull/26
+  Length distance_to_top_atmosphere_boundary = -rmu -
+      SafeSqrt(rmu * rmu - r * r +
+          atmosphere.top_radius * atmosphere.top_radius);
+  // If the viewer is in space and the view ray intersects the atmosphere, move
+  // the viewer to the top atmosphere boundary (along the view ray):
+  if (distance_to_top_atmosphere_boundary > 0.0 * m) {
+    camera = camera + view_ray * distance_to_top_atmosphere_boundary;
+    r = atmosphere.top_radius;
+    rmu += distance_to_top_atmosphere_boundary;
+  }
+
+  // Compute the r, mu, mu_s and nu parameters for the first texture lookup.
+  Number mu = rmu / r;
+  Number mu_s = dot(camera, sun_direction) / r;
+  Number nu = dot(view_ray, sun_direction);
+  Length d = length(point - camera);
+  bool ray_r_mu_intersects_ground = RayIntersectsGround(atmosphere, r, mu);
+
+  // @shotamatsuda: Hack to avoid rendering artifacts near the horizon, due to
+  // finite atmosphere texture resolution and finite floating point precision.
+  // See: https://github.com/ebruneton/precomputed_atmospheric_scattering/pull/32
+  if (!ray_r_mu_intersects_ground) {
+    Number mu_horizon = -SafeSqrt(1.0 -
+        (atmosphere.bottom_radius * atmosphere.bottom_radius) / (r * r));
+    const Number eps = 0.004;
+    mu = max(mu, mu_horizon + eps);
+  }
+
+  transmittance = GetTransmittance(atmosphere, transmittance_texture,
+      r, mu, d, ray_r_mu_intersects_ground);
+
+  IrradianceSpectrum single_mie_scattering;
+  IrradianceSpectrum scattering = GetCombinedScattering(
+      atmosphere, scattering_texture, single_mie_scattering_texture,
+      r, mu, mu_s, nu, ray_r_mu_intersects_ground,
+      single_mie_scattering);
+
+  // Compute the r, mu, mu_s and nu parameters for the second texture lookup.
+  // If shadow_length is not 0 (case of light shafts), we want to ignore the
+  // scattering along the last shadow_length meters of the view ray, which we
+  // do by subtracting shadow_length from d (this way scattering_p is equal to
+  // the S|x_s=x_0-lv term in Eq. (17) of our paper).
+  d = max(d - shadow_length, 0.0 * m);
+  Length r_p = ClampRadius(atmosphere, sqrt(d * d + 2.0 * r * mu * d + r * r));
+  Number mu_p = (r * mu + d) / r_p;
+  Number mu_s_p = (r * mu_s + d * nu) / r_p;
+
+  IrradianceSpectrum single_mie_scattering_p;
+  IrradianceSpectrum scattering_p = GetCombinedScattering(
+      atmosphere, scattering_texture, single_mie_scattering_texture,
+      r_p, mu_p, mu_s_p, nu, ray_r_mu_intersects_ground,
+      single_mie_scattering_p);
+
+  // Combine the lookup results to get the scattering between camera and point.
+  DimensionlessSpectrum shadow_transmittance = transmittance;
+  if (shadow_length > 0.0 * m) {
+    // This is the T(x,x_s) term in Eq. (17) of our paper, for light shafts.
+    shadow_transmittance = GetTransmittance(atmosphere, transmittance_texture,
+        r, mu, d, ray_r_mu_intersects_ground);
+  }
+  // @shotamatsuda: Occlude only single Rayleigh scattering by the shadow.
+#ifdef HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+  IrradianceSpectrum higher_order_scattering = GetScattering(
+      atmosphere, higher_order_scattering_texture,
+      r, mu, mu_s, nu, ray_r_mu_intersects_ground);
+  IrradianceSpectrum single_scattering = scattering - higher_order_scattering;
+  IrradianceSpectrum higher_order_scattering_p = GetScattering(
+      atmosphere, higher_order_scattering_texture,
+      r_p, mu_p, mu_s_p, nu, ray_r_mu_intersects_ground);
+  IrradianceSpectrum single_scattering_p =
+      scattering_p - higher_order_scattering_p;
+  scattering =
+      single_scattering - shadow_transmittance * single_scattering_p +
+      higher_order_scattering - transmittance * higher_order_scattering_p;
+#else // HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+  scattering = scattering - shadow_transmittance * scattering_p;
+#endif // HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+
+  single_mie_scattering =
+      single_mie_scattering - shadow_transmittance * single_mie_scattering_p;
+#ifdef COMBINED_SCATTERING_TEXTURES
+  single_mie_scattering = GetExtrapolatedSingleMieScattering(
+      atmosphere, vec4(scattering, single_mie_scattering.r));
+#endif // COMBINED_SCATTERING_TEXTURES
+
+  // Hack to avoid rendering artifacts when the sun is below the horizon.
+  single_mie_scattering = single_mie_scattering *
+      smoothstep(Number(0.0), Number(0.01), mu_s);
+
+  return scattering * RayleighPhaseFunction(nu) + single_mie_scattering *
+      MiePhaseFunction(atmosphere.mie_phase_function_g, nu);
+}
+
+IrradianceSpectrum GetSunAndSkyIrradiance(
+    const AtmosphereParameters atmosphere,
+    const TransmittanceTexture transmittance_texture,
+    const IrradianceTexture irradiance_texture,
+    const Position point, const Direction normal, const Direction sun_direction,
+    out IrradianceSpectrum sky_irradiance) {
+  Length r = length(point);
+  Number mu_s = dot(point, sun_direction) / r;
+
+  // Indirect irradiance (approximated if the surface is not horizontal).
+  sky_irradiance = GetIrradiance(atmosphere, irradiance_texture, r, mu_s) *
+      (1.0 + dot(normal, point) / r) * 0.5;
+
+  // Direct irradiance.
+  return atmosphere.solar_irradiance *
+      GetTransmittanceToSun(
+          atmosphere, transmittance_texture, r, mu_s) *
+      max(dot(normal, sun_direction), 0.0);
+}
+
+// @shotamatsuda: Added for the clouds.
+IrradianceSpectrum GetSunAndSkyScalarIrradiance(
+    const AtmosphereParameters atmosphere,
+    const TransmittanceTexture transmittance_texture,
+    const IrradianceTexture irradiance_texture,
+    const Position point, const Direction sun_direction,
+    out IrradianceSpectrum sky_irradiance) {
+  Length r = length(point);
+  Number mu_s = dot(point, sun_direction) / r;
+
+  // Indirect irradiance. Integral over sphere yields 2π.
+  sky_irradiance = GetIrradiance(atmosphere, irradiance_texture, r, mu_s) *
+      2.0 * PI;
+
+  // Direct irradiance. Omit the cosine term.
+  return atmosphere.solar_irradiance *
+      GetTransmittanceToSun(atmosphere, transmittance_texture, r, mu_s);
+}
+
+Luminance3 GetSolarLuminance() {
+  return ATMOSPHERE.solar_irradiance /
+      (PI * ATMOSPHERE.sun_angular_radius * ATMOSPHERE.sun_angular_radius) *
+      SUN_SPECTRAL_RADIANCE_TO_LUMINANCE;
+}
+
+Luminance3 GetSkyLuminance(
+    const Position camera, Direction view_ray, const Length shadow_length,
+    const Direction sun_direction, out DimensionlessSpectrum transmittance) {
+  return GetSkyRadiance(ATMOSPHERE, transmittance_texture,
+      scattering_texture, single_mie_scattering_texture,
+      camera, view_ray, shadow_length, sun_direction,
+      transmittance) * SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+}
+
+Luminance3 GetSkyLuminanceToPoint(
+    const Position camera, const Position point, const Length shadow_length,
+    const Direction sun_direction, out DimensionlessSpectrum transmittance) {
+  return GetSkyRadianceToPoint(ATMOSPHERE, transmittance_texture,
+      scattering_texture, single_mie_scattering_texture,
+      camera, point, shadow_length, sun_direction, transmittance) *
+      SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+}
+
+Illuminance3 GetSunAndSkyIlluminance(
+    const Position p, const Direction normal, const Direction sun_direction,
+    out IrradianceSpectrum sky_irradiance) {
+  IrradianceSpectrum sun_irradiance = GetSunAndSkyIrradiance(
+      ATMOSPHERE, transmittance_texture, irradiance_texture, p, normal,
+      sun_direction, sky_irradiance);
+  sky_irradiance *= SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+  return sun_irradiance * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE;
+}
+
+// @shotamatsuda: Added for the clouds.
+Illuminance3 GetSunAndSkyScalarIlluminance(
+    const Position p, const Direction sun_direction,
+    out IrradianceSpectrum sky_irradiance) {
+  IrradianceSpectrum sun_irradiance = GetSunAndSkyScalarIrradiance(
+      ATMOSPHERE, transmittance_texture, irradiance_texture, p,
+      sun_direction, sky_irradiance);
+  sky_irradiance *= SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+  return sun_irradiance * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE;
+}
+
+#define GetSolarRadiance GetSolarLuminance
+#define GetSkyRadiance GetSkyLuminance
+#define GetSkyRadianceToPoint GetSkyLuminanceToPoint
+#define GetSunAndSkyIrradiance GetSunAndSkyIlluminance
+#define GetSunAndSkyScalarIrradiance GetSunAndSkyScalarIlluminance
+
+
+// interleaved gradient noise（屏幕空间低频噪声，input dithering 用，无纹理依赖）。
+// ACESFilmic + tonemapDisplay 已迁到链尾 tonemap.frag.ts（atmosphere 末端输出线性 HalfFloat，
+// 由独立 tonemap stage 做 ACES+gamma+dithering 收尾；此处仅留 input dithering 用的噪声函数）。
+float interleavedGradientNoise(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+// 视线重建：czm_windowToEyeCoordinates 近/远平面差分（源库 reconstructRay）。
+// 避免 ndc + inverseProjection 在仰视净空 / log-depth / 多视锥下方向退化。
+void reconstructRay(const vec3 cameraPosition, out vec3 rd) {
+  vec4 eyeNear = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, 0.0, 1.0));
+  vec4 eyeFar = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, 1.0, 1.0));
+  if (abs(eyeNear.w) > 1e-10) eyeNear /= eyeNear.w;
+  if (abs(eyeFar.w) > 1e-10) eyeFar /= eyeFar.w;
+  vec3 dirEC = eyeFar.xyz - eyeNear.xyz;
+  if (dot(dirEC, dirEC) < 1e-20) dirEC = eyeFar.xyz;
+  rd = normalize((czm_inverseView * vec4(normalize(dirEC), 0.0)).xyz);
+}
+// 射线 o+t·d 与半径 R 的球是否存在 t>eps 的前向交点（源库 rayForwardHitsSphere）。
+// 【float32 稳定化 ×2】贴地/水下相机（已 clamp 到面，c 被 max 钉 0）时该判定两度被舍入支配：
+//   ① c = dot(o,o)-R² 是 4e7 量级减法，ULP 噪声 ±4km²（±16m）——符号噪声偏负（"球内"）时
+//     天顶视线也判前向穿球 → GROUND 分支 tHitG≈水下深度 → inscatter≈0 → 天空黑（-12m bug）。
+//     已改因式分解 (r-R)(r+R) + max 钉非负。
+//   ② c=0 时 disc=b²，sqrt(b²) 的舍入可比 b 大 1 ULP（b~2462km 时 ULP=0.00024km）——
+//     -b+s = +0.00024 > 旧阈值 1e-6 → hitBottom 假阳性，sqrt 舍入方向随像素间 b 值伪随机
+//     → ~69% 像素翻转 = 天空黑白雪花（-31m bug）。阈值 1e-6（1mm）→ 1e-3（1m）：
+//     1m 内的前向交点物理无意义（远小于任何地形尺度），ULP 噪声 0.00024 < 0.001 被稳定排除。
+bool rayForwardHitsSphere(vec3 o, vec3 d, float R) {
+  float b = dot(o, d);
+  float rO = length(o);
+  float c = max((rO - R) * (rO + R), 0.0);
+  float disc = b * b - c;
+  if (disc < 0.0) return false;
+  float s = sqrt(disc);
+  return (-b - s > 1e-3) || (-b + s > 1e-3);
+}
+// 相机是否在大气壳层（bottom < r < top），源库 cameraInAtmosphereShell。
+bool cameraInAtmosphereShell(vec3 o, float bottomR, float topR) {
+  float r = length(o);
+  return r > bottomR + 1e-5 && r < topR - 1e-5;
+}
+// GetSkyRadianceToPointScaled：散射距离缩放 wrapper（方案 A，等效空气密度倍率）。
+//
+// 本函数是 bruneton/runtime.glsl GetSkyRadianceToPoint（9 参，L253-371）+ GetSkyLuminanceToPoint
+// （L427-434，光谱→亮度换算）的合并 5 参 drop-in——main 现有 GetSkyRadianceToPoint(5 参) 因 runtime 末尾
+// #define GetSkyRadianceToPoint GetSkyLuminanceToPoint 实际命中 GetSkyLuminanceToPoint，故 wrapper 须同样
+// 5 参 + 末端 ×SKY_SPECTRAL_RADIANCE_TO_LUMINANCE 才等效。
+//
+// **唯一物理改动**：Length d = length(point - camera) * u_distanceScale（散射距离缩放，等效空气密度倍率）。
+// u_distanceScale=1.0 时 d×1=d，与原 GetSkyRadianceToPoint→GetSkyLuminanceToPoint 链路 bit 等价（phase1 零回归）。
+// 其余 r_p/mu_p/mu_s_p/GetTransmittance/GetCombinedScattering/shadow_transmittance 全部用缩放后的 d 自动跟随。
+//
+// atmosphere/transmittance_texture/scattering_texture/single_mie_scattering_texture 用 bruneton runtime
+// #include 的全局（const ATMOSPHERE + LUT_UNIFORMS_GLSL sampler）；helper（ClipAtBottomAtmosphere/
+// GetTransmittance/GetCombinedScattering/GetScattering/RayleighPhaseFunction/MiePhaseFunction/
+// GetExtrapolatedSingleMieScattering 等）同在 runtime #include，不重复声明。
+vec3 GetSkyRadianceToPointScaled(
+    Position camera, Position point, const Length shadow_length,
+    const Direction sun_direction, out vec3 transmittance) {
+  // @shotamatsuda: Avoid artifacts when the ray does not intersect the top
+  // atmosphere boundary.
+  if (length(ClosestPointOnRay(camera, point)) > ATMOSPHERE.top_radius) {
+    transmittance = vec3(1.0);
+    return vec3(0.0);
+  }
+
+  Direction view_ray = normalize(point - camera);
+  if (ClipAtBottomAtmosphere(ATMOSPHERE, view_ray, camera, point)) {
+    transmittance = vec3(1.0);
+    return vec3(0.0);
+  }
+
+  // Compute the distance to the top atmosphere boundary along the view ray,
+  // assuming the viewer is in space (or NaN if the view ray does not intersect
+  // the atmosphere).
+  Length r = length(camera);
+  Length rmu = dot(camera, view_ray);
+  // @shotamatsuda: Use SafeSqrt instead.
+  // See: https://github.com/takram-design-engineering/three-geospatial/pull/26
+  Length distance_to_top_atmosphere_boundary = -rmu -
+      SafeSqrt(rmu * rmu - r * r +
+          ATMOSPHERE.top_radius * ATMOSPHERE.top_radius);
+  // If the viewer is in space and the view ray intersects the atmosphere, move
+  // the viewer to the top atmosphere boundary (along the view ray):
+  if (distance_to_top_atmosphere_boundary > 0.0 * m) {
+    camera = camera + view_ray * distance_to_top_atmosphere_boundary;
+    r = ATMOSPHERE.top_radius;
+    rmu += distance_to_top_atmosphere_boundary;
+  }
+
+  // Compute the r, mu, mu_s and nu parameters for the first texture lookup.
+  Number mu = rmu / r;
+  Number mu_s = dot(camera, sun_direction) / r;
+  Number nu = dot(view_ray, sun_direction);
+  // 散射距离缩放（方案 A，等效空气密度倍率）：u_distanceScale=1.0 时与原 GetSkyRadianceToPoint 等价。
+  Length d = length(point - camera) * u_distanceScale;
+  bool ray_r_mu_intersects_ground = RayIntersectsGround(ATMOSPHERE, r, mu);
+
+  // @shotamatsuda: Hack to avoid rendering artifacts near the horizon, due to
+  // finite atmosphere texture resolution and finite floating point precision.
+  // See: https://github.com/ebruneton/precomputed_atmospheric_scattering/pull/32
+  if (!ray_r_mu_intersects_ground) {
+    Number mu_horizon = -SafeSqrt(1.0 -
+        (ATMOSPHERE.bottom_radius * ATMOSPHERE.bottom_radius) / (r * r));
+    const Number eps = 0.004;
+    mu = max(mu, mu_horizon + eps);
+  }
+
+  transmittance = GetTransmittance(ATMOSPHERE, transmittance_texture,
+      r, mu, d, ray_r_mu_intersects_ground);
+
+  IrradianceSpectrum single_mie_scattering;
+  IrradianceSpectrum scattering = GetCombinedScattering(
+      ATMOSPHERE, scattering_texture, single_mie_scattering_texture,
+      r, mu, mu_s, nu, ray_r_mu_intersects_ground,
+      single_mie_scattering);
+
+  // Compute the r, mu, mu_s and nu parameters for the second texture lookup.
+  // If shadow_length is not 0 (case of light shafts), we want to ignore the
+  // scattering along the last shadow_length meters of the view ray, which we
+  // do by subtracting shadow_length from d (this way scattering_p is equal to
+  // the S|x_s=x_0-lv term in Eq. (17) of our paper).
+  d = max(d - shadow_length, 0.0 * m);
+  Length r_p = ClampRadius(ATMOSPHERE, sqrt(d * d + 2.0 * r * mu * d + r * r));
+  Number mu_p = (r * mu + d) / r_p;
+  Number mu_s_p = (r * mu_s + d * nu) / r_p;
+
+  IrradianceSpectrum single_mie_scattering_p;
+  IrradianceSpectrum scattering_p = GetCombinedScattering(
+      ATMOSPHERE, scattering_texture, single_mie_scattering_texture,
+      r_p, mu_p, mu_s_p, nu, ray_r_mu_intersects_ground,
+      single_mie_scattering_p);
+
+  // Combine the lookup results to get the scattering between camera and point.
+  DimensionlessSpectrum shadow_transmittance = transmittance;
+  if (shadow_length > 0.0 * m) {
+    // This is the T(x,x_s) term in Eq. (17) of our paper, for light shafts.
+    shadow_transmittance = GetTransmittance(ATMOSPHERE, transmittance_texture,
+        r, mu, d, ray_r_mu_intersects_ground);
+  }
+  // @shotamatsuda: Occlude only single Rayleigh scattering by the shadow.
+#ifdef HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+  IrradianceSpectrum higher_order_scattering = GetScattering(
+      ATMOSPHERE, higher_order_scattering_texture,
+      r, mu, mu_s, nu, ray_r_mu_intersects_ground);
+  IrradianceSpectrum single_scattering = scattering - higher_order_scattering;
+  IrradianceSpectrum higher_order_scattering_p = GetScattering(
+      ATMOSPHERE, higher_order_scattering_texture,
+      r_p, mu_p, mu_s_p, nu, ray_r_mu_intersects_ground);
+  IrradianceSpectrum single_scattering_p =
+      scattering_p - higher_order_scattering_p;
+  scattering =
+      single_scattering - shadow_transmittance * single_scattering_p +
+      higher_order_scattering - transmittance * higher_order_scattering_p;
+#else // HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+  scattering = scattering - shadow_transmittance * scattering_p;
+#endif // HAS_HIGHER_ORDER_SCATTERING_TEXTURE
+
+  single_mie_scattering =
+      single_mie_scattering - shadow_transmittance * single_mie_scattering_p;
+#ifdef COMBINED_SCATTERING_TEXTURES
+  single_mie_scattering = GetExtrapolatedSingleMieScattering(
+      ATMOSPHERE, vec4(scattering, single_mie_scattering.r));
+#endif // COMBINED_SCATTERING_TEXTURES
+
+  // Hack to avoid rendering artifacts when the sun is below the horizon.
+  single_mie_scattering = single_mie_scattering *
+      smoothstep(Number(0.0), Number(0.01), mu_s);
+
+  // 末端 ×SKY_SPECTRAL_RADIANCE_TO_LUMINANCE：对齐 GetSkyLuminanceToPoint（5 参 drop-in 必需，
+  // 否则 inscatter 是辐射度量级 ~1000× 小于亮度量级 → 散射不可见）。
+  return (scattering * RayleighPhaseFunction(nu) + single_mie_scattering *
+      MiePhaseFunction(ATMOSPHERE.mie_phase_function_g, nu)) *
+      SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+}
+
+
+// 反演 czm_writeLogDepth：对数 windowZ → 视轴深度 -z_eye 的正值（米；沿视轴，非径向距离）。
+float czm_reverseLogDepthDist(const float logDepth, const float near, const float far) {
+  float d = pow(2.0, logDepth * log2(far - near + 1.0));
+  return d + near - 1.0;
+}
+
+// 反演 czm_writeLogDepth：对数 windowZ → 视角深度 z_eye（负值，米）。
+float czm_reverseLogDepthEye(const float logDepth, const float near, const float far) {
+  return -czm_reverseLogDepthDist(logDepth, near, far);
+}
+
+// 反演 czm_writeLogDepth：对数 windowZ → 线性 windowZ（[0,1]）。
+float czm_reverseLogDepthWindow(const float logDepth, const float near, const float far) {
+  float zDist = czm_reverseLogDepthDist(logDepth, near, far);
+  // windowZ = a + b / zDist，a/b 由透视投影推出：
+  float a = far / (far - near);
+  float b = far * near / (near - far);
+  return a + b / zDist;
+}
+
+// 用 czm_inverseProjection 反投影：uv + 线性 windowZ → 视角坐标。
+vec3 reconstructViewPosition(const vec2 uv, const float windowZ) {
+  vec2 ndc = uv * 2.0 - 1.0;
+  vec4 clip = vec4(ndc, windowZ * 2.0 - 1.0, 1.0);
+  vec4 view = czm_inverseProjection * clip;
+  return view.xyz / view.w;
+}
+
+
+vec3 getSkyRadiance(
+  const vec3 cameraPosition,
+  const vec3 rayDirection,
+  const float shadowLength,
+  const vec3 sunDirection,
+  const float fragmentAngle,
+  out vec3 transmittance
+) {
+  vec3 radiance = GetSkyRadiance(
+    cameraPosition,
+    rayDirection,
+    shadowLength,
+    sunDirection,
+    transmittance
+  );
+
+  float viewDotSun = dot(rayDirection, sunDirection);
+  if (viewDotSun > cosSunAngularRadius) {
+    float angle = acos(clamp(viewDotSun, -1.0, 1.0));
+    float antialias = smoothstep(
+      ATMOSPHERE.sun_angular_radius,
+      ATMOSPHERE.sun_angular_radius - fragmentAngle,
+      angle
+    );
+    radiance += transmittance * GetSolarRadiance() * antialias;
+  }
+
+  return radiance;
+}
+
+
+in vec2 v_textureCoordinates;
+
+void main() {
+  vec4 originalColor = texture(colorTexture, v_textureCoordinates);
+  // input dithering：8-bit originalColor 是 ACES banding 的源头（ACES 中间调放大 2-3 倍 → 远处渐变
+  // 「水波纹」）。在源头加 triangular 噪声 ±0.5 LSB，经 ACES+gamma 映射到 display 自然打散阶梯
+  //（比纯 display 空间 dithering 更高效——display dithering 只盖 output 量化，盖不住被 ACES 放大的
+  // input 阶梯）。
+  float inDither = interleavedGradientNoise(gl_FragCoord.xy)
+    + interleavedGradientNoise(gl_FragCoord.xy + vec2(7.11, 5.17)) - 1.0;  // [-1,1] triangular
+  originalColor.rgb += inDither * 1.5 / 255.0;
+
+  // —— 视线几何量前移（Phase 1.2）：5-tap 段的 muLook 门控需在 depth 采样前拿到视角量 ——
+  // 相机位置：viewerPositionWC（ECEF 米）+ altitudeCorrection（米）→ km。camera 与后续 scenePos
+  // 都用全量 altitudeCorrection，保证在同一密切球局部系（Bruneton 模型前提）。
+  vec3 cameraPosition = (czm_viewerPositionWC + altitudeCorrection) * METER_TO_LENGTH_UNIT;
+  vec3 rayDirection;
+  reconstructRay(cameraPosition, rayDirection);
+  // 【水下相机防护】Bruneton 参数化定义域 r >= bottom_radius（GetScatteringTextureUvwzFromRMuMuSNu
+  // assert r>=bottom，release GLSL 静默越界 → rho=SafeSqrt clamp 0 / transmittance x_r 越界 → 天空黑、
+  // 云正常——云层 750m+ 求交对相机入水稳健，仅大气天空/地面分支受害）。Cesium 允许相机入水
+  // （里海水面 WGS84 椭球高约 -28m，拖动可停在水下）。沿径向 clamp：水下深度不含大气
+  // （光路从水面起算），物理等价。reconstructRay 的 camera 是 const（视线方向由近平面差分），
+  // 先重建视线再平移——clamp 的米级平移对视线方向影响 ~1e-8 可忽略；后续 sky/ground 全部
+  // 大气计算（含 lookingAtGround 判定）统一消费 clamp 后的 cameraPosition。
+  // 【clamp 下限 = 面上 10m（根因 4）】若精确 clamp 到面（h=0），cG=(r-R)(r+R)=0 → 贴地微俯视线的
+  // 椭球交点距离 tHitG 全塌 0（-bG-sG = |bG|-sqrt(bG²)=0）→ GROUND 基线 inscatter 距离 0 →
+  // 地平线/远水面无大气散射（用户 2026-08-16：54.2517,37.3744,-7,287.2,3.0 远处地平线黑）。
+  // 下限 10m：视觉不可分辨的高度，但 cG=0.01×12720≈127km² → 地平线微俯视线交点距离恢复
+  // 公里级（θ=0.05° 时 ~11km），地平线散射回归。
+  const float CAMERA_MIN_ALT_KM = 0.01;
+  float cameraRadius = length(cameraPosition);
+  float cameraMinR = ATMOSPHERE.bottom_radius + CAMERA_MIN_ALT_KM;
+  if (cameraRadius < cameraMinR) {
+    cameraPosition *= cameraMinR / cameraRadius;
+  }
+  vec3 radialOut = normalize(cameraPosition);
+  // 视线与径向（天顶方向）余弦：垂直俯视 |muLook|→1，掠射 |muLook|→0。平滑、不读 depth、无循环依赖
+  //（Phase 1.2 5-tap 视角自适应门控用；绝不用 mask/sceneDist 门控——判定信号本身在抖会造边界条纹）。
+  float muLook = dot(rayDirection, radialOut);
+
+  // depth 反演（Bug1）：czm_reverseLogDepthWindow 显式反演 log-depth → 线性 window depth（PostProcessStage
+  // 无 LOG_DEPTH define，czm_readDepth 返回 raw logDepth → 4-arg 反投影错）。near/far 用 czm_currentFrustum。
+  // Bug4：5-tap 邻域平均（log-depth 域 ≈ 几何平均距离）抗 depth 高频抖 → 消波纹（sceneDist 抖放大 inscatter
+  //   等高线）。空间平滑替代 temporal EMA（Bug3 EMA reproject 错误，专家3 C3 验证失败已回退）。
+  // Bug6：hasScene 判定用中心 tap（tapC）非 5-tap 平均 logDepth——5-tap far-plane 排除（tap<1.0）使地形边缘
+  //   像素的平均 logDepth 从 far-plane 邻居混入降到 <0.5 → 错误过 depth<1.0 → 反演 → hasScene 翻转 → 地平线
+  //   地形描边（debug=9 B 蓝边确认）。分离：hasScene 用 tapC（中心像素真实地形判定），sceneDist 用 5-tap 平均。
+#ifdef DEPTH_TEMPORAL_EMA
+  float logDepth = originalColor.a;  // depthTemporal[0] 输出 vec4(sceneColor.rgb, smoothLogDepth)（已平滑）
+  float tapC = originalColor.a;  // Bug6：中心 tap 与平均一致（EMA 路径无 5-tap）
+#else
+  float tapC = texture(depthTexture, v_textureCoordinates).r;  // 中心 tap：hasScene 判定用（Bug6）
+  float logDepth = 1.0;  // 默认 far-plane（tapC>=1.0 时跳过 4 邻域，省天空区 80% depth 采样，Phase 1.0）
+  if (tapC < 1.0) {  // tapC 早退：仅地面像素才考虑空间平滑（天空/未渲染 4 邻域 fetch 对输出零影响）
+    // Phase 1.2：垂直俯视（|muLook|→1）保留 5-tap（Bug4 有效场景，空间高频抖可空间平滑消）；
+    // 掠射（|muLook|→0）降 tap 退中心 tap（5-tap 对掠射无效=depth 时序跳非空间高频，results:50）。
+    // muLook 门控（平滑、不读 depth、无循环依赖——绝不用 mask/sceneDist 门控，那判定信号本身在抖会造边界条纹）；
+    // smoothstep 连续过渡避免 tap 数硬切换分界线；掠射退中心 tap（对称，禁 3-tap 十字防方向性偏置 ×25）。
+    // 过渡带 (0.15,0.3)：仅极掠射（|muLook|<0.3，如低空水平视线 bug6≈0.075）降 tap；中高空地球边缘
+    // （|muLook|≈0.4-0.5，如 camera-high-graze≈0.36、高空俯视地球边缘≈0.5）保留 5-tap——后者是 inscatter
+    // 阶梯敏感区（Bug5 圆圈阶梯），tap 切换会改 sceneDist → 阶梯回归（maxΔ=43 实证）。5-tap 对纯极掠射无效
+    // （depth 时序跳非空间高频），但对地球边缘过渡带仍有空间平滑价值，故阈值收窄到极掠射。
+    float useSpatial = smoothstep(0.15, 0.3, abs(muLook));
+    if (useSpatial > 0.5) {  // 垂直俯视：5-tap 空间平滑（Bug4）
+      vec2 depthTexel = 1.0 / vec2(textureSize(depthTexture, 0));
+      float tapR = texture(depthTexture, v_textureCoordinates + vec2(depthTexel.x, 0.0)).r;
+      float tapL = texture(depthTexture, v_textureCoordinates - vec2(depthTexel.x, 0.0)).r;
+      float tapU = texture(depthTexture, v_textureCoordinates + vec2(0.0, depthTexel.y)).r;
+      float tapD = texture(depthTexture, v_textureCoordinates - vec2(0.0, depthTexel.y)).r;
+      float tapSum = tapC;  // tapC<1.0 必计入
+      float tapCount = 1.0;
+      if (tapR < 1.0) { tapSum += tapR; tapCount += 1.0; }
+      if (tapL < 1.0) { tapSum += tapL; tapCount += 1.0; }
+      if (tapU < 1.0) { tapSum += tapU; tapCount += 1.0; }
+      if (tapD < 1.0) { tapSum += tapD; tapCount += 1.0; }
+      logDepth = tapSum / tapCount;  // 5-tap 平均：sceneDist 距离用（tapCount>=1.0 必 >0.5，三元简化为除法）
+    } else {  // 掠射：中心 tap（5-tap 无效，省 4 fetch）
+      logDepth = tapC;
+    }
+  }
+#endif
+  float depth = czm_reverseLogDepthWindow(logDepth, czm_currentFrustum.x, czm_currentFrustum.y);
+  // Bug6：hasSceneDepth 用 tapC（中心像素，真实地形判定）；depth 用 5-tap 平均（sceneDist 距离平滑）。
+  float hasSceneDepth = czm_reverseLogDepthWindow(tapC, czm_currentFrustum.x, czm_currentFrustum.y);
+
+  float bottomR = ATMOSPHERE.bottom_radius;
+  float topR = ATMOSPHERE.top_radius;
+  float camR = length(cameraPosition);
+
+  // —— depth 反演：为近处地形（含地平线上方山峰）提供真实 sceneDist，算前景雾、保持山体不透明。**不参与
+  // sky/ground 主分类**——分类用 lookingAtGround（平滑），避免 depthTexture 不抗锯齿在掠射地平线处逐像素
+  // 硬翻转的条纹。hasScene/sceneDist 只在 foreInscatter（近处 mask>0）被消费；远处/掠射 sceneDist 大
+  // → mask=0 不读它 → 无条纹。
+  bool hasScene = false;
+  float sceneDist = 0.0;
+  if (hasSceneDepth < 1.0) {  // Bug6：中心 tap 判定（防 5-tap far-plane 排除翻转边缘 hasScene）
+    vec4 eyePos = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depth, 1.0));  // sceneDist 用 5-tap 平均 depth
+    if (abs(eyePos.w) > 1e-6) {
+      eyePos /= eyePos.w;
+      if (eyePos.z < -1e-4) {
+        vec4 worldPos4 = czm_inverseView * eyePos;
+        vec3 sceneWorldPosKm = worldPos4.xyz * METER_TO_LENGTH_UNIT
+          + altitudeCorrection * METER_TO_LENGTH_UNIT;
+        float sceneR = length(sceneWorldPosKm);
+        // 反演点在大气层内（容 5km 反演误差）= 真实地形；far plane 反演点 r 巨大被排除。
+        if (sceneR < topR + 5.0 && sceneR > bottomR - 5.0) {
+          hasScene = true;
+          sceneDist = length(sceneWorldPosKm - cameraPosition);
+        }
+      }
+    }
+  }
+
+  // —— 几何判定（视线方向，平滑）——
+  // radialOut/muLook 已前移到 depth 采样前（Phase 1.2 门控用）；此处直接用前移的 muLook。
+  bool hitBottom = rayForwardHitsSphere(cameraPosition, rayDirection, bottomR);
+  bool brunetonIntersectsGround = RayIntersectsGround(ATMOSPHERE, camR, muLook);
+  // 视线是否指向地球（与地表前向相交）—— sky/ground inscatter 函数选择的主判据（平滑，不读 depth）。
+  bool lookingAtGround = brunetonIntersectsGround || hitBottom;
+
+  // SUN 日盘抗锯齿每像素角宽度（dFdx/dFdy 必须在分叉前算，quad 内控制流一致）
+  float fragmentAngle = length(dFdx(rayDirection) + dFdy(rayDirection)) / length(rayDirection);
+
+  // 椭球面交点判别（ground inscatter 距离 tHitG 用，所有地面像素统一）。
+  // cG 同 rayForwardHitsSphere 的 float32 稳定化（因式分解 + max 钉非负——相机语义不在球内，
+  // 水下已 clamp 到面；原 dot(o,o)-R² 的 ±4km² 舍入噪声会让贴地像素的 discG/tHitG 噪声翻转）。
+  float bG = dot(cameraPosition, rayDirection);
+  float rCamG = length(cameraPosition);
+  float cG = max((rCamG - bottomR) * (rCamG + bottomR), 0.0);
+  float discG = bG * bG - cG;
+
+  // —— DUAL inscatter：平滑基线 + depth 前景雾，mask 过渡带终点在地平线 → 分界线与地平线重合 ——
+  // baseInscatter（平滑、不读 depth → 无掠射条纹）：地面→椭球面 tHitG，天空→getSkyRadiance。
+  // foreInscatter（depth 真实距离 sceneDist → 山体不透明、前景雾正确）：hasScene 且 mask>0 时叠加。
+  // Bug5：mask 改用正向窄过渡 smoothstep(CLOSE_KM*2, CLOSE_KM, sceneDist)（原 horizonKm 反向已弃，详见 Bug5 注释）。
+  const float CLOSE_KM = 20.0;
+  // 椭球面交点 tHitG（ground 基线距离用）。
+  float tHitG = -1.0;
+  if (discG > 0.0) {
+    float sG = sqrt(discG);
+    tHitG = -bG - sG;
+    if (tHitG <= 1e-6) tHitG = -bG + sG;
+    // sqrt(b²-c) 的舍入噪声同 rayForwardHitsSphere ②：贴地（c≈0）时 -bG+sG ≈ ±ULP(2462km)=±0.24m
+    // 抖动——钉非负防 scenePos 落到相机背后（d=length 反而正确但参数化怪）。
+    tHitG = max(tHitG, 0.0);
+  }
+  vec3 transmittance = vec3(1.0);
+  vec3 inscatter = vec3(0.0);
+  vec3 finalColor;
+  if (lookingAtGround && discG > 0.0) {
+    // 地面基线：椭球面 tHitG（平滑）。
+    vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
+    inscatter = GetSkyRadianceToPointScaled(
+      cameraPosition,
+      scenePosKm,
+      0.0,
+      sunDirection,
+      transmittance
+    );
+  } else {
+    // 天空基线（sky:false 在 skyBranch 内透传 return）。
+
+#ifdef CLOUDS_SHADOW_LENGTH
+    // M5 atmosphere 路径：视线云影长度调制天空 inscatter（太阳周围放射光柱）。
+    // clouds march att2 已 *METER_TO_LENGTH_UNIT（m→km），与本函数 shadow_length 参数域一致。
+    float cloudsShadowLength = texture(u_cloudsShadowLength, v_textureCoordinates).r;
+    // M5 atmosphere 路径：云影长度增益（march 物理值域 0.35-0.5km，Bruneton shadow_length 机制
+    // 需数十 km 才可见调制——gain=1 物理精确但 subtle 对齐 three；艺术放大出可见光柱）
+    cloudsShadowLength *= u_cloudsGodRaysGain;
+#else
+    const float cloudsShadowLength = 0.0;
+#endif
+    inscatter = getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance);
+  }
+  // 近处地形按 mask 叠加 depth 前景雾 → 山体不透明。mask>0 才算 foreInscatter（远处省 LUT）。
+  // Bug5：mask 改正向窄过渡 smoothstep(CLOSE_KM, CLOSE_KM*2, sceneDist)——原 smoothstep(horizonKm, CLOSE_KM)
+  // 在 camera 高（horizonKm=905km > CLOSE_KM=20km）反向 + 过渡带 885km 太宽 → fore/base inscatter 在
+  // sceneDist 同心圆缓慢变化 → 圆圈内外大气散射阶梯（等高线）。正向窄过渡（20~40km）让 fore 快速衰减到
+  // base 基线，圆圈消失。近处 sceneDist<CLOSE_KM mask=1（山体不透明）；远处 mask→0 走基线。
+  if (hasScene) {
+    float mask = smoothstep(CLOSE_KM * 2.0, CLOSE_KM, sceneDist);  // 近=1 远=0，过渡带 20km
+    if (mask > 0.0) {
+      vec3 scenePosKm = cameraPosition + rayDirection * sceneDist;
+      vec3 foreTrans;
+      vec3 foreInscatter = GetSkyRadianceToPointScaled(
+        cameraPosition,
+        scenePosKm,
+        0.0,
+        sunDirection,
+        foreTrans
+      );
+      transmittance = mix(transmittance, foreTrans, mask);
+      inscatter = mix(inscatter, foreInscatter, mask);
+    }
+  }
+
+  // —— limb soft fade（用户需求：limb 边缘蓝白 inscatter 缓慢渐隐到黑太空，消除硬切边缘）。
+  // 根因：Bruneton GetSkyRadiance 在视线错过大气顶层(topR)时 return 0，但视线与 topR 相切(limb)时
+  // inscatter = LUT(topR, 切线) 非零（切线路径穿过大气整层）→ limb 内侧非零硬切到外侧 0，明显边缘。
+  // 修复：内侧 inscatter 在 over→0 时 smoothstep fade 到 0（蓝白过渡平滑收尾到黑太空）。
+  // 几何：b=|cross(camera,ray)|=视线到地心最近距离(impact parameter, km)；over=b-topR。
+  // over<=-decay: inscatter 不变（满）；over∈[-decay,0]: 平滑 fade 到 0；over>0: 本就 0（太空）。
+  // 首版用外侧 additive glow 形成独立亮带（双边缘更差），改为内侧 fade 无额外带——本质是让 limb 处
+  // 原本硬切到 0 的非零 inscatter 提前平滑渐隐（"缓慢减弱"），代价 limb 处稍暗（物理 limb 辉光由内侧已含）。
+  if (u_limbGlowIntensity > 0.0) {
+    float limbB = length(cross(cameraPosition, rayDirection));  // impact parameter (km)
+    float limbOver = limbB - topR;
+    // 1 - smoothstep(-decay, 0, over)：over<=-decay→1（内侧远处 inscatter 不变，保留大气）；
+    // over∈[-decay,0]→1..0（limb 附近渐隐）；over>=0→0（与外侧黑太空连续，无硬切边缘）。
+    float limbFade = 1.0 - smoothstep(-u_limbGlowDecayKm, 0.0, limbOver);
+    inscatter *= limbFade;
+  }
+
+  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale;
+
+  // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
+  //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——
+  // 整个级联被 if (u_debugMode < 6.5) 包裹：debug=7（>6.5）跳过所有可视化分支，直接落到末端线性输出
+  //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
+  // 归一化验证 HDR 承载 >1（spec §5.2/§6.3）。曾因降序级联无统一上限，debug=7 被 >4.5 分支截断输出
+  // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。
+  if (u_debugMode < 6.5) {
+    if (u_debugMode > 5.5) {
+      out_FragColor = originalColor;
+      return;
+    }
+    if (u_debugMode > 4.5) {
+      out_FragColor = vec4(depth, 0.0, length(cameraPosition) / 6420.0, 1.0);
+      return;
+    }
+    if (u_debugMode > 2.5) {
+      float r = length(cameraPosition) / 6420.0;
+      out_FragColor = vec4(vec3(r), 1.0);
+      return;
+    }
+    if (u_debugMode > 1.5) {
+      out_FragColor = vec4(sunDirection * 0.5 + 0.5, 1.0);
+      return;
+    }
+    if (u_debugMode > 0.5) {
+      vec3 v = log(vec3(1.0) + max(finalColor, vec3(0.0))) / log(100.0);
+      out_FragColor = vec4(clamp(v, 0.0, 1.0), 1.0);
+      return;
+    }
+  }
+
+#ifdef DEPTH_TEMPORAL_EMA
+  out_FragColor = vec4(finalColor * exposure, 1.0);  // Bug3：HDR .a=smoothLogDepth 不透传（专家1 M1：display alpha）
+#else
+  out_FragColor = vec4(finalColor * exposure, originalColor.a);  // UNSIGNED_BYTE main 行为
+#endif
+  // 线性 HDR，由链尾 tonemap stage 收尾
+}
+"
+`;

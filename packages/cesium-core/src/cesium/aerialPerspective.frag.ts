@@ -51,6 +51,13 @@ export interface AerialPerspectiveFragOptions {
    * 但 subtle（对齐 three 同款量级）；>1 艺术放大出可见放射状光柱（demo ?cloudsGodRays=）。
    */
   cloudsGodRaysGain?: number
+  /**
+   * 月盘（2026-08-30 夜间光照 spec r2 §5）：sky 分支物理月盘——Oren-Nayar 月面（月相从
+   * 几何涌现）× 视星等 2.5e-6 × 视线 transmittance（大气透视），走 getSkyRadiance out
+   * 通道独立于 u_inscatterScale（不吃雾旋钮），同受 hasScene 前景雾（山遮月）与 limbFade。
+   * 默认 true；false 时产物与现状逐字符一致（golden 守门）。
+   */
+  moon?: boolean
 }
 
 type ResolvedOptions = Required<AerialPerspectiveFragOptions>
@@ -74,7 +81,10 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'u_inscatterScale',
   'u_limbGlowIntensity',
   'u_limbGlowDecayKm',
-  'u_cloudsGodRaysGain' // M5 光柱增益（无条件绑定；CLOUDS_SHADOW_LENGTH 未 define 时 shader 无此 uniform，Cesium 静默忽略）
+  'u_cloudsGodRaysGain', // M5 光柱增益（无条件绑定；CLOUDS_SHADOW_LENGTH 未 define 时 shader 无此 uniform，Cesium 静默忽略）
+  'moonDirection', // 月盘（MOON 段声明；moon=false 时 shader 无声明，绑了 Cesium 静默忽略——同 u_cloudsGodRaysGain 先例）
+  'moonAngularRadius',
+  'u_moonRadiance'
 ]
 
 // Cesium PostProcessStage 内建纹理 uniform——必须由 shader 显式声明（Cesium 仅提供 uniform 值，
@@ -308,10 +318,46 @@ const SUN_DISK_GLSL = `
   }
 `
 
-// 天空 inscatter getSkyRadiance（SUN-only 裁剪版，MOON/PERSPECTIVE_CAMERA 排除）。
+// [MOON] 月盘 uniforms（moon=true 时拼入）。
+const MOON_UNIFORMS_GLSL = `
+uniform vec3 moonDirection;
+uniform float moonAngularRadius;
+uniform float u_moonRadiance;
+`
+
+// [MOON] 月盘 GLSL（getSkyRadiance 内、SUN 盘后注入；moonDisc 是 out 参数——通道方案 spec §5.1：
+// 不吃 u_inscatterScale / 同受 hasScene mix 与 limbFade / 月盘衰减只走 transmittance）。
+const MOON_DISC_GLSL = `
+  // 判定+盘缘 AA：acos（非 dot 与弧度直比）+ 边序恒升序（ω<aa 时降序边=GLSL UB——小角半径守卫）
+  float moonAngle = acos(clamp(dot(rayDirection, moonDirection), -1.0, 1.0));
+  float moonAA = max(fragmentAngle, 1e-4);
+  float moonMask = 1.0 - smoothstep(moonAngularRadius - moonAA, moonAngularRadius, moonAngle);
+  if (moonMask > 0.0) {
+    // 月面法线（上游 MoonNode raySphereIntersectionNormal：投影 + 半弦长）
+    float cosRay = dot(moonDirection, rayDirection);
+    vec3 P = rayDirection * cosRay - moonDirection;
+    float s = sqrt(max(moonAngularRadius * moonAngularRadius - dot(P, P), 0.0));
+    vec3 moonNormal = (P - rayDirection * s) / moonAngularRadius;
+    // Oren-Nayar（MoonNode 改进版 mimosa-pudica，粗糙度 1 / albedo 1 形状函数）：
+    // A=(1/π)(1-0.5/1.33+0.17/1.13)≈0.2466  B=(1/π)(0.45/1.09)≈0.1314
+    // 实参序 (L=sunDirection, V=-rayDirection, N)；月相从几何自动涌现（太阳只照亮半个月球）
+    float cosLight = dot(moonNormal, sunDirection);
+    float cosView = dot(moonNormal, -rayDirection);
+    float sOV = dot(sunDirection, -rayDirection) - cosLight * cosView;
+    float t = mix(1.0, max(max(cosLight, cosView), 0.1), smoothstep(0.0, 0.1, sOV));
+    float onDiffuse = max(cosLight, 0.0) * (sOV / t * 0.1314 + 0.2466);
+    // 亮度：太阳辐亮度 × 视星等比 2.5e-6（已含月面反照率）÷ (π·ω²)，×亮度换算 ×倍率
+    vec3 moonDiscRadiance = ATMOSPHERE.solar_irradiance
+      * 2.5e-6 / (PI * moonAngularRadius * moonAngularRadius)
+      * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE * u_moonRadiance * onDiffuse;
+    moonDisc = transmittance * moonDiscRadiance * moonMask;
+  }
+`
+
+// 天空 inscatter getSkyRadiance（源库裁剪版：SUN 恒可选、MOON 经 moon option 可选、PERSPECTIVE_CAMERA 排除）。
 // transmittance 经 out 参数输出，供统一合成（originalColor·trans·groundDim + inscatter）复用——
 // 天空像素 originalColor=clearColor 黑，trans 不影响其最终色；山峰（视线判天空）靠 trans 衰减地形色。
-function buildSkyRadianceFn(sun: boolean): string {
+function buildSkyRadianceFn(sun: boolean, moon: boolean): string {
   return `
 vec3 getSkyRadiance(
   const vec3 cameraPosition,
@@ -319,7 +365,7 @@ vec3 getSkyRadiance(
   const float shadowLength,
   const vec3 sunDirection,
   const float fragmentAngle,
-  out vec3 transmittance
+  out vec3 transmittance${moon ? ',\n  out vec3 moonDisc' : ''}
 ) {
   vec3 radiance = GetSkyRadiance(
     cameraPosition,
@@ -328,7 +374,7 @@ vec3 getSkyRadiance(
     sunDirection,
     transmittance
   );
-${sun ? SUN_DISK_GLSL : ''}
+${sun ? SUN_DISK_GLSL : ''}${moon ? MOON_DISC_GLSL : ''}
   return radiance;
 }
 `
@@ -348,7 +394,7 @@ function buildMainFn(o: ResolvedOptions): string {
 #else
     const float cloudsShadowLength = 0.0;
 #endif
-    inscatter = getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance);
+    inscatter = getSkyRadiance(cameraPosition, rayDirection, cloudsShadowLength, sunDirection, fragmentAngle, transmittance${o.moon ? ', moonDisc' : ''});
 `
     : `
     finalColor = originalColor.rgb;
@@ -510,7 +556,7 @@ void main() {
   }
   vec3 transmittance = vec3(1.0);
   vec3 inscatter = vec3(0.0);
-  vec3 finalColor;
+${o.moon ? '  vec3 moonDisc = vec3(0.0); // ground 分支保持 0（月盘只可能出自 sky 分支）\n' : ''}  vec3 finalColor;
   if (lookingAtGround && discG > 0.0) {
     // 地面基线：椭球面 tHitG（平滑）。
     vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
@@ -543,7 +589,7 @@ ${skyBranch}  }
       );
       transmittance = mix(transmittance, foreTrans, mask);
       inscatter = mix(inscatter, foreInscatter, mask);
-    }
+${o.moon ? '      moonDisc = mix(moonDisc, vec3(0.0), mask); // 前景雾同遮月（山体像素无月盘）\n' : ''}    }
   }
 
   // —— limb soft fade（用户需求：limb 边缘蓝白 inscatter 缓慢渐隐到黑太空，消除硬切边缘）。
@@ -561,9 +607,9 @@ ${skyBranch}  }
     // over∈[-decay,0]→1..0（limb 附近渐隐）；over>=0→0（与外侧黑太空连续，无硬切边缘）。
     float limbFade = 1.0 - smoothstep(-u_limbGlowDecayKm, 0.0, limbOver);
     inscatter *= limbFade;
-  }
+${o.moon ? '    moonDisc *= limbFade; // 与太阳盘行为一致（太空视角 limb 渐隐）\n' : ''}  }
 
-  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale;
+  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale${o.moon ? ' + moonDisc' : ''};
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——
@@ -618,6 +664,7 @@ export function buildAerialPerspectiveFragmentShader(
     hdrDepthTemporal: false,
     cloudsShadowLength: false,
     cloudsGodRaysGain: 1.0,
+    moon: true,
     ...options
   }
 
@@ -634,10 +681,11 @@ export function buildAerialPerspectiveFragmentShader(
     uniforms.push('uniform sampler2D u_cloudsShadowLength;')
     uniforms.push('uniform float u_cloudsGodRaysGain;') // M5 光柱艺术增益（1=物理精确）
   }
+  if (o.moon) uniforms.push(MOON_UNIFORMS_GLSL)
 
   // LOG_DEPTH_GLSL：czm_reverseLogDepthWindow（main depth 反演用）+ 配套反演辅助（logDepth.ts）。
   const functions: string[] = [HELPERS_GLSL, LOG_DEPTH_GLSL]
-  if (o.sky) functions.push(buildSkyRadianceFn(o.sun))
+  if (o.sky) functions.push(buildSkyRadianceFn(o.sun, o.moon))
 
   const body = resolveIncludes(
     [
