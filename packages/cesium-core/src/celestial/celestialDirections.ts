@@ -80,3 +80,65 @@ export function computeMoonIlluminatedFraction(time: JulianDate): number {
   )
   return computeMoonIlluminatedFractionFromDirections(sun, moon)
 }
+
+// ── 月固系（Moon-fixed，月面纹理用）──
+// IAU 2009 行星自转参数（Report of the IAU WGAG 2009，月球行）：
+//   北极 α0=266.857°，δ0=66.991°（相对 ICRF 赤道，固定）
+//   本初子午线角 W = 38.321° + 13.17639648°/天（自 J2000 起，线性）
+// 上游 three-geospatial 用 astronomy-engine RotationAxis(Body.Moon)——本项目 IAU 常数闭式替代（零依赖）。
+const MOON_NORTH_ALPHA = CesiumMath.toRadians(266.857)
+const MOON_NORTH_DELTA = CesiumMath.toRadians(66.991)
+const MOON_W0 = CesiumMath.toRadians(38.321)
+const MOON_W_RATE = CesiumMath.toRadians(13.17639648)
+// J2000 历元（Cesium JulianDate）——W 的 d 天数自此起算
+const J2000 = JulianDate.fromDate(new Date(Date.UTC(2000, 0, 1, 12, 0, 0)))
+
+const moonNorthScratch = new Cartesian3()
+const moonIPrimeScratch = new Cartesian3()
+const moonXHatScratch = new Cartesian3()
+const moonYHatScratch = new Cartesian3()
+const moonMfToIcrfScratch = new Matrix3()
+
+/**
+ * 月固系 → ECEF 旋转矩阵（月面纹理投影用，IAU 2009 闭式）。
+ * 列语义（行主序 Matrix3 下标 [0,3,6]/[1,4,7]/[2,5,8]）：x̂=本初子午线方向（正面中心，
+ * 潮汐锁定恒指地球）、ŷ=月赤道东 90°、ẑ=月球北极。
+ * icrfToFixed 由调用方传入（与太阳/月方向管线同帧共享）。GLSL 侧取转置即 ECEF→MF。
+ */
+export function computeMoonFixedToECEFMatrix(
+  time: JulianDate,
+  icrfToFixed: Matrix3,
+  result: Matrix3
+): Matrix3 {
+  // ẑ：月球北极（ICRF 域，固定值）——本函数输出 ECEF，但 î 的构造用 ICRF 域内的北极，
+  // 再整体经 icrfToFixed 转入 ECEF（旋转复合，正交性保持）。
+  const north = moonNorthScratch
+  north.x = Math.cos(MOON_NORTH_DELTA) * Math.cos(MOON_NORTH_ALPHA)
+  north.y = Math.cos(MOON_NORTH_DELTA) * Math.sin(MOON_NORTH_ALPHA)
+  north.z = Math.sin(MOON_NORTH_DELTA)
+  // î = normalize(e × ẑ)，e = ICRF x 轴（春分点方向）
+  const iPrime = moonIPrimeScratch
+  iPrime.x = -north.y
+  iPrime.y = north.x
+  iPrime.z = 0.0
+  Cartesian3.normalize(iPrime, iPrime)
+  // ĵ = ẑ × î
+  const jHat = moonYHatScratch
+  Cartesian3.cross(north, iPrime, jHat)
+  // W(t)：自 J2000 起的天数（UTC≈TDB 差 <2min，视觉级忽略）
+  const days = JulianDate.secondsDifference(time, J2000) / 86400.0
+  const w = MOON_W0 + MOON_W_RATE * days
+  const cosW = Math.cos(w), sinW = Math.sin(w)
+  // x̂ = cos(W)·î + sin(W)·ĵ（本初子午线方向）；ŷ = ẑ × x̂
+  const xHat = moonXHatScratch
+  xHat.x = cosW * iPrime.x + sinW * jHat.x
+  xHat.y = cosW * iPrime.y + sinW * jHat.y
+  xHat.z = cosW * iPrime.z + sinW * jHat.z
+  Cartesian3.cross(north, xHat, jHat) // jHat 复用作 ŷ = ẑ × x̂
+  // MF→ICRF = [x̂ ŷ ẑ]（列）；MF→ECEF = icrfToFixed × MF→ICRF
+  const mfToIcrf = Matrix3.fromColumnMajorArray(
+    [xHat.x, xHat.y, xHat.z, jHat.x, jHat.y, jHat.z, north.x, north.y, north.z],
+    moonMfToIcrfScratch
+  )
+  return Matrix3.multiply(icrfToFixed, mfToIcrf, result)
+}

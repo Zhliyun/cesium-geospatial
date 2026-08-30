@@ -9,8 +9,13 @@ import {
   Color,
   JulianDate,
   Math as CesiumMath,
+  Resource,
+  Texture,
+  Sampler,
+  TextureWrap,
   createWorldImageryAsync,
-  createWorldTerrainAsync
+  createWorldTerrainAsync,
+  type Context
 } from 'cesium'
 import {
   loadAtmosphereLUTs,
@@ -229,6 +234,47 @@ async function main(): Promise<void> {
         : TEMPORAL_QUALITY_PRESETS.low
     const temporalDepthThreshold = getNumber('depthThreshold')
 
+    // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
+    //（声明上移到月面纹理加载段之前——加载段按它跳过。）
+    const skipAtmosphere =
+      getString('atmo') === '0' || getString('atmo') === 'false'
+    // 月面纹理（2026-08-30 月面纹理任务）：上游 NASA Moon Kit color_large 2048×1024 equirect。
+    // ?moonSurface=0 跳过（均匀月面=白 dummy 基线）；加载失败不阻断（warn 后同基线）。
+    // 均值补偿：albedo 乘进 Oren-Nayar 会让盘总亮度掉 ~纹理均值——折入 moonRadianceScale
+    // 默认值（只加图案不整体变暗；显式 ?moonRadiance= 用户自理不补）。
+    let moonSurfaceTexture: Texture | undefined = undefined
+    let moonSurfaceAlbedoMean = 1
+    if (!skipAtmosphere && getString('moonSurface') !== '0') {
+      try {
+        const moonImg = await Resource.fetchImage({ url: '/atmosphere/moon-surface.webp' })
+        moonSurfaceTexture = new Texture({
+          context: (scene as unknown as { context: Context }).context,
+          // Cesium .d.ts 的 source 只声明 arrayBufferView 形态（运行时支持 HTMLImageElement
+          // ——flipY 路径即为此设计），受控 cast（同 cesium-augment 精神，demo 层不扩声明）。
+          source: moonImg as unknown as { width: number; height: number; arrayBufferView: ArrayBufferView },
+          flipY: true, // equirect v 轴对齐：GL v=1=图像顶部=月北极（GLSL moonUv v 公式如此约定）
+          sampler: new Sampler({
+            wrapS: TextureWrap.CLAMP_TO_EDGE,
+            wrapT: TextureWrap.CLAMP_TO_EDGE
+          })
+        })
+        // 纹理均值（降采样 256×128 粗算足够；伽马域线性均值近似）
+        const mcvs = document.createElement('canvas')
+        mcvs.width = 256; mcvs.height = 128
+        const mc2 = mcvs.getContext('2d')!
+        mc2.drawImage(moonImg as CanvasImageSource, 0, 0, 256, 128)
+        const md = mc2.getImageData(0, 0, 256, 128).data
+        let msum = 0
+        for (let i = 0; i < md.length; i += 4) msum += (md[i] + md[i + 1] + md[i + 2]) / 3 / 255
+        moonSurfaceAlbedoMean = msum / (md.length / 4)
+      } catch (e) {
+        console.warn('[moon-surface] 月面纹理加载失败，退回均匀月面', e)
+      }
+    }
+    // 纹理在载时 moonRadiance 默认基準（1440）按均值放大保总亮度
+    const moonRadianceDefault =
+      moonSurfaceTexture != null ? 1440 / moonSurfaceAlbedoMean : 1440
+
     const options: AtmosphereStageOptions = {
       debugMode: getNumber('debug') ?? 0,
       // 动态曝光可 URL 微调（默认 day=1.2 / night=0.1 / twilight±6°，按相机当地太阳高度角自动）
@@ -260,8 +306,10 @@ async function main(): Promise<void> {
       // M5 云 god rays 光柱增益：默认 1 物理精确（subtle 对齐 three）；?cloudsGodRays=20 艺术放大出可见光柱
       ...(getNumber('cloudsGodRays') != null ? { cloudsGodRaysGain: getNumber('cloudsGodRays')! } : {}),
       // 月光（2026-08-30 方向 C）：?moon=0 全关（月盘不编入+云月光乘 0）——诊断基线；
-      // ?moonRadiance= 月盘倍率（默认 1440）；?moonAngularRadius= 月盘角半径 rad（默认 0.0135=物理×3，
-      // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 50000）。
+      // ?moonRadiance= 月盘倍率（默认 1440，纹理在载时按均值放大）；?moonAngularRadius= 月盘角半径 rad（默认 0.0135=物理×3，
+      // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 50000）；
+      // ?moonSurface=0 关月面纹理（均匀月面基线）。
+      ...(moonSurfaceTexture != null ? { moonSurfaceTexture } : {}),
       ...(getString('moon') === '0' ? { moon: false } : {}),
       ...(getNumber('moonRadiance') != null ? { moonRadianceScale: getNumber('moonRadiance')! } : {}),
       ...(getNumber('moonAngularRadius') != null
@@ -271,10 +319,10 @@ async function main(): Promise<void> {
             // ω 可调时倍率**默认值**同步 ×k²（同式下每像素 radiance ∝ 1/ω²，保持显示亮度——
             // spec §5.2）。仅未显式传 ?moonRadiance= 时补偿；显式值用户自理不补偿（brief 行内
             // 注释/全局约束/spec 三处一致；守卫式而非 spread 顺序——两参同传语义不随顺序漂移）。
-            // 1440 = 库内 moonRadianceScale 默认（AtmosphereStage.ts）。
+            // moonRadianceDefault = 库默认 1440（纹理在载时已按均值放大；AtmosphereStage.ts/demo 拍板基准）。
             return getNumber('moonRadiance') != null
               ? { moonAngularRadius: omega }
-              : { moonAngularRadius: omega, moonRadianceScale: 1440 * k * k }
+              : { moonAngularRadius: omega, moonRadianceScale: moonRadianceDefault * k * k }
           })()
         : {}),
       // depthTemporal EMA（Task 12）：默认 EMA 开 + low preset；?temporalEma=0 关闭，?temporalQuality=high 弱平滑
@@ -286,9 +334,8 @@ async function main(): Promise<void> {
       // 真实 GPU profile 实测 ≈2-6ms/帧）。?depthTemporal=1 显式创建（恢复旧行为，occlusion 用 smoothDepth）
       depthTemporal: getString('depthTemporal') === '1'
     }
-    // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）。
-    const skipAtmosphere =
-      getString('atmo') === '0' || getString('atmo') === 'false'
+    // 诊断基线：atmo=0 完全跳过大气后处理，画面=纯 Cesium globe（含原生光照）——已上移（月面纹理
+    // 加载段前），此处不重复声明。
     // M5 云 god rays atmosphere 路径：clouds march 的视线 shadowLength bridge（cloudsHandle 在
     // 下方后创建——闭包惰性求值，云未开/关光柱时返回 undefined → 天空 shadow_length=0 零回归）。
     let cloudsShadowBridge:

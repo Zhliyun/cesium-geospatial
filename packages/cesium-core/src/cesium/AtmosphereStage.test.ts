@@ -94,6 +94,7 @@ function makeState(): AtmosphereFrameState {
   return {
     sunDirection: new Cartesian3(0, 0, 1),
     moonDirection: new Cartesian3(1, 0, 0),
+    moonFixedToECEF: Matrix3.clone(Matrix3.IDENTITY)!,
     altitudeCorrection: new Cartesian3(),
     exposure: 1.5
   }
@@ -868,6 +869,7 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
     const state: AtmosphereFrameState = {
       sunDirection: new Cartesian3(0, 0, 1),
       moonDirection: new Cartesian3(1, 0, 0),
+      moonFixedToECEF: Matrix3.clone(Matrix3.IDENTITY)!,
       altitudeCorrection: new Cartesian3(),
       exposure: 1
     }

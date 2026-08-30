@@ -10,6 +10,7 @@ import {
 
 import {
   computeMoonDirectionECEF,
+  computeMoonFixedToECEFMatrix,
   computeMoonIlluminatedFraction,
   computeMoonIlluminatedFractionFromDirections
 } from './celestialDirections'
@@ -98,3 +99,67 @@ describe('celestialDirections 月方向与月相', () => {
     expect(f).toBeCloseTo(1 / Math.PI, 3)
   })
 })
+
+describe('computeMoonFixedToECEFMatrix 月固系（月面纹理用）', () => {
+  const T0 = JulianDate.fromIso8601('2026-09-25T16:00:00Z')
+
+  function build(t: JulianDate): Matrix3 {
+    const icrfToFixed = Transforms.computeIcrfToCentralBodyFixedMatrix(t, new Matrix3())!
+    return computeMoonFixedToECEFMatrix(t, icrfToFixed, new Matrix3())
+  }
+
+  it('正交性：M 的三列单位正交（M×Mᵀ=I）', () => {
+    const m = build(T0)
+    // Cesium Matrix3 列主序：列 k = (m[k], m[k+3], m[k+6])
+    const c1 = new Cartesian3(m[0], m[1], m[2])
+    const c2 = new Cartesian3(m[3], m[4], m[5])
+    const c3 = new Cartesian3(m[6], m[7], m[8])
+    expect(Math.abs(Cartesian3.magnitude(c1) - 1)).toBeLessThan(1e-9)
+    expect(Math.abs(Cartesian3.magnitude(c2) - 1)).toBeLessThan(1e-9)
+    expect(Math.abs(Cartesian3.magnitude(c3) - 1)).toBeLessThan(1e-9)
+    expect(Math.abs(Cartesian3.dot(c1, c2))).toBeLessThan(1e-9)
+    expect(Math.abs(Cartesian3.dot(c1, c3))).toBeLessThan(1e-9)
+    expect(Math.abs(Cartesian3.dot(c2, c3))).toBeLessThan(1e-9)
+  })
+
+  it('第三列 = IAU 月球北极（α0=266.857°, δ0=66.991°，ICRF 域经 ICRF→ECEF）', () => {
+    const t = T0
+    const icrfToFixed = Transforms.computeIcrfToCentralBodyFixedMatrix(t, new Matrix3())!
+    // IAU 2009：N_ICRF = dir(α0, δ0)
+    const a0 = CesiumMath.toRadians(266.857), d0 = CesiumMath.toRadians(66.991)
+    const nIcrf = new Cartesian3(Math.cos(d0) * Math.cos(a0), Math.cos(d0) * Math.sin(a0), Math.sin(d0))
+    const nEcef = Cartesian3.normalize(Matrix3.multiplyByVector(icrfToFixed, nIcrf, new Cartesian3()), new Cartesian3())
+    const mm = m2(build(t))
+    const c3 = Cartesian3.normalize(new Cartesian3(mm[6], mm[7], mm[8]), new Cartesian3())
+    expect(Cartesian3.dot(c3, nEcef)).toBeGreaterThan(1 - 1e-9)
+  })
+
+  it('潮汐锁定（金标准）：月固 x 轴（正面中心）指向地球——dot(x̂_MF, -moonDir) > cos(10°)（容天平动±7°+视差）', () => {
+    // 多时刻采样（一个朔望月跨度）验证潮汐锁定持续成立
+    for (const day of [0, 5, 10, 15, 20, 25]) {
+      const t = JulianDate.addDays(T0, day, new JulianDate())
+      const m = build(t)
+      const xMf = Cartesian3.normalize(new Cartesian3(m[0], m[1], m[2]), new Cartesian3())
+      const icrfToFixed = Transforms.computeIcrfToCentralBodyFixedMatrix(t, new Matrix3())!
+      const moonDir = computeMoonDirectionECEF(t, icrfToFixed, new Cartesian3(0, 0, 0), new Cartesian3())
+      const toEarth = Cartesian3.negate(moonDir, new Cartesian3())
+      const d = Cartesian3.dot(xMf, toEarth)
+      expect(d).toBeGreaterThan(Math.cos(CesiumMath.toRadians(10)))
+    }
+  })
+
+  it('连续性：+1s 矩阵三列各自 dot > cos(1e-3)（物理变化 ~7.5e-5 rad/s=地球自转 7.3e-5+W 2.7e-6；1e-3 阈值容其 13 倍，真 bug 转置/漏旋转为 O(0.01)+）', () => {
+    const m0 = build(T0)
+    const m1 = build(JulianDate.addSeconds(T0, 1, new JulianDate()))
+    for (const col of [0, 1, 2]) {
+      const v0 = new Cartesian3(m0[col], m0[col + 3], m0[col + 6])
+      const v1 = new Cartesian3(m1[col], m1[col + 3], m1[col + 6])
+      expect(Cartesian3.dot(v0, v1)).toBeGreaterThan(Math.cos(1e-3))
+    }
+  })
+})
+
+// 取 Matrix3 分量的 helper（测试内直取行主序下标）
+function m2(m: Matrix3): number[] {
+  return [m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]]
+}

@@ -84,7 +84,9 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'u_cloudsGodRaysGain', // M5 光柱增益（无条件绑定；CLOUDS_SHADOW_LENGTH 未 define 时 shader 无此 uniform，Cesium 静默忽略）
   'moonDirection', // 月盘（MOON 段声明；moon=false 时 shader 无声明，绑了 Cesium 静默忽略——同 u_cloudsGodRaysGain 先例）
   'moonAngularRadius',
-  'u_moonRadiance'
+  'u_moonRadiance',
+  'u_moonFixedToECEFInv', // 月面纹理（MOON 段声明；moon=false 时 shader 无声明，绑了 Cesium 静默忽略）
+  'u_moonSurface'
 ]
 
 // Cesium PostProcessStage 内建纹理 uniform——必须由 shader 显式声明（Cesium 仅提供 uniform 值，
@@ -323,6 +325,10 @@ const MOON_UNIFORMS_GLSL = `
 uniform vec3 moonDirection;
 uniform float moonAngularRadius;
 uniform float u_moonRadiance;
+// 月面纹理（月海/环形山，2026-08-30 月面纹理任务）：ECEF→月固系旋转（JS 每帧传转置）+ equirect 采样。
+// 纹理缺失时 demo 绑 1×1 白 dummy（albedo=1 退化为均匀月面，数值等价于无纹理版）。
+uniform mat3 u_moonFixedToECEFInv;
+uniform sampler2D u_moonSurface;
 `
 
 // [MOON] 月盘 GLSL（getSkyRadiance 内、SUN 盘后注入；moonDisc 是 out 参数——通道方案 spec §5.1：
@@ -346,10 +352,21 @@ const MOON_DISC_GLSL = `
     float sOV = dot(sunDirection, -rayDirection) - cosLight * cosView;
     float t = mix(1.0, max(max(cosLight, cosView), 0.1), smoothstep(0.0, 0.1, sOV));
     float onDiffuse = max(cosLight, 0.0) * (sOV / t * 0.1314 + 0.2466);
-    // 亮度：太阳辐亮度 × 视星等比 2.5e-6（已含月面反照率）÷ (π·ω²)，×亮度换算 ×倍率
+    // 月面纹理（上游 MoonNode equirectUV(normalMF.xzy) 同构——Y-up 换轴已合并入下式）：
+    // 月固系法线 → equirect UV（u=经度 atan2(y,-x)，v=纬度 asin(z)，0.5=月赤道、1=月北极）→ albedo。
+    // IAU 2009 月固系（W 线性+固定北极）经 JS computeMoonFixedToECEFMatrix 保证潮汐锁定
+    // （正面恒朝地球，天平动级精度）——月海位置与真实天文一致。
+    vec3 normalMF = u_moonFixedToECEFInv * moonNormal;
+    vec2 moonUv = vec2(
+      atan(normalMF.y, -normalMF.x) * 0.15915494 + 0.5,
+      asin(clamp(normalMF.z, -1.0, 1.0)) * 0.31830989 + 0.5
+    );
+    vec3 moonAlbedo = texture(u_moonSurface, moonUv).rgb;
+    // 亮度：太阳辐亮度 × 视星等比 2.5e-6（已含月面反照率）÷ (π·ω²)，×亮度换算 ×倍率 ×纹理 albedo
+    // （纹理均值由 JS 侧折入 u_moonRadiance——保总亮度只加图案不整体变暗）
     vec3 moonDiscRadiance = ATMOSPHERE.solar_irradiance
       * 2.5e-6 / (PI * moonAngularRadius * moonAngularRadius)
-      * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE * u_moonRadiance * onDiffuse;
+      * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE * u_moonRadiance * onDiffuse * moonAlbedo;
     moonDisc = transmittance * moonDiscRadiance * moonMask;
   }
 `

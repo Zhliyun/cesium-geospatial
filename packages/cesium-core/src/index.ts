@@ -13,6 +13,7 @@ export { getAltitudeCorrectionOffset } from './math/altitudeCorrection'
 // 夜间光照月方向/月相单源（spec 2026-08-30 r2 §4）——AtmosphereStage 月盘与 clouds 月光照明共用
 export {
   computeMoonDirectionECEF,
+  computeMoonFixedToECEFMatrix,
   computeMoonIlluminatedFraction,
   computeMoonIlluminatedFractionFromDirections
 } from './celestial/celestialDirections'

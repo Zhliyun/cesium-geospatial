@@ -25,6 +25,8 @@ import {
   PixelDatatype,
   PixelFormat,
   Texture,
+  Sampler,
+  TextureWrap,
   DeveloperError,
   type Context,
   type Scene,
@@ -48,7 +50,7 @@ import {
   ATMOSPHERE_BOTTOM_RADIUS_M,
   SUN_ANGULAR_RADIUS
 } from '../math/atmosphereParameters'
-import { computeMoonDirectionECEF } from '../celestial/celestialDirections'
+import { computeMoonDirectionECEF, computeMoonFixedToECEFMatrix } from '../celestial/celestialDirections'
 import type { AtmosphereLUTs } from './lutLoader'
 import { buildDepthTemporalFragmentShader } from './depthTemporal/depthTemporal.frag'
 import {
@@ -129,6 +131,13 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   /** 月盘角半径 rad（默认 0.0135=物理值×3 艺术放大，2026-08-30 用户拍板「物理 9px 偏小」；
    *  URL ?moonAngularRadius= 再调）。 */
   moonAngularRadius?: number
+  /**
+   * 月面纹理（2026-08-30 月面纹理任务）：equirect 月面图（上游 NASA Moon Kit color_large 2048×1024），
+   * demo 加载后传入。采样 albedo 乘进 Oren-Nayar（月海暗/高地亮）；**纹理均值须由调用方折入
+   * moonRadianceScale**（保总亮度只加图案）。不传 → 内部绑 1×1 白 dummy（albedo=1 数值等价
+   * 无纹理版，零回归路径）。纹理翻转轴若与真实月海镜像，调 GLSL moonUv（验收视觉核对）。
+   */
+  moonSurfaceTexture?: Texture
 }
 
 // 校验后的完整 options（hdrDepthTemporal 排除：runtime 基于 stageCreated 决定，非用户 option；buildAtmosphereStage 时注入）。
@@ -162,6 +171,8 @@ export interface ResolvedAtmosphereStageOptions
   temporalDepthThreshold: number
   // depthTemporal stage 创建开关 resolved（Phase 1.1）
   depthTemporal: boolean
+  // 月面纹理 resolved（undefined=未传，运行时绑白 dummy）
+  moonSurfaceTexture: Texture | undefined
   // 月盘 resolved（moon 经 Required<AerialPerspectiveFragOptions> 传入本类型）
   moonRadianceScale: number
   moonAngularRadius: number
@@ -172,6 +183,8 @@ export interface AtmosphereFrameState {
   sunDirection: Cartesian3
   /** 月方向（ECEF 单位向量，spec r2 §4：含视差修正，preRender 每帧更新）。 */
   moonDirection: Cartesian3
+  /** 月固系→ECEF 旋转（月面纹理投影，preRender 每帧更新；uniform 侧传其转置）。 */
+  moonFixedToECEF: Matrix3
   altitudeCorrection: Cartesian3
   exposure: number
 }
@@ -231,6 +244,7 @@ const exposureSurfaceScratch = new Cartesian3()
 const exposureNormalScratch = new Cartesian3()
 // 月方向视差修正 origin scratch（preRender 每帧：camera.positionWC + altitudeCorrection）
 const moonOriginScratch = new Cartesian3()
+const moonFixedInvScratch = new Matrix3()
 
 /**
  * 校验并补全 options。
@@ -269,6 +283,7 @@ export function validateAtmosphereOptions(
     // 月盘亮度/角半径默认（2026-08-30 用户视觉拍板）：1440=「与现实月面亮度一致」（×12，带 lf 光晕）；0.0135 rad=物理 0.0045×3
     moonRadianceScale: options.moonRadianceScale ?? 1440,
     moonAngularRadius: options.moonAngularRadius ?? 0.0135,
+    moonSurfaceTexture: options.moonSurfaceTexture,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
@@ -339,6 +354,9 @@ export function buildAtmosphereUniforms(
     moonDirection: () => state.moonDirection,
     moonAngularRadius: options.moonAngularRadius,
     u_moonRadiance: options.moonRadianceScale,
+    // 月面纹理（月固系矩阵每帧转置到 scratch；纹理/白 dummy 由 createAtmosphereStage 内 append）
+    u_moonFixedToECEFInv: () => Matrix3.transpose(state.moonFixedToECEF, moonFixedInvScratch),
+    u_moonSurface: options.moonSurfaceTexture,
     altitudeCorrection: () => state.altitudeCorrection,
     exposure: () => state.exposure, // 动态（preRender 更新）
     u_debugMode: options.debugMode,
@@ -423,6 +441,7 @@ export function createAtmosphereStage(
   const state: AtmosphereFrameState = {
     sunDirection: new Cartesian3(0, 0, 1),
     moonDirection: new Cartesian3(0, 0, 1),
+    moonFixedToECEF: Matrix3.clone(Matrix3.IDENTITY),
     altitudeCorrection: new Cartesian3(),
     exposure: resolved.exposureDay
   }
@@ -466,6 +485,21 @@ export function createAtmosphereStage(
           })
           return cloudsShadowDummy as unknown as { _texture: unknown; _target: number }
         })
+        // 月面纹理白 dummy（albedo=1）：moonSurfaceTexture 未传时的零回归路径（均匀月面=数值等价
+        // 无纹理版）。惰性构造同上（node 测试不调闭包）。
+        if (options.moonSurfaceTexture == null) {
+          let moonSurfaceDummy: Texture | undefined
+          u.u_moonSurface = () => {
+            moonSurfaceDummy ??= new Texture({
+              context: (scene as unknown as { context: Context }).context,
+              source: { width: 1, height: 1, arrayBufferView: new Uint8Array([255, 255, 255, 255]) },
+              pixelFormat: PixelFormat.RGBA,
+              pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+              sampler: new Sampler({ wrapS: TextureWrap.CLAMP_TO_EDGE, wrapT: TextureWrap.CLAMP_TO_EDGE })
+            })
+            return moonSurfaceDummy
+          }
+        }
         return u
       })(),
       pixelFormat: PixelFormat.RGBA,
@@ -782,6 +816,8 @@ export function createAtmosphereStage(
       // 射线起点同帧同源（太空相机 offset 可达 1e4 km，裸相机位置月盘方位偏 1-2°）。
       Cartesian3.add(camera.positionWC, state.altitudeCorrection, moonOriginScratch)
       computeMoonDirectionECEF(time, icrfToFixed, moonOriginScratch, state.moonDirection)
+      // 月固系（月面纹理投影）：IAU 2009 闭式，与月方向同帧共享 icrfToFixed
+      computeMoonFixedToECEFMatrix(time, icrfToFixed, state.moonFixedToECEF)
     }
 
     // 动态曝光（按相机当地太阳高度角）或手动
