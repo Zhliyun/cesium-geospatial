@@ -1408,14 +1408,21 @@ void main() {
     inscatter *= limbFade;
   }
 
-  // —— 夜间天空 inscatter 淡出（2026-08-31 地平线泛红二轮修复；同日窗口收窄）——
+  // —— 夜间天空 inscatter 淡出（2026-08-31 地平线泛红二轮修复；三轮改锚点）——
   // 根因：Bruneton 散射 LUT 高阶项在太阳深潜后不精确归零，地平线长路径残余 ×u_inscatterScale(25)
   // 放大成可见橙红（实测真深夜太阳 -69° 云全关仍整圈红，moon/nightAmbient 隔离均排除云侧）。
   // 窗口按标准暮光分级 sin(-12°)→sin(-6°)（首版 [-18°,-4°] 下界太深——太阳 -15.7° 仍保留 92%
   // 天文暮光红，用户实测满月时刻地平线仍泛红被驳回）：民用暮光（>-6°）零回归完整保留日落余晖、
   // 航海暮光（-6°→-12°）渐消、天文暮光（≤-12°）归零（LUT 残余已非物理，观感深夜=无红）。
-  // muSunSky 用相机径向法线（与 clouds.frag nightFactor 同源几何——相机当地太阳仰角）。
-  float muSunSky = dot(normalize(cameraPosition), sunDirection);
+  // **锚点=视线代表点（三轮修正）**：首版用相机径向法线——太空夜侧上空相机 muSunSky≈-1→fade=0
+  // 把整屏 inscatter（含晨昏带地表亮带）全归零，用户实测地表晨昏线消失被驳回。改按每像素的
+  // 「视线与大气代表交点」判定：地面视线=椭球面交点 scenePosKm、天空视线=离地心最近点（视线与
+  // cameraPosition·rayDirection 平面的最近距离点，掠射时≈切点）。每像素按自身位置太阳角淡出：
+  // 晨昏带地表点 el≈0 → fade=1 亮带保留；深夜侧地平线远云/天空 el<-12° → 归零不红。
+  vec3 fadeAnchor = (lookingAtGround && discG > 0.0)
+    ? cameraPosition + rayDirection * tHitG
+    : cameraPosition - dot(cameraPosition, rayDirection) * rayDirection;
+  float muSunSky = dot(normalize(fadeAnchor), sunDirection);
   float skyNightFade = 1.0 - smoothstep(-0.2079, -0.1045, muSunSky);
   inscatter *= skyNightFade;
 

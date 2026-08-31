@@ -322,8 +322,9 @@ describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
 
   it('applyAerialPerspective inscatter 夜间淡出（2026-08-31 地平线泛红三轮：云内大气透视与 atmosphere skyNightFade 同窗口）', () => {
     const src = buildCloudsMainFragmentShader({})
-    // 窗口同 atmosphere 终版 [-12°,-6°]（sin -0.2079/-0.1045）；muSunSky 用相机径向法线
-    expect(src).toContain('float muSunSky = dot(normalize(cameraPosition), sunDirection);')
+    // 窗口同 atmosphere 终版 [-12°,-6°]（sin -0.2079/-0.1045）；锚点=frontPosition（云前表面，
+    // 四轮：相机锚在太空夜侧把昼侧云 aerial perspective 全灭——晨昏线消失被驳回）
+    expect(src).toContain('float muSunSky = dot(normalize(frontPosition), sunDirection);')
     expect(src).toContain('inscatter *= 1.0 - skyNightFade;')
     // 红带主源=transmittance 距离红化（贴地平线几百 km Rayleigh 滤蓝存红）——夜门内去色保亮度
     expect(src).toContain('float transmittanceLuminance = dot(transmittance, vec3(0.2126, 0.7152, 0.0722));')

@@ -191,9 +191,16 @@ describe('夜间天空 inscatter 淡出 skyNightFade', () => {
     expect(src).toContain('inscatter *= skyNightFade;')
   })
 
-  it('muSunSky 用相机径向法线（与 clouds.frag nightFactor 同源几何）', () => {
+  it('muSunSky 锚点=视线代表点（地面=椭球交点/天空=最近点）——太空视角晨昏线修复', () => {
     const src = build()
-    expect(src).toContain('float muSunSky = dot(normalize(cameraPosition), sunDirection);')
+    // 首版相机锚：太空夜侧上空 muSunSky≈-1→fade=0 整屏 inscatter 全灭（晨昏线消失被驳回）
+    expect(src).not.toContain('dot(normalize(cameraPosition), sunDirection)')
+    // 地面视线锚=椭球面交点（cameraPosition + rayDirection * tHitG）
+    expect(src).toContain('vec3 fadeAnchor = (lookingAtGround && discG > 0.0)')
+    expect(src).toContain('? cameraPosition + rayDirection * tHitG')
+    // 天空视线锚=离地心最近点（视线到相机径向的垂直投影点）
+    expect(src).toContain(': cameraPosition - dot(cameraPosition, rayDirection) * rayDirection;')
+    expect(src).toContain('float muSunSky = dot(normalize(fadeAnchor), sunDirection);')
   })
 
   it('glslang：含 skyNightFade 的完整 shader 真编译', () => {

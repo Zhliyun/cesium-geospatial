@@ -785,7 +785,10 @@ void applyAerialPerspective(
   // （mix 到灰度——夜间 Purkinje 低色觉，远处云变暗不偏色）；inscatter 同窗口归零
   // （LUT 高阶项太阳深潜不归零残余）。窗口 [-12°,-6°] 与 atmosphere skyNightFade 同款
   // （民用暮光零回归/航海渐消/天文暮光归零）。
-  float muSunSky = dot(normalize(cameraPosition), sunDirection);
+  // **锚点=frontPosition（云前表面，四轮修正）**：首版用相机径向法线——太空夜侧上空相机
+  // muSunSky≈-1→fade 满门，把昼侧云的 aerial perspective 全灭（用户实测晨昏线消失被驳回，
+  // 与 atmosphere 三轮同因）。按每像素云前表面自身位置判定：昼侧云 el>0 不衰减、夜侧远云深负归零。
+  float muSunSky = dot(normalize(frontPosition), sunDirection);
   float skyNightFade = 1.0 - smoothstep(-0.2079, -0.1045, muSunSky);
   inscatter *= 1.0 - skyNightFade;
   float transmittanceLuminance = dot(transmittance, vec3(0.2126, 0.7152, 0.0722));
