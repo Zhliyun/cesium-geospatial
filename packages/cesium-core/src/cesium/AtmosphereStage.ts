@@ -132,6 +132,10 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   /** 月盘角半径 rad（默认 0.02=物理值×4.4 艺术放大，2026-08-31 用户二次拍板：0.03 的 65px 盘
    *  「有点大」→ 0.02 的 ~45px；月海图案仍清晰可见。URL ?moonAngularRadius= 再调）。 */
   moonAngularRadius?: number
+  /** 月盘色调乘子（线性 RGB，2026-08-31 用户反馈月盘偏暖——solar_irradiance 光谱基色+NASA
+   *  纹理偏棕，实测 R/G=1.119 B/G=0.905。默认冷色 (0.88,1,1.12) 线性域对冲；(1,1,1)=中性
+   *  零回归路径。URL ?moonTint=r,g,b 再调）。 */
+  moonTint?: Cartesian3
   /**
    * 月面纹理（2026-08-30 月面纹理任务）：equirect 月面图（上游 NASA Moon Kit color_large 2048×1024），
    * demo 加载后传入。采样 albedo 乘进 Oren-Nayar（月海暗/高地亮）；**纹理均值须由调用方折入
@@ -177,6 +181,7 @@ export interface ResolvedAtmosphereStageOptions
   // 月盘 resolved（moon 经 Required<AerialPerspectiveFragOptions> 传入本类型）
   moonRadianceScale: number
   moonAngularRadius: number
+  moonTint: Cartesian3
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
@@ -287,6 +292,9 @@ export function validateAtmosphereOptions(
     // 1440×(0.03/0.0135)²≈7111→×(0.02/0.03)²≈3160。
     moonRadianceScale: options.moonRadianceScale ?? 3160,
     moonAngularRadius: options.moonAngularRadius ?? 0.02,
+    // 月盘色调默认冷色（2026-08-31 用户反馈偏暖——solar_irradiance 光谱+NASA 纹理偏棕，
+    // 实测 R/G=1.119 B/G=0.905；线性域乘冷色对冲。数值=对冲后目标中性稍冷）
+    moonTint: options.moonTint ?? new Cartesian3(0.88, 1.0, 1.12),
     moonSurfaceTexture: options.moonSurfaceTexture,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
@@ -358,6 +366,7 @@ export function buildAtmosphereUniforms(
     moonDirection: () => state.moonDirection,
     moonAngularRadius: options.moonAngularRadius,
     u_moonRadiance: options.moonRadianceScale,
+    u_moonTint: options.moonTint,
     // 月面纹理（月固系矩阵每帧转置到 scratch；纹理/白 dummy 由 createAtmosphereStage 内 append）
     u_moonFixedToECEFInv: () => Matrix3.transpose(state.moonFixedToECEF, moonFixedInvScratch),
     u_moonSurface: options.moonSurfaceTexture,

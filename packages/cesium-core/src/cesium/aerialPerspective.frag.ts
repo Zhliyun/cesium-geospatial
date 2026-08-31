@@ -85,6 +85,7 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'moonDirection', // 月盘（MOON 段声明；moon=false 时 shader 无声明，绑了 Cesium 静默忽略——同 u_cloudsGodRaysGain 先例）
   'moonAngularRadius',
   'u_moonRadiance',
+  'u_moonTint', // 月盘色调乘子（MOON 段声明；moon=false 时 shader 无声明，绑了 Cesium 静默忽略）
   'u_moonFixedToECEFInv', // 月面纹理（MOON 段声明；moon=false 时 shader 无声明，绑了 Cesium 静默忽略）
   'u_moonSurface'
 ]
@@ -325,6 +326,9 @@ const MOON_UNIFORMS_GLSL = `
 uniform vec3 moonDirection;
 uniform float moonAngularRadius;
 uniform float u_moonRadiance;
+// 色调乘子（2026-08-31 用户反馈月盘偏暖：solar_irradiance 光谱基色+NASA 纹理偏棕——实测
+// R/G=1.119 B/G=0.905。线性域冷色乘子对冲，默认 (0.88,1,1.12)；1,1,1=中性零回归路径）。
+uniform vec3 u_moonTint;
 // 月面纹理（月海/环形山，2026-08-30 月面纹理任务）：ECEF→月固系旋转（JS 每帧传转置）+ equirect 采样。
 // 纹理缺失时 demo 绑 1×1 白 dummy（albedo=1 退化为均匀月面，数值等价于无纹理版）。
 uniform mat3 u_moonFixedToECEFInv;
@@ -366,7 +370,7 @@ const MOON_DISC_GLSL = `
     // （纹理均值由 JS 侧折入 u_moonRadiance——保总亮度只加图案不整体变暗）
     vec3 moonDiscRadiance = ATMOSPHERE.solar_irradiance
       * 2.5e-6 / (PI * moonAngularRadius * moonAngularRadius)
-      * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE * u_moonRadiance * onDiffuse * moonAlbedo;
+      * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE * u_moonRadiance * u_moonTint * onDiffuse * moonAlbedo;
     moonDisc = transmittance * moonDiscRadiance * moonMask;
   }
 `

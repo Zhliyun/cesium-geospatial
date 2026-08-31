@@ -149,6 +149,14 @@ describe('月盘 MOON 段（spec r2 §5）', () => {
     expect(src).toContain('SUN_SPECTRAL_RADIANCE_TO_LUMINANCE * u_moonRadiance')
   })
 
+  it('moon=true：u_moonTint 色调乘子（冷色默认乘进 moonDiscRadiance；moon=false 无声明）', () => {
+    const src = build()
+    expect(src).toContain('uniform vec3 u_moonTint;')
+    expect(src).toContain('* u_moonTint * onDiffuse * moonAlbedo')
+    const srcOff = buildOff()
+    expect(srcOff).not.toContain('u_moonTint')
+  })
+
   it('moon=false golden：产物与现状（无 moon 代码）逐字符一致', () => {
     const srcOff = buildOff()
     expect(srcOff).not.toContain('moonDisc')

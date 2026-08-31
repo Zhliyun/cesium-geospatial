@@ -305,6 +305,7 @@ describe('validateAtmosphereOptions', () => {
       moon: true,
       moonRadianceScale: 3160, // 7111×(0.02/0.03)²——ω 拍板 0.02 后同式保显示亮度（2026-08-31）
       moonAngularRadius: 0.02, // 物理 0.0045×4.4（2026-08-31 二次拍板：65px 有点大→~45px）
+      moonTint: new Cartesian3(0.88, 1.0, 1.12), // 冷色默认（2026-08-31 月盘偏暖反馈）
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
@@ -852,17 +853,22 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
     expect(r.moon).toBe(true)
     expect(r.moonRadianceScale).toBe(3160)
     expect(r.moonAngularRadius).toBeCloseTo(0.02, 6)
+    // 色调乘子默认冷色（2026-08-31 用户反馈月盘偏暖：solar_irradiance 光谱+NASA 纹理偏棕，
+    // 实测 R/G=1.119 B/G=0.905——线性域乘冷色对冲，B 提 R 压）
+    expect(r.moonTint).toEqual(new Cartesian3(0.88, 1.0, 1.12))
   })
 
   it('validate 覆盖：moon=false / 自定义亮度与角半径透传', () => {
     const r = validateAtmosphereOptions({
       moon: false,
       moonRadianceScale: 240,
-      moonAngularRadius: 0.01
+      moonAngularRadius: 0.01,
+      moonTint: new Cartesian3(1.2, 0.9, 0.8)
     })
     expect(r.moon).toBe(false)
     expect(r.moonRadianceScale).toBe(240)
     expect(r.moonAngularRadius).toBe(0.01)
+    expect(r.moonTint).toEqual(new Cartesian3(1.2, 0.9, 0.8))
   })
 
   it('buildAtmosphereUniforms 含月盘三件：moonDirection 闭包 + 静态 ω/radiance', () => {
@@ -883,6 +889,7 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
     expect((u.moonDirection as () => Cartesian3)()).toBe(state.moonDirection)
     expect(u.moonAngularRadius).toBeCloseTo(0.02, 6)
     expect(u.u_moonRadiance).toBe(3160)
+    expect(u.u_moonTint).toEqual(new Cartesian3(0.88, 1.0, 1.12))
   })
 
   it('buildAtmosphereStage fragmentShader 透传 moon（moon=false 时 shader 无 moonDirection）', () => {

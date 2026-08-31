@@ -347,10 +347,20 @@ async function main(): Promise<void> {
       // ?moonRadiance= 月盘倍率（默认 3160=7111×(0.02/0.03)²，ω 拍板 0.02 后同式保显示亮度，纹理在载时按均值放大）；
       // ?moonAngularRadius= 月盘角半径 rad（默认 0.02=物理×4.4，2026-08-31 二次拍板：0.03 的 65px「有点大」→ ~45px；
       // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 50000）；
-      // ?moonSurface=0 关月面纹理（均匀月面基线）。
+      // ?moonSurface=0 关月面纹理（均匀月面基线）；?moonTint=r,g,b 月盘色调乘子（默认库冷色
+      // 0.88,1,1.12——2026-08-31 偏暖反馈；?moonTint=1,1,1 回中性）。
       ...(moonSurfaceTexture != null ? { moonSurfaceTexture } : {}),
       ...(getString('moon') === '0' ? { moon: false } : {}),
       ...(getNumber('moonRadiance') != null ? { moonRadianceScale: getNumber('moonRadiance')! } : {}),
+      ...(getString('moonTint') != null
+        ? (() => {
+            const rgb = getString('moonTint')!.split(',').map(Number)
+            if (rgb.length === 3 && rgb.every(Number.isFinite)) {
+              return { moonTint: new Cartesian3(rgb[0], rgb[1], rgb[2]) }
+            }
+            return {}
+          })()
+        : {}),
       ...(getNumber('moonAngularRadius') != null
         ? (() => {
             const omega = getNumber('moonAngularRadius')!
