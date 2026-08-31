@@ -778,6 +778,18 @@ void applyAerialPerspective(
     sunDirection,
     transmittance
   );
+  // 夜间淡出+去色（2026-08-31 地平线泛红三轮）：云内大气透视独立于 atmosphere 主 shader
+  // （二轮只修了主 shader）。**红带主源=transmittance 距离红化**：NIGHT_AMBIENT_TINT 冷蓝的
+  // 云本体光 × 贴地平线几百 km 路径的 Rayleigh 滤蓝存红透射（中距离对冲后 0.98，贴线极远云
+  // 仍 1.4-1.96；云关后同区纯黑定位到本链路）。修法=夜门内 transmittance 去色保亮度
+  // （mix 到灰度——夜间 Purkinje 低色觉，远处云变暗不偏色）；inscatter 同窗口归零
+  // （LUT 高阶项太阳深潜不归零残余）。窗口 [-12°,-6°] 与 atmosphere skyNightFade 同款
+  // （民用暮光零回归/航海渐消/天文暮光归零）。
+  float muSunSky = dot(normalize(cameraPosition), sunDirection);
+  float skyNightFade = 1.0 - smoothstep(-0.2079, -0.1045, muSunSky);
+  inscatter *= 1.0 - skyNightFade;
+  float transmittanceLuminance = dot(transmittance, vec3(0.2126, 0.7152, 0.0722));
+  transmittance = mix(transmittance, vec3(transmittanceLuminance), skyNightFade);
   color.rgb = color.rgb * transmittance + inscatter * color.a;
 }
 

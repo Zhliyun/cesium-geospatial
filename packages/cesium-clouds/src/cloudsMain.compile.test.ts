@@ -320,6 +320,17 @@ describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
     expect(src).toContain('applyAerialPerspective(cameraPosition, frontPosition, shadowLength, color);')
   })
 
+  it('applyAerialPerspective inscatter 夜间淡出（2026-08-31 地平线泛红三轮：云内大气透视与 atmosphere skyNightFade 同窗口）', () => {
+    const src = buildCloudsMainFragmentShader({})
+    // 窗口同 atmosphere 终版 [-12°,-6°]（sin -0.2079/-0.1045）；muSunSky 用相机径向法线
+    expect(src).toContain('float muSunSky = dot(normalize(cameraPosition), sunDirection);')
+    expect(src).toContain('inscatter *= 1.0 - skyNightFade;')
+    // 红带主源=transmittance 距离红化（贴地平线几百 km Rayleigh 滤蓝存红）——夜门内去色保亮度
+    expect(src).toContain('float transmittanceLuminance = dot(transmittance, vec3(0.2126, 0.7152, 0.0722));')
+    expect(src).toContain('transmittance = mix(transmittance, vec3(transmittanceLuminance), skyNightFade);')
+    expect(src).toContain('color.rgb = color.rgb * transmittance + inscatter * color.a;')
+  })
+
   it('lightShafts=false：无 #define SHADOW_LENGTH（M4 后行为零回归；原文 ifdef 块文本恒在——编译期裁剪由 glslang 用例兜底）', () => {
     const src = buildCloudsMainFragmentShader({ lightShafts: false })
     expect(src).not.toContain('#define SHADOW_LENGTH')
