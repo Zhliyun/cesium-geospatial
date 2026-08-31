@@ -346,13 +346,16 @@ describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
 // 修复 = skyIrradiance 抬 nightAmbient 地板，当地太阳仰角 -5°→-12° 淡入（白天 0 零回归）。
 // ─────────────────────────────────────────────────────────────────────────────
 describe('夜间环境底光 nightAmbient（方向 B）', () => {
-  it('uniform 声明 + 光照循环抬地板：skyIrradiance += vec3(nightAmbient) * nightFactor', () => {
+  it('uniform 声明 + 光照循环抬地板：skyIrradiance += NIGHT_AMBIENT_TINT * (nightAmbient * nightFactor)', () => {
     const src = buildCloudsMainFragmentShader({})
     expect(src).toContain('uniform float nightAmbient;')
     // 淡入区间 sin(-12°)=-0.2079 / sin(-5°)=-0.0872（LUT -5° 归零线 → 天文夜满值）
     expect(src).toContain('1.0 - smoothstep(-0.1045, -0.0175, muSunLocal)')
     // 抬在 skyIrradiance 上（经 skyGradient × scattering × 能量积分传播 → 云保有形体梯度）
-    expect(src).toContain('skyIrradiance += vec3(nightAmbient) * nightFactor;')
+    expect(src).toContain('skyIrradiance += NIGHT_AMBIENT_TINT * (nightAmbient * nightFactor);')
+    // 冷蓝色调（2026-08-31 夜间天际线泛红修复：中性白底光 × 远距 transmittance Rayleigh
+    // 红化 → 天际线云 R/G=1.23 橙红；底光冷蓝对冲）
+    expect(src).toContain('const vec3 NIGHT_AMBIENT_TINT = vec3(0.72, 1.0, 1.32);')
   })
 
   it('glslang：含 nightAmbient 的完整 shader 真编译', () => {

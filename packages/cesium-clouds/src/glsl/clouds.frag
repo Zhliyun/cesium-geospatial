@@ -60,7 +60,12 @@ uniform float powderExponent;
 // 气辉/城市光照亮——本项为艺术近似地板（非物理光源，方向性月光见后续迭代）。
 // 取值标定：0.12 × RECIPROCAL_PI4 × skyGradient(~0.75) × scattering(~0.9) × overlay E(12)
 // ≈ 18/255 display，与夜空底光（skyBox 星空经大气压暗的残余，实测 16-28/255）同量级。
+// 冷蓝色调（2026-08-31 夜间天际线泛红修复）：applyAerialPerspective 的 transmittance 在远距
+// 视线（天际线几百 km 大气路径）Rayleigh 滤蓝存红——中性白底光乘红化透射率 → 远处云泛橙红
+// （实测 R/G=1.23，近景不红 0.99；moon=0 隔离排月光、nightAmbient=0 隔离定根因）。
+// 底光本身给冷蓝（模拟夜空散射的蓝移谱），中距对冲红化、远景残余暖色大幅减弱。
 uniform float nightAmbient;
+const vec3 NIGHT_AMBIENT_TINT = vec3(0.72, 1.0, 1.32); // 冷蓝（线性域；与月盘 u_moonTint 拍板值同款）
 
 // 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
 // （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/
@@ -560,7 +565,7 @@ vec4 marchClouds(
       // GetSunAndSkyIrradiance 内 mu_s 同源。
       float muSunLocal = dot(surfaceNormal, sunDirection);
       float nightFactor = 1.0 - smoothstep(-0.1045, -0.0175, muSunLocal);
-      skyIrradiance += vec3(nightAmbient) * nightFactor;
+      skyIrradiance += NIGHT_AMBIENT_TINT * (nightAmbient * nightFactor);
 
       // 月光门 2：月升落（spec §6.2）——月落后 moonDirection 在地平线下，无此门云被
       // 「地下来的光」照亮、云底亮反转（弦月下半夜必现）。窗口 -0.05..0.02 ≈
@@ -611,8 +616,11 @@ vec4 marchClouds(
         moonRayDistance
       );
       float cosThetaMoon = dot(moonDirection, rayDirection);
+      // 月光谱色：solar_irradiance 是暖白光谱，月光物理上经月面反射（中性偏暖）+ 无大气透射
+      // （月球无大气）——但视觉基准带冷蓝（NIGHT_AMBIENT_TINT 同源），与底光色调一致防夜间
+      // 云面混色（2026-08-31 天际线泛红修复配套）。
       vec3 moonIrradiance = ATMOSPHERE.solar_irradiance
-        * 2.5e-6 * moonLightScale * nightFactor * moonFactor;
+        * 2.5e-6 * moonLightScale * nightFactor * moonFactor * NIGHT_AMBIENT_TINT;
       radiance += moonIrradiance * approximateMultipleScattering(moonOpticalDepth, cosThetaMoon);
 
       #ifdef GROUND_BOUNCE
