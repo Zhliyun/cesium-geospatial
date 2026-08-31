@@ -124,12 +124,13 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   // ── 月盘（2026-08-30 夜间光照 spec r2 §5）──
   // moon?: boolean 继承自 AerialPerspectiveFragOptions（默认 true；创建期语义：切换=重建 stage，
   // 同 sun/sky 惯例，运行时切换不在范围）。
-  /** 月盘亮度倍率（默认 7111=1440×(0.03/0.0135)²——ω 拍板 0.03 后同式保显示亮度；URL ?moonRadiance=。
+  /** 月盘亮度倍率（默认 3160=7111×(0.02/0.03)²——ω 拍板 0.02 后同式保显示亮度；URL ?moonRadiance=。
    *  亮度语系沿革：60=inscatterScale 补偿×diffuse 基准 → 1440=×12「与现实月面亮度一致」（2026-08-30
-   *  用户拍板，带 lf 光晕）→ 7111（2026-08-31 ω 联动）。副作用：白天浅月同比变亮（较显眼））。 */
+   *  用户拍板，带 lf 光晕）→ 7111（ω=0.03 联动）→ 3160（2026-08-31 ω=0.02 联动「65px 偏大」）。
+   *  副作用：白天浅月同比变亮（较显眼））。 */
   moonRadianceScale?: number
-  /** 月盘角半径 rad（默认 0.03=物理值×6.7 艺术放大，2026-08-31 用户拍板：环形山可见需 ≥65px
-   *  盘径——2048 纹理在小盘上被 mipmap 平均；URL ?moonAngularRadius= 再调）。 */
+  /** 月盘角半径 rad（默认 0.02=物理值×4.4 艺术放大，2026-08-31 用户二次拍板：0.03 的 65px 盘
+   *  「有点大」→ 0.02 的 ~45px；月海图案仍清晰可见。URL ?moonAngularRadius= 再调）。 */
   moonAngularRadius?: number
   /**
    * 月面纹理（2026-08-30 月面纹理任务）：equirect 月面图（上游 NASA Moon Kit color_large 2048×1024），
@@ -280,11 +281,12 @@ export function validateAtmosphereOptions(
     // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5；moon?: boolean 经 Required 传入本 resolved 类型，
     // 缺行会 tsc 报 TS2741——T3 接线在此之上追加 moonDirection/moonAngularRadius/u_moonRadiance uniforms）
     moon: options.moon ?? true,
-    // 月盘亮度/角半径默认（2026-08-30/31 用户视觉拍板）：radiance 1440=「与现实月面亮度一致」（×12，带 lf 光晕）；
-    // ω=0.03 rad=物理×6.7（环形山可见需 ≥65px 盘径）。radiance ∝ 1/ω²（shader 2.5e-6/(π·ω²)），
-    // ω 改默认时 radiance 默认同步 ×(ω_new/ω_old)² 保显示亮度：1440×(0.03/0.0135)²≈7111。
-    moonRadianceScale: options.moonRadianceScale ?? 7111,
-    moonAngularRadius: options.moonAngularRadius ?? 0.03,
+    // 月盘亮度/角半径默认（2026-08-30/31 用户视觉拍板沿革）：radiance 1440=「与现实月面亮度一致」（×12，
+    // 带 lf 光晕）；ω 0.0135→0.03（环形山可见需 ≥65px）→0.02（「65px 有点大」二次拍板，~45px 月海仍清晰）。
+    // radiance ∝ 1/ω²（shader 2.5e-6/(π·ω²)），ω 改默认时 radiance 默认同步 ×(ω_new/ω_old)² 保显示亮度：
+    // 1440×(0.03/0.0135)²≈7111→×(0.02/0.03)²≈3160。
+    moonRadianceScale: options.moonRadianceScale ?? 3160,
+    moonAngularRadius: options.moonAngularRadius ?? 0.02,
     moonSurfaceTexture: options.moonSurfaceTexture,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
