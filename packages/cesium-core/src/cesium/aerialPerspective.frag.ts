@@ -327,7 +327,8 @@ uniform vec3 moonDirection;
 uniform float moonAngularRadius;
 uniform float u_moonRadiance;
 // 色调乘子（2026-08-31 用户反馈月盘偏暖：solar_irradiance 光谱基色+NASA 纹理偏棕——实测
-// R/G=1.119 B/G=0.905。线性域冷色乘子对冲，默认 (0.88,1,1.12)；1,1,1=中性零回归路径）。
+// R/G=1.119 B/G=0.905。线性域冷蓝乘子对冲，默认 (0.72,1,1.32)（三档拍板：中性白/轻冷/冷蓝
+// 冷蓝胜出）；1,1,1=中性零回归路径）。
 uniform vec3 u_moonTint;
 // 月面纹理（月海/环形山，2026-08-30 月面纹理任务）：ECEF→月固系旋转（JS 每帧传转置）+ equirect 采样。
 // 纹理缺失时 demo 绑 1×1 白 dummy（albedo=1 退化为均匀月面，数值等价于无纹理版）。
