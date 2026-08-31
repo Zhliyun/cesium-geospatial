@@ -238,32 +238,70 @@ async function main(): Promise<void> {
     //（声明上移到月面纹理加载段之前——加载段按它跳过。）
     const skipAtmosphere =
       getString('atmo') === '0' || getString('atmo') === 'false'
-    // 月面纹理（2026-08-30 月面纹理任务）：上游 NASA Moon Kit color_large 2048×1024 equirect。
-    // ?moonSurface=0 跳过（均匀月面=白 dummy 基线）；加载失败不阻断（warn 后同基线）。
-    // 均值补偿：albedo 乘进 Oren-Nayar 会让盘总亮度掉 ~纹理均值——折入 moonRadianceScale
+    // 月面纹理（2026-08-30 月面纹理任务）：上游 NASA Moon Kit color_large 2048×1024 equirect
+    // × displacement_large 高程图合成——高程调制进颜色（环形山轮缘比照片图锐利得多；用户拍板
+    // 「要有明显的环形山」）。合成在 JS canvas 一次完成（GLSL 单 sampler 不动）。
+    // ?moonSurface=0 跳过（均匀月面=白 dummy 基线）；?moonDispScale= 环形山强度（0=纯 color 图，
+    // 默认 1，>1 增强）；加载失败不阻断。
+    // 均值补偿：合成 albedo 乘进 Oren-Nayar 会让盘总亮度掉 ~纹理均值——折入 moonRadianceScale
     // 默认值（只加图案不整体变暗；显式 ?moonRadiance= 用户自理不补）。
     let moonSurfaceTexture: Texture | undefined = undefined
     let moonSurfaceAlbedoMean = 1
     if (!skipAtmosphere && getString('moonSurface') !== '0') {
       try {
-        const moonImg = await Resource.fetchImage({ url: '/atmosphere/moon-surface.webp' })
+        const [moonImg, moonDispImg] = await Promise.all([
+          Resource.fetchImage({ url: '/atmosphere/moon-surface.webp' }),
+          Resource.fetchImage({ url: '/atmosphere/moon-displacement.webp' })
+        ])
+        const dispScale = getNumber('moonDispScale') ?? 1
+        // 合成（全分辨率 canvas）：环形山对比度拉伸。mod = clamp(1 + (dispLum − dispMean)·s·K, 0.05, 2)
+        // ——以高程均值为中心：正偏差（山脊/环形山轮缘）亮、负偏差（坑底/月海）暗、均值处不变。
+        // 线性幅度放大（旧版 mod=1−s+s·dl）在 s>1 时低高程区爆负致月盘发黑（moonDispScale=3 实测
+        // 月亮消失），对比度拉伸无此缺陷且「环形山明显」直接有效。K=4 内标定（s=1 默认摆幅 ~±0.2）。
+        const mcvs = document.createElement('canvas')
+        mcvs.width = (moonImg as HTMLImageElement).width || 2048
+        mcvs.height = (moonImg as HTMLImageElement).height || 1024
+        const mc2 = mcvs.getContext('2d')!
+        mc2.drawImage(moonImg as CanvasImageSource, 0, 0, mcvs.width, mcvs.height)
+        if (dispScale !== 0) {
+          const base = mc2.getImageData(0, 0, mcvs.width, mcvs.height)
+          const dcvs = document.createElement('canvas')
+          dcvs.width = mcvs.width; dcvs.height = mcvs.height
+          const dc2 = dcvs.getContext('2d')!
+          dc2.drawImage(moonDispImg as CanvasImageSource, 0, 0, mcvs.width, mcvs.height)
+          const disp = dc2.getImageData(0, 0, mcvs.width, mcvs.height)
+          const bd = base.data, dd = disp.data
+          // 第一遍：disp 亮度均值
+          let dsum = 0
+          for (let i = 0; i < dd.length; i += 4) dsum += dd[i]
+          const dmean = dsum / (dd.length / 4) / 255
+          // 第二遍：对比度调制
+          const K = 4
+          for (let i = 0; i < bd.length; i += 4) {
+            const mod = Math.min(2, Math.max(0.05, 1 + (dd[i] / 255 - dmean) * dispScale * K))
+            bd[i] = Math.min(255, bd[i] * mod)
+            bd[i + 1] = Math.min(255, bd[i + 1] * mod)
+            bd[i + 2] = Math.min(255, bd[i + 2] * mod)
+          }
+          mc2.putImageData(base, 0, 0)
+        }
         moonSurfaceTexture = new Texture({
           context: (scene as unknown as { context: Context }).context,
-          // Cesium .d.ts 的 source 只声明 arrayBufferView 形态（运行时支持 HTMLImageElement
-          // ——flipY 路径即为此设计），受控 cast（同 cesium-augment 精神，demo 层不扩声明）。
-          source: moonImg as unknown as { width: number; height: number; arrayBufferView: ArrayBufferView },
+          // Cesium .d.ts 的 source 只声明 arrayBufferView 形态（运行时支持 canvas——
+          // flipY 路径即为此设计），受控 cast（同 cesium-augment 精神，demo 层不扩声明）。
+          source: mcvs as unknown as { width: number; height: number; arrayBufferView: ArrayBufferView },
           flipY: true, // equirect v 轴对齐：GL v=1=图像顶部=月北极（GLSL moonUv v 公式如此约定）
           sampler: new Sampler({
             wrapS: TextureWrap.CLAMP_TO_EDGE,
             wrapT: TextureWrap.CLAMP_TO_EDGE
           })
         })
-        // 纹理均值（降采样 256×128 粗算足够；伽马域线性均值近似）
-        const mcvs = document.createElement('canvas')
-        mcvs.width = 256; mcvs.height = 128
-        const mc2 = mcvs.getContext('2d')!
-        mc2.drawImage(moonImg as CanvasImageSource, 0, 0, 256, 128)
-        const md = mc2.getImageData(0, 0, 256, 128).data
+        // 合成图均值（降采样 256×128 粗算足够；伽马域线性均值近似）
+        const acvs = document.createElement('canvas')
+        acvs.width = 256; acvs.height = 128
+        const ac2 = acvs.getContext('2d')!
+        ac2.drawImage(mcvs, 0, 0, 256, 128)
+        const md = ac2.getImageData(0, 0, 256, 128).data
         let msum = 0
         for (let i = 0; i < md.length; i += 4) msum += (md[i] + md[i + 1] + md[i + 2]) / 3 / 255
         moonSurfaceAlbedoMean = msum / (md.length / 4)
