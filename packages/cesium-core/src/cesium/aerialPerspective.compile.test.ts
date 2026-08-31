@@ -185,21 +185,28 @@ describe('月盘 MOON 段（spec r2 §5）', () => {
 describe('夜间天空 inscatter 淡出 skyNightFade', () => {
   const build = () => buildAerialPerspectiveFragmentShader({})
 
-  it('窗口常量 sin(-12°)=-0.2079 / sin(-6°)=-0.1045 + inscatter 乘 fade', () => {
+  it('窗口常量 sin(-12°)=-0.2079 / sin(-6°)=-0.1045 + inscatter 乘太阳可见度（六轮方向修复）', () => {
     const src = build()
-    expect(src).toContain('float skyNightFade = 1.0 - smoothstep(-0.2079, -0.1045, muSunSky);')
-    expect(src).toContain('inscatter *= skyNightFade;')
+    // 六轮（2026-08-31 天空黑回归）：首版 skyNightFade=1-smoothstep 用作乘数方向反——白天 mu>0
+    // →fade=0→inscatter 全消→天空黑/地形无雾（用户实测全屏黑；中间验收图因 vite 缓存假绿未揭穿）。
+    // 正确=直接乘 smoothstep（太阳可见度：白天=1 保留/深夜=0 消）；云侧 clouds.frag 的
+    // inscatter *= 1.0 - skyNightFade 嵌套双重否定恰好同义，不动。
+    expect(src).toContain('float skySunVisibility = smoothstep(-0.2079, -0.1045, muSunSky);')
+    expect(src).toContain('inscatter *= skySunVisibility;')
+    expect(src).not.toContain('inscatter *= 1.0 - smoothstep')
   })
 
-  it('muSunSky 锚点=视线代表点（地面=椭球交点/天空=最近点）——太空视角晨昏线修复', () => {
+  it('muSunSky 锚点=视线代表点（地面=椭球交点/天空=大气顶层入口）——太空晨昏线+朝天 NaN 双修', () => {
     const src = build()
     // 首版相机锚：太空夜侧上空 muSunSky≈-1→fade=0 整屏 inscatter 全灭（晨昏线消失被驳回）
     expect(src).not.toContain('dot(normalize(cameraPosition), sunDirection)')
     // 地面视线锚=椭球面交点（cameraPosition + rayDirection * tHitG）
     expect(src).toContain('vec3 fadeAnchor = (lookingAtGround && discG > 0.0)')
     expect(src).toContain('? cameraPosition + rayDirection * tHitG')
-    // 天空视线锚=离地心最近点（视线到相机径向的垂直投影点）
-    expect(src).toContain(': cameraPosition - dot(cameraPosition, rayDirection) * rayDirection;')
+    // 天空视线锚=大气顶层 topR 入口点（三轮的脚点锚在天顶视线塌到地心 normalize=NaN 整屏黑、
+    // 朝天 t*<0 脚点在相机背后——五轮改射线-球前向交点，相机在大气内朝天必存在）
+    expect(src).toContain('float tTop = -rmuTop + sqrt(max(rmuTop * rmuTop - rCam * rCam + topR * topR, 0.0));')
+    expect(src).toContain(': cameraPosition + rayDirection * tTop;')
     expect(src).toContain('float muSunSky = dot(normalize(fadeAnchor), sunDirection);')
   })
 

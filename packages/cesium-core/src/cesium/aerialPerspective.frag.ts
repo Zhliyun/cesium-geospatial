@@ -637,17 +637,28 @@ ${o.moon ? '    moonDisc *= limbFade; // 与太阳盘行为一致（太空视角
   // 窗口按标准暮光分级 sin(-12°)→sin(-6°)（首版 [-18°,-4°] 下界太深——太阳 -15.7° 仍保留 92%
   // 天文暮光红，用户实测满月时刻地平线仍泛红被驳回）：民用暮光（>-6°）零回归完整保留日落余晖、
   // 航海暮光（-6°→-12°）渐消、天文暮光（≤-12°）归零（LUT 残余已非物理，观感深夜=无红）。
-  // **锚点=视线代表点（三轮修正）**：首版用相机径向法线——太空夜侧上空相机 muSunSky≈-1→fade=0
-  // 把整屏 inscatter（含晨昏带地表亮带）全归零，用户实测地表晨昏线消失被驳回。改按每像素的
-  // 「视线与大气代表交点」判定：地面视线=椭球面交点 scenePosKm、天空视线=离地心最近点（视线与
-  // cameraPosition·rayDirection 平面的最近距离点，掠射时≈切点）。每像素按自身位置太阳角淡出：
-  // 晨昏带地表点 el≈0 → fade=1 亮带保留；深夜侧地平线远云/天空 el<-12° → 归零不红。
+  // **锚点=视线代表点（三轮修正；五轮再修天空分支）**：首版用相机径向法线——太空夜侧上空相机
+  // muSunSky≈-1→fade=0 把整屏 inscatter（含晨昏带地表亮带）全归零，用户实测地表晨昏线消失被
+  // 驳回。三轮天空分支改「离地心最近点」仍有塌陷：朝天视线 t*<0 脚点在相机背后、天顶视线脚点
+  // ≈地心 normalize=NaN→inscatter=NaN 整屏黑（用户实测白天仰视天空全黑被驳回）。五轮天空分支
+  // 改**大气顶层 topR 入口点**（射线-球前向交点，相机在大气内朝天必存在、物理=该视线进入大气
+  // 的位置，其太阳角即这片天空的物理太阳角；太空朝外视线 miss 时 max 钉 0→锚=相机，太空黑
+  // 本就无 inscatter 不受影响）。地面视线锚=椭球面交点 scenePosKm 不变。每像素按自身位置太阳
+  // 角淡出：晨昏带地表点 el≈0 → fade=1 亮带保留；深夜侧地平线远云/天空 el<-12° → 归零不红。
+  float rCam = length(cameraPosition);
+  float rmuTop = dot(cameraPosition, rayDirection);
+  float tTop = -rmuTop + sqrt(max(rmuTop * rmuTop - rCam * rCam + topR * topR, 0.0));
   vec3 fadeAnchor = (lookingAtGround && discG > 0.0)
     ? cameraPosition + rayDirection * tHitG
-    : cameraPosition - dot(cameraPosition, rayDirection) * rayDirection;
+    : cameraPosition + rayDirection * tTop;
+  // **六轮方向修复（2026-08-31 天空黑回归）**：首版 skyNightFade=1-smoothstep 用作乘数方向反
+  // ——白天 mu>0 → fade=0 → inscatter 全消 → 天空黑+地形无雾（用户实测全屏黑；f5ab881 起就反，
+  // 中间二~四轮验收图因 vite 缓存假绿未揭穿，二分+f5ab881 复测才定位）。正确语义=直接乘
+  // smoothstep（太阳可见度：白天/晨昏带=1 保留、深夜≤-12°=0 消）。云侧 clouds.frag 的
+  // inscatter *= 1.0 - skyNightFade 嵌套双重否定恰好同义，保持不动。
   float muSunSky = dot(normalize(fadeAnchor), sunDirection);
-  float skyNightFade = 1.0 - smoothstep(-0.2079, -0.1045, muSunSky);
-  inscatter *= skyNightFade;
+  float skySunVisibility = smoothstep(-0.2079, -0.1045, muSunSky);
+  inscatter *= skySunVisibility;
 
   finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale${o.moon ? ' + moonDisc' : ''};
 
