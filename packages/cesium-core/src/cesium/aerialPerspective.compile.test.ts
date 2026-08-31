@@ -185,9 +185,9 @@ describe('月盘 MOON 段（spec r2 §5）', () => {
 describe('夜间天空 inscatter 淡出 skyNightFade', () => {
   const build = () => buildAerialPerspectiveFragmentShader({})
 
-  it('窗口常量 sin(-18°)=-0.309 / sin(-4°)=-0.0698 + inscatter 乘 fade', () => {
+  it('窗口常量 sin(-12°)=-0.2079 / sin(-6°)=-0.1045 + inscatter 乘 fade', () => {
     const src = build()
-    expect(src).toContain('float skyNightFade = 1.0 - smoothstep(-0.309, -0.0698, muSunSky);')
+    expect(src).toContain('float skyNightFade = 1.0 - smoothstep(-0.2079, -0.1045, muSunSky);')
     expect(src).toContain('inscatter *= skyNightFade;')
   })
 
