@@ -50,7 +50,11 @@ import {
   ATMOSPHERE_BOTTOM_RADIUS_M,
   SUN_ANGULAR_RADIUS
 } from '../math/atmosphereParameters'
-import { computeMoonDirectionECEF, computeMoonFixedToECEFMatrix } from '../celestial/celestialDirections'
+import {
+  computeMoonDirectionECEF,
+  computeMoonFixedToECEFMatrix,
+  computeMoonIlluminatedFractionFromDirections
+} from '../celestial/celestialDirections'
 import type { AtmosphereLUTs } from './lutLoader'
 import { buildDepthTemporalFragmentShader } from './depthTemporal/depthTemporal.frag'
 import {
@@ -144,6 +148,14 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
    * 无纹理版，零回归路径）。纹理翻转轴若与真实月海镜像，调 GLSL moonUv（验收视觉核对）。
    */
   moonSurfaceTexture?: Texture
+  /**
+   * 月晕（月光天空散射，2026-09-01 用户反馈「月亮周围缺少光晕」）：月亮把月盘周围天空
+   * 照亮的柔光增亮（物理：朝月向大气散射 ×2.5e-6×月相，Mie 前向峰使月盘邻近更亮、低仰角
+   * 偏红、月落渐熄）。默认 125000（2026-09-01 三档拍板：75000 微光/125000 柔光清晰✓/
+   * 200000 饱满但夜空微灰）；0=关（夜间像素零变化）。URL demo ?moonGlow=。
+   * 白天由 shader 内 nightFactor 门归零（像素级零回归）。
+   */
+  moonSkyGlowScale?: number
 }
 
 // 校验后的完整 options（hdrDepthTemporal 排除：runtime 基于 stageCreated 决定，非用户 option；buildAtmosphereStage 时注入）。
@@ -183,6 +195,8 @@ export interface ResolvedAtmosphereStageOptions
   moonRadianceScale: number
   moonAngularRadius: number
   moonTint: Cartesian3
+  // 月晕 resolved（月光天空散射倍率；0=关）
+  moonSkyGlowScale: number
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
@@ -192,6 +206,8 @@ export interface AtmosphereFrameState {
   moonDirection: Cartesian3
   /** 月固系→ECEF 旋转（月面纹理投影，preRender 每帧更新；uniform 侧传其转置）。 */
   moonFixedToECEF: Matrix3
+  /** 月相照明分数 f（朔 0/弦 0.318/望 1；月晕调制用，preRender 由两方向 dot 即得）。 */
+  moonIlluminatedFraction: number
   altitudeCorrection: Cartesian3
   exposure: number
 }
@@ -297,6 +313,9 @@ export function validateAtmosphereOptions(
     // R/G=1.119 B/G=0.905；三档拍板冷蓝胜出：清冷月光/夜空氛围。中性白=0.78,1,1.25、轻冷=0.88,1,1.12）
     moonTint: options.moonTint ?? new Cartesian3(0.72, 1.0, 1.32),
     moonSurfaceTexture: options.moonSurfaceTexture,
+    // 月晕默认 125000（2026-09-01 三档拍板：75000 微光克制/125000 柔光清晰✓/200000 饱满但夜空
+    // 微灰；满月深夜实测紧邻盘缘峰值≈23/255、3-4 倍盘径渐隐、远处夜空 3-7/255）
+    moonSkyGlowScale: options.moonSkyGlowScale ?? 125000,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
@@ -371,6 +390,10 @@ export function buildAtmosphereUniforms(
     // 月面纹理（月固系矩阵每帧转置到 scratch；纹理/白 dummy 由 createAtmosphereStage 内 append）
     u_moonFixedToECEFInv: () => Matrix3.transpose(state.moonFixedToECEF, moonFixedInvScratch),
     u_moonSurface: options.moonSurfaceTexture,
+    // 月晕（月光天空散射）：倍率静态（0=关——shader if 分支全屏一致零成本）；月相分数闭包
+    //（preRender 由 state 两方向 dot 即得）。moon=false 时 shader 无声明，Cesium 静默忽略。
+    u_moonSkyScale: options.moonSkyGlowScale,
+    u_moonIlluminatedFraction: () => state.moonIlluminatedFraction,
     altitudeCorrection: () => state.altitudeCorrection,
     exposure: () => state.exposure, // 动态（preRender 更新）
     u_debugMode: options.debugMode,
@@ -456,6 +479,7 @@ export function createAtmosphereStage(
     sunDirection: new Cartesian3(0, 0, 1),
     moonDirection: new Cartesian3(0, 0, 1),
     moonFixedToECEF: Matrix3.clone(Matrix3.IDENTITY),
+    moonIlluminatedFraction: 0,
     altitudeCorrection: new Cartesian3(),
     exposure: resolved.exposureDay
   }
@@ -832,6 +856,11 @@ export function createAtmosphereStage(
       computeMoonDirectionECEF(time, icrfToFixed, moonOriginScratch, state.moonDirection)
       // 月固系（月面纹理投影）：IAU 2009 闭式，与月方向同帧共享 icrfToFixed
       computeMoonFixedToECEFMatrix(time, icrfToFixed, state.moonFixedToECEF)
+      // 月相照明分数（月晕调制）：state 两方向 dot 即得（Lambert 球积分），零天文计算
+      state.moonIlluminatedFraction = computeMoonIlluminatedFractionFromDirections(
+        state.sunDirection,
+        state.moonDirection
+      )
     }
 
     // 动态曝光（按相机当地太阳高度角）或手动

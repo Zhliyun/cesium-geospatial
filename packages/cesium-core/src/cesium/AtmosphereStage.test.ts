@@ -95,6 +95,7 @@ function makeState(): AtmosphereFrameState {
     sunDirection: new Cartesian3(0, 0, 1),
     moonDirection: new Cartesian3(1, 0, 0),
     moonFixedToECEF: Matrix3.clone(Matrix3.IDENTITY)!,
+    moonIlluminatedFraction: 0.85,
     altitudeCorrection: new Cartesian3(),
     exposure: 1.5
   }
@@ -306,6 +307,7 @@ describe('validateAtmosphereOptions', () => {
       moonRadianceScale: 3160, // 7111×(0.02/0.03)²——ω 拍板 0.02 后同式保显示亮度（2026-08-31）
       moonAngularRadius: 0.02, // 物理 0.0045×4.4（2026-08-31 二次拍板：65px 有点大→~45px）
       moonTint: new Cartesian3(0.72, 1.0, 1.32), // 冷蓝默认（2026-08-31 月盘偏暖反馈，三档拍板）
+      moonSkyGlowScale: 125000, // 月晕默认（2026-09-01 三档拍板：75000 微光/125000 柔光清晰✓/200000 饱满）
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
@@ -876,6 +878,7 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
       sunDirection: new Cartesian3(0, 0, 1),
       moonDirection: new Cartesian3(1, 0, 0),
       moonFixedToECEF: Matrix3.clone(Matrix3.IDENTITY)!,
+      moonIlluminatedFraction: 0.85,
       altitudeCorrection: new Cartesian3(),
       exposure: 1
     }
@@ -890,6 +893,25 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
     expect(u.moonAngularRadius).toBeCloseTo(0.02, 6)
     expect(u.u_moonRadiance).toBe(3160)
     expect(u.u_moonTint).toEqual(new Cartesian3(0.72, 1.0, 1.32))
+  })
+
+  it('月晕 uniforms：u_moonSkyScale 静态透传（默认 25000）+ u_moonIlluminatedFraction 闭包', () => {
+    const state: AtmosphereFrameState = {
+      sunDirection: new Cartesian3(0, 0, 1),
+      moonDirection: new Cartesian3(1, 0, 0),
+      moonFixedToECEF: Matrix3.clone(Matrix3.IDENTITY)!,
+      altitudeCorrection: new Cartesian3(),
+      exposure: 1,
+      moonIlluminatedFraction: 0.85
+    }
+    // validate 默认：三档拍板定稿 125000（满月深夜实测紧邻盘缘峰值≈23/255）
+    expect(validateAtmosphereOptions({}).moonSkyGlowScale).toBe(125000)
+    expect(validateAtmosphereOptions({ moonSkyGlowScale: 0 }).moonSkyGlowScale).toBe(0)
+    const u = buildAtmosphereUniforms(stubLuts, validateAtmosphereOptions({}), state)
+    expect(u.u_moonSkyScale).toBe(125000)
+    // 月相照明分数闭包（preRender 由 state 两方向 dot 即得，零天文计算）
+    expect(typeof u.u_moonIlluminatedFraction).toBe('function')
+    expect((u.u_moonIlluminatedFraction as () => number)()).toBeCloseTo(0.85, 6)
   })
 
   it('buildAtmosphereStage fragmentShader 透传 moon（moon=false 时 shader 无 moonDirection）', () => {

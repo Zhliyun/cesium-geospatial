@@ -87,7 +87,9 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'u_moonRadiance',
   'u_moonTint', // 月盘色调乘子（MOON 段声明；moon=false 时 shader 无声明，绑了 Cesium 静默忽略）
   'u_moonFixedToECEFInv', // 月面纹理（MOON 段声明；moon=false 时 shader 无声明，绑了 Cesium 静默忽略）
-  'u_moonSurface'
+  'u_moonSurface',
+  'u_moonSkyScale', // 月晕（MOON 段声明；moon=false 或 0 时无消费，绑了 Cesium 静默忽略）
+  'u_moonIlluminatedFraction'
 ]
 
 // Cesium PostProcessStage 内建纹理 uniform——必须由 shader 显式声明（Cesium 仅提供 uniform 值，
@@ -334,6 +336,12 @@ uniform vec3 u_moonTint;
 // 纹理缺失时 demo 绑 1×1 白 dummy（albedo=1 退化为均匀月面，数值等价于无纹理版）。
 uniform mat3 u_moonFixedToECEFInv;
 uniform sampler2D u_moonSurface;
+// 月晕（月光天空散射，2026-09-01）：月光把月盘周围天空照亮——朝月向二次 GetSkyRadiance。
+// 倍率对齐云月光 moonLightScale 量级起步（满月净系数 2.5e-6×25000≈0.06×太阳同几何散射；
+// shader 内门与 clouds.frag §6.1 同体系，0=关）。
+uniform float u_moonSkyScale;
+// 月相照明分数 f（朔 0/弦 0.318/望 1）——JS preRender 由 state 两方向 dot 即得（Lambert 球积分）。
+uniform float u_moonIlluminatedFraction;
 `
 
 // [MOON] 月盘 GLSL（getSkyRadiance 内、SUN 盘后注入；moonDisc 是 out 参数——通道方案 spec §5.1：
@@ -372,7 +380,37 @@ const MOON_DISC_GLSL = `
     vec3 moonDiscRadiance = ATMOSPHERE.solar_irradiance
       * 2.5e-6 / (PI * moonAngularRadius * moonAngularRadius)
       * SUN_SPECTRAL_RADIANCE_TO_LUMINANCE * u_moonRadiance * u_moonTint * onDiffuse * moonAlbedo;
-    moonDisc = transmittance * moonDiscRadiance * moonMask;
+    moonDisc += transmittance * moonDiscRadiance * moonMask;  // +=（非 =）：叠加月晕段（入口已归零）
+  }
+`
+
+// [MOON] 月晕（月光天空散射，2026-09-01 用户反馈「月亮周围缺少光晕」）：月亮把周围天空照亮。
+// 物理式：朝月方向二次 GetSkyRadiance ×2.5e-6（视星等比）×f（月相）×u_moonSkyScale（艺术放大，
+// 与云月光同一物理体系）——Mie 前向峰自动给出「月盘邻近更亮」、低仰角透射红化、月相盈亏调制、
+// 月落渐熄。走 moonDisc out 通道而非 radiance/inscatter：main 末端 inscatter *= skySunVisibility
+// （六轮修复：太阳可见度门）会把深夜月光散射一并消零——通道绕开，且天然继承 hasScene 前景雾
+// 遮月（山后无月晕）+ limbFade（太空视角）+不吃太阳专用 u_inscatterScale。
+// 门与 clouds.frag 月光 §6.1 逐字对齐（锚改相机天顶 normalize(cameraPosition)——天空像素无
+// 采样表面，相机即观察点；太空夜侧相机 muSun<0 门开=limb 月光散射物理正确）：nightFactor 太阳
+// 门白天=0（白天像素级零回归——月光 +6% 被门归零）、moonFactor=月相×月升落门（月落后无地下光）。
+const MOON_SKY_GLOW_GLSL = `
+  if (u_moonSkyScale > 0.0) {
+    // 相机天顶锚（moonCamZenith 局部变量——skySunVisibility 的「防相机锚」断言针对太阳淡出门，
+    // 月晕门语义不同：白天关月光（+6% 归零）+太空夜侧 muSun<0 门开=limb 月光散射，相机锚正确）
+    vec3 moonCamZenith = normalize(cameraPosition);
+    vec3 moonSkyTrans;  // 弃用（月晕透射已含在 GetSkyRadiance 输出内）
+    vec3 moonGlow = GetSkyRadiance(cameraPosition, rayDirection, 0.0, moonDirection, moonSkyTrans);
+    float moonNightFactor = 1.0 - smoothstep(-0.1045, -0.0175, dot(moonCamZenith, sunDirection));
+    float moonFactor = u_moonIlluminatedFraction
+      * smoothstep(-0.05, 0.02, dot(moonCamZenith, moonDirection));
+    // 角聚集（aureole 形）：3D 散射 LUT 的 nu 维仅 32 texel（段宽 0.0625）——月盘角半径 0.02 rad
+    // 的 Mie 前向峰远小于一个 texel，纯 LUT 路径实测给出「全局均匀微亮」无月晕形（2026-09-01
+    // 像素差分实证：紧邻环≈远处天空）。此处按解析 exp 前向峰恢复 LUT 分辨率丢失的形状（等效
+    // Mie 前向峰放回）：θ=视线与月夹角，θ0=0.06 rad（≈3.4° 柔光尺度），k=15 检回可见聚集
+    //（形状超参不外暴露——强度唯一旋钮 u_moonSkyScale）。
+    float moonTheta = acos(clamp(dot(rayDirection, moonDirection), -1.0, 1.0));
+    float moonAureole = 1.0 + 15.0 * exp(-moonTheta / 0.06);
+    moonDisc += moonGlow * (u_moonSkyScale * 2.5e-6 * moonNightFactor * moonFactor * moonAureole);
   }
 `
 
@@ -396,7 +434,8 @@ vec3 getSkyRadiance(
     sunDirection,
     transmittance
   );
-${sun ? SUN_DISK_GLSL : ''}${moon ? MOON_DISC_GLSL : ''}
+${sun ? SUN_DISK_GLSL : ''}${moon ? `  moonDisc = vec3(0.0); // out 参数函数内读前显式归零（out 语义不保证入口值）
+${MOON_SKY_GLOW_GLSL}${MOON_DISC_GLSL}` : ''}
   return radiance;
 }
 `

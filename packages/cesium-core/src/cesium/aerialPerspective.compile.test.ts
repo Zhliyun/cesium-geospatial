@@ -157,6 +157,29 @@ describe('月盘 MOON 段（spec r2 §5）', () => {
     expect(srcOff).not.toContain('u_moonTint')
   })
 
+  it('moon=true：月光天空散射（月晕）——朝月向二次 GetSkyRadiance 走 moonDisc 通道（绕 skySunVisibility）', () => {
+    const src = build()
+    expect(src).toContain('uniform float u_moonSkyScale;')
+    expect(src).toContain('uniform float u_moonIlluminatedFraction;')
+    // 物理源：朝月方向二次采样天空散射（Mie 前向峰 → 月盘邻近更亮自动涌现）
+    expect(src).toContain('GetSkyRadiance(cameraPosition, rayDirection, 0.0, moonDirection')
+    // 走 moonDisc out 通道（+= 语义：月盘+背后月晕叠加），不进 radiance/inscatter——
+    // main 末端 inscatter *= skySunVisibility（六轮修复：太阳可见度门）会把深夜月光散射
+    // 一并消零，通道绕开且天然继承 hasScene 前景雾遮月 + limbFade
+    expect(src).toContain('moonDisc += moonGlow')
+    // 夜间门（与 clouds.frag 月光 §6.1 同体系逐字对齐，锚=相机天顶）：nightFactor 白天=0
+    // （白天像素级零回归——月光项 +6% 被门归零）、moonFactor=月相×月升落；
+    // aureole=解析前向峰恢复 LUT nu 维（32 texel）丢失的月晕角聚集形（像素差分实证：
+    // 纯 LUT 项全局均匀微亮、紧邻环≈远处天空，无月晕形）
+    expect(src).toContain('u_moonSkyScale * 2.5e-6 * moonNightFactor * moonFactor * moonAureole')
+    expect(src).toContain('1.0 + 15.0 * exp(-moonTheta / 0.06)')
+    // out 参数函数内读前显式归零（out 语义不保证入口值；月盘段因此从 = 改 +=）
+    expect(src).toContain('moonDisc = vec3(0.0);')
+    const srcOff = buildOff()
+    expect(srcOff).not.toContain('u_moonSkyScale')
+    expect(srcOff).not.toContain('moonGlow')
+  })
+
   it('moon=false golden：产物与现状（无 moon 代码）逐字符一致', () => {
     const srcOff = buildOff()
     expect(srcOff).not.toContain('moonDisc')

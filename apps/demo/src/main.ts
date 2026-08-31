@@ -348,10 +348,12 @@ async function main(): Promise<void> {
       // ?moonAngularRadius= 月盘角半径 rad（默认 0.02=物理×4.4，2026-08-31 二次拍板：0.03 的 65px「有点大」→ ~45px；
       // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 25000，2026-08-31 偏亮反馈拍板减半）；
       // ?moonSurface=0 关月面纹理（均匀月面基线）；?moonTint=r,g,b 月盘色调乘子（默认库冷蓝
-      // 0.72,1,1.32——2026-08-31 偏暖反馈三档拍板；?moonTint=1,1,1 回中性）。
+      // 0.72,1,1.32——2026-08-31 偏暖反馈三档拍板；?moonTint=1,1,1 回中性）；
+      // ?moonGlow= 月晕倍率（月光天空散射，默认 125000 三档拍板，2026-09-01；0=关）。
       ...(moonSurfaceTexture != null ? { moonSurfaceTexture } : {}),
       ...(getString('moon') === '0' ? { moon: false } : {}),
       ...(getNumber('moonRadiance') != null ? { moonRadianceScale: getNumber('moonRadiance')! } : {}),
+      ...(getNumber('moonGlow') != null ? { moonSkyGlowScale: getNumber('moonGlow')! } : {}),
       ...(getString('moonTint') != null
         ? (() => {
             const rgb = getString('moonTint')!.split(',').map(Number)
