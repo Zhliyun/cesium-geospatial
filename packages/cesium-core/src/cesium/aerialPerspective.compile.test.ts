@@ -177,3 +177,29 @@ describe('月盘 MOON 段（spec r2 §5）', () => {
     }
   })
 })
+
+// ── 夜间天空 inscatter 淡出（2026-08-31 地平线泛红二轮修复）──
+// 根因：Bruneton 散射 LUT 高阶项太阳深潜后不精确归零，地平线长路径残余 ×u_inscatterScale(25)
+// 放大成可见橙红（实测真深夜太阳 -69° 云全关仍整圈红）；物理上 <-18°（天文暮光末）天空太阳
+// 散射应为零。修法=inscatter 乘 skyNightFade（窗口 sin(-18°)→sin(-4°)，白天/民用暮光零回归）。
+describe('夜间天空 inscatter 淡出 skyNightFade', () => {
+  const build = () => buildAerialPerspectiveFragmentShader({})
+
+  it('窗口常量 sin(-18°)=-0.309 / sin(-4°)=-0.0698 + inscatter 乘 fade', () => {
+    const src = build()
+    expect(src).toContain('float skyNightFade = 1.0 - smoothstep(-0.309, -0.0698, muSunSky);')
+    expect(src).toContain('inscatter *= skyNightFade;')
+  })
+
+  it('muSunSky 用相机径向法线（与 clouds.frag nightFactor 同源几何）', () => {
+    const src = build()
+    expect(src).toContain('float muSunSky = dot(normalize(cameraPosition), sunDirection);')
+  })
+
+  it('glslang：含 skyNightFade 的完整 shader 真编译', () => {
+    const src = buildStandaloneShaderForValidation({})
+    const { ok, output } = compileFragment(src)
+    if (!ok) throw new Error(`编译失败:\n${output}`)
+    expect(ok).toBe(true)
+  })
+})

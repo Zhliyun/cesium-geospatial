@@ -1408,6 +1408,16 @@ void main() {
     inscatter *= limbFade;
   }
 
+  // —— 夜间天空 inscatter 淡出（2026-08-31 地平线泛红二轮修复）——
+  // 根因：Bruneton 散射 LUT 高阶项在太阳深潜后不精确归零，地平线长路径残余 ×u_inscatterScale(25)
+  // 放大成可见橙红（实测真深夜太阳 -69° 云全关仍整圈红，moon/nightAmbient 隔离均排除云侧）。
+  // 物理上太阳 <-18°（天文暮光末）天空太阳散射应为零。窗口 sin(-18°)→sin(-4°)：白天/民用暮光
+  // （>-4°）零回归，航海→天文暮光渐消，深夜全消（晨昏线附近的暮光红完整保留在此窗口上方）。
+  // muSunSky 用相机径向法线（与 clouds.frag nightFactor 同源几何——相机当地太阳仰角）。
+  float muSunSky = dot(normalize(cameraPosition), sunDirection);
+  float skyNightFade = 1.0 - smoothstep(-0.309, -0.0698, muSunSky);
+  inscatter *= skyNightFade;
+
   finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale;
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
