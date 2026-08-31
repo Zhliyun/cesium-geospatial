@@ -1103,8 +1103,8 @@ describe('月光接线（spec r2 §6.5）', () => {
     vi.clearAllMocks()
   })
 
-  it('defaultCloudsParameters.moonLightScale 默认 50000', () => {
-    expect(defaultCloudsParameters().moonLightScale).toBe(50000)
+  it('defaultCloudsParameters.moonLightScale 默认 25000（2026-08-31 偏亮反馈拍板减半）', () => {
+    expect(defaultCloudsParameters().moonLightScale).toBe(25000)
   })
 
   it('buildSharedCloudsUniforms 含月光三键（moonDirection/moonIlluminatedFraction 闭包直读 state，moonLightScale 读 params）', async () => {
@@ -1127,7 +1127,7 @@ describe('月光接线（spec r2 §6.5）', () => {
     )
     expect((uniforms.moonDirection as () => Cartesian3)()).toBe(state.moonDirection)
     expect((uniforms.moonIlluminatedFraction as () => number)()).toBe(0.5)
-    expect((uniforms.moonLightScale as () => number)()).toBe(50000)
+    expect((uniforms.moonLightScale as () => number)()).toBe(25000)
   })
 
   it('preRender 月光接线：state.moonDirection 更新为单位向量 + moonIlluminatedFraction = FromDirections(sun, moon)（同帧同源自洽）', () => {

@@ -129,8 +129,9 @@ export interface CloudsParameters {
    *  0 = 关闭（回退纯黑夜间云）。不进质量档位（视觉参数，与 march 档无关）。 */
   nightAmbient: number
   /** 月光倍率（方向 C，2026-08-30）：moonIrradiance = solar_irradiance×2.5e-6×月相×此值×
-   *  nightFactor。默认 50000（满月贡献 ≈nightAmbient(0.12)×1.5 主导夜间照明；物理 2.5e-6
-   *  不可见）。0 = 关（回退 nightAmbient 底光）。视觉参数不进质量档位。URL ?moonLightScale=。 */
+   *  nightFactor。默认 25000（2026-08-31 用户反馈夜间云偏亮，三档实测拍板减半：中景云 −36%/
+   *  地平亮云 −31%，月光仍主导夜间照明；沿革 50000→25000。物理 2.5e-6 不可见）。
+   *  0 = 关（回退 nightAmbient 底光）。视觉参数不进质量档位。URL ?moonLightScale=。 */
   moonLightScale: number
 
   // ── weather/shape（uniforms.ts + CloudsEffect 默认）──
@@ -261,7 +262,7 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 夜间环境底光（方向 B；本仓库新增，非 three 移植——上游无夜间光源是已知缺失）
     nightAmbient: 0.12,
     // 月光倍率（方向 C，2026-08-30；同 interface 注释——0 = 关，回退 nightAmbient 底光）
-    moonLightScale: 50000,
+    moonLightScale: 25000, // 2026-08-31 偏亮反馈三档拍板减半（50000→25000，中景云 −36%）
 
     // weather/shape（uniforms.ts:54 + CloudsEffect.ts:180-186）
     coverage: 0.3,

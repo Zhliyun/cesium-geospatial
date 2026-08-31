@@ -104,7 +104,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `moonTint` | 0.72,1,1.32 | 月盘色调乘子（线性 RGB；`1,1,1` 回中性） |
 | `moonDispScale` | 1 | 环形山对比度强度（0=纯颜色图，>1 更强） |
 | `moonSurface=0` | 开 | 关月面纹理（均匀月面基线） |
-| `moonLightScale` | 50000 | 云月光倍率 |
+| `moonLightScale` | 25000 | 云月光倍率 |
 
 ### 镜头光晕（LensFlare）
 

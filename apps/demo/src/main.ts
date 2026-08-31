@@ -346,7 +346,7 @@ async function main(): Promise<void> {
       // 月光（2026-08-30 方向 C）：?moon=0 全关（月盘不编入+云月光乘 0）——诊断基线；
       // ?moonRadiance= 月盘倍率（默认 3160=7111×(0.02/0.03)²，ω 拍板 0.02 后同式保显示亮度，纹理在载时按均值放大）；
       // ?moonAngularRadius= 月盘角半径 rad（默认 0.02=物理×4.4，2026-08-31 二次拍板：0.03 的 65px「有点大」→ ~45px；
-      // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 50000）；
+      // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 25000，2026-08-31 偏亮反馈拍板减半）；
       // ?moonSurface=0 关月面纹理（均匀月面基线）；?moonTint=r,g,b 月盘色调乘子（默认库冷蓝
       // 0.72,1,1.32——2026-08-31 偏暖反馈三档拍板；?moonTint=1,1,1 回中性）。
       ...(moonSurfaceTexture != null ? { moonSurfaceTexture } : {}),
@@ -555,7 +555,7 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {}),
           // 夜间环境底光（方向 B，2026-08-29）：夜间云照明地板（默认 0.12 标定夜空底光量级；
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
-          // parameters.moonLightScale，默认 50000）；?moon=0 全关诊断基线 → 云月光强制乘 0
+          // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
           ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0'
             ? {
