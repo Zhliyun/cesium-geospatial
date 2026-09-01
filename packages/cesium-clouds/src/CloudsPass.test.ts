@@ -403,7 +403,8 @@ describe('createCloudsPass', () => {
       'minIntervalHeights', 'maxIntervalHeights', 'densityScales', 'shapeAmounts',
       'shapeDetailAmounts', 'weatherExponents', 'shapeAlteringBiases',
       'coverageFilterWidths', 'minHeight', 'maxHeight', 'shadowTopHeight',
-      'shadowBottomHeight', 'shadowLayerMask', 'cameraHeight', 'nightAmbient'
+      'shadowBottomHeight', 'shadowLayerMask', 'cameraHeight', 'nightAmbient',
+      'u_nightTint'
     ]
     for (const name of expected) {
       expect(um[name], `uniform ${name} 应注入`).toBeDefined()
@@ -426,6 +427,24 @@ describe('createCloudsPass', () => {
     })
     const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     expect(um2.nightAmbient(), '用户覆盖走 parameters 字段级合并').toBe(0.2)
+    pass2.destroy()
+  })
+
+  it('夜间云色调 u_nightTint：默认 (0.88,1,1)；parameters 覆盖生效（乘底光+月光，2026-09-01 uniform 化）', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um.u_nightTint()).toEqual(new Cartesian3(0.88, 1.0, 1.0))
+    pass.destroy()
+
+    vi.clearAllMocks()
+    const params = defaultCloudsParameters()
+    params.nightTint = new Cartesian3(0.85, 1.0, 1.0)
+    const pass2 = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state, {
+      parameters: params
+    })
+    const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um2.u_nightTint()).toEqual(new Cartesian3(0.85, 1.0, 1.0))
     pass2.destroy()
   })
 })

@@ -128,6 +128,10 @@ export interface CloudsParameters {
    *  太阳当地仰角 -5°→-12° 淡入。默认 0.12 标定到与夜空底光同量级（见 clouds.frag 注释）。
    *  0 = 关闭（回退纯黑夜间云）。不进质量档位（视觉参数，与 march 档无关）。 */
   nightAmbient: number
+  /** 夜间云色调乘子（线性 RGB，乘底光+月光两项；2026-09-01 云偏蓝二轮反馈 uniform 化）。
+   *  沿革：冷蓝 (0.72,1,1.32)（2026-08-31 泛红修复对冲远景 transmittance 红化）→(0.72,1,1.15)
+   *  →(0.88,1,1.0)（三档拍板 C 档）。demo ?cloudsTint=r,g,b。 */
+  nightTint: Cartesian3
   /** 月光倍率（方向 C，2026-08-30）：moonIrradiance = solar_irradiance×2.5e-6×月相×此值×
    *  nightFactor。默认 25000（2026-08-31 用户反馈夜间云偏亮，三档实测拍板减半：中景云 −36%/
    *  地平亮云 −31%，月光仍主导夜间照明；沿革 50000→25000。物理 2.5e-6 不可见）。
@@ -261,6 +265,11 @@ export function defaultCloudsParameters(): CloudsParameters {
     powderExponent: 150.0,
     // 夜间环境底光（方向 B；本仓库新增，非 three 移植——上游无夜间光源是已知缺失）
     nightAmbient: 0.12,
+    // 夜间云色调乘子（线性域，乘底光+月光两项；2026-09-01 uniform 化+三档拍板定稿 C 档——
+    // 沿革 (0.72,1,1.32) 泛红对冲→(0.72,1,1.15) 一轮弱蓝→(0.88,1,1.0) 二轮弱蓝拍板：
+    // 蓝收干净+红大幅回抬，实测云 B/G=1.06（残余蓝=云介质散射谱依赖的物理蓝移）、
+    // R/G=0.84 中性偏暖灰白；demo ?cloudsTint=）
+    nightTint: new Cartesian3(0.88, 1.0, 1.0),
     // 月光倍率（方向 C，2026-08-30；同 interface 注释——0 = 关，回退 nightAmbient 底光）
     moonLightScale: 25000, // 2026-08-31 偏亮反馈三档拍板减半（50000→25000，中景云 −36%）
 

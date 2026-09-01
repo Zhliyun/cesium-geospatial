@@ -559,7 +559,7 @@ async function main(): Promise<void> {
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
-          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0'
+          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null
             ? {
                 parameters: {
                   ...(getNumber('cloudsNightAmbient') != null
@@ -568,7 +568,18 @@ async function main(): Promise<void> {
                   ...(getNumber('moonLightScale') != null
                     ? { moonLightScale: getNumber('moonLightScale')! }
                     : {}),
-                  ...(getString('moon') === '0' ? { moonLightScale: 0 } : {})
+                  ...(getString('moon') === '0' ? { moonLightScale: 0 } : {}),
+                  // ?cloudsTint=r,g,b 夜间云色调（乘底光+月光；2026-09-01 云偏蓝二轮反馈
+                  // uniform 化——三档拍板/后续调色 URL 即调）
+                  ...(getString('cloudsTint') != null
+                    ? (() => {
+                        const rgb = getString('cloudsTint')!.split(',').map(Number)
+                        if (rgb.length === 3 && rgb.every(Number.isFinite)) {
+                          return { nightTint: new Cartesian3(rgb[0], rgb[1], rgb[2]) }
+                        }
+                        return {}
+                      })()
+                    : {})
                 }
               }
             : {})

@@ -478,6 +478,8 @@ export function createCloudsPass(
     // 夜间环境底光（方向 B）：march 专有——shadow.frag 生成端不声明不消费
     //（shared 段不注入，Cesium 对未声明 uniform 静默忽略的同理反向）
     nightAmbient: () => params.nightAmbient,
+    // 夜间云色调乘子（乘底光+月光；2026-09-01 uniform 化，?cloudsTint= URL 调）
+    u_nightTint: () => params.nightTint,
 
     // depth（M6 提前接通，2026-08-14）：真实 globe depthTexture（log-depth 编码，shader 内
     // czm_reverseLogDepthWindow 反演）→ 云被地形正确截断/遮挡（青藏「云浮地形上」修）。

@@ -65,9 +65,10 @@ uniform float powderExponent;
 // （实测 R/G=1.23，近景不红 0.99；moon=0 隔离排月光、nightAmbient=0 隔离定根因）。
 // 底光本身给冷蓝（模拟夜空散射的蓝移谱），中距对冲红化、远景残余暖色大幅减弱。
 uniform float nightAmbient;
-// 冷蓝（线性域）。2026-09-01 用户反馈夜间云偏蓝：B 1.32→1.15 弱化蓝色一档
-//（R 不动——只收蓝不回红；与月盘 u_moonTint (0.72,1,1.32) 解耦，云/盘各自拍板）。
-const vec3 NIGHT_AMBIENT_TINT = vec3(0.72, 1.0, 1.15);
+// 夜间云色调乘子（线性域；乘底光+月光两项）。uniform 化（2026-09-01 云偏蓝二轮反馈——
+// 每轮改常量成本高，?cloudsTint= URL 即调）。沿革：冷蓝 (0.72,1,1.32)（2026-08-31 泛红修复
+// 对冲远景 transmittance 红化）→ B 1.32→1.15（「偏蓝」一轮）→ 三档拍板后定稿。
+uniform vec3 u_nightTint;
 
 // 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
 // （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/
@@ -567,7 +568,7 @@ vec4 marchClouds(
       // GetSunAndSkyIrradiance 内 mu_s 同源。
       float muSunLocal = dot(surfaceNormal, sunDirection);
       float nightFactor = 1.0 - smoothstep(-0.1045, -0.0175, muSunLocal);
-      skyIrradiance += NIGHT_AMBIENT_TINT * (nightAmbient * nightFactor);
+      skyIrradiance += u_nightTint * (nightAmbient * nightFactor);
 
       // 月光门 2：月升落（spec §6.2）——月落后 moonDirection 在地平线下，无此门云被
       // 「地下来的光」照亮、云底亮反转（弦月下半夜必现）。窗口 -0.05..0.02 ≈
@@ -619,10 +620,10 @@ vec4 marchClouds(
       );
       float cosThetaMoon = dot(moonDirection, rayDirection);
       // 月光谱色：solar_irradiance 是暖白光谱，月光物理上经月面反射（中性偏暖）+ 无大气透射
-      // （月球无大气）——但视觉基准带冷蓝（NIGHT_AMBIENT_TINT 同源），与底光色调一致防夜间
+      // （月球无大气）——但视觉基准带冷蓝（u_nightTint 同源），与底光色调一致防夜间
       // 云面混色（2026-08-31 天际线泛红修复配套）。
       vec3 moonIrradiance = ATMOSPHERE.solar_irradiance
-        * 2.5e-6 * moonLightScale * nightFactor * moonFactor * NIGHT_AMBIENT_TINT;
+        * 2.5e-6 * moonLightScale * nightFactor * moonFactor * u_nightTint;
       radiance += moonIrradiance * approximateMultipleScattering(moonOpticalDepth, cosThetaMoon);
 
       #ifdef GROUND_BOUNCE
@@ -781,7 +782,7 @@ void applyAerialPerspective(
     transmittance
   );
   // 夜间淡出+去色（2026-08-31 地平线泛红三轮）：云内大气透视独立于 atmosphere 主 shader
-  // （二轮只修了主 shader）。**红带主源=transmittance 距离红化**：NIGHT_AMBIENT_TINT 冷蓝的
+  // （二轮只修了主 shader）。**红带主源=transmittance 距离红化**：u_nightTint 冷蓝的
   // 云本体光 × 贴地平线几百 km 路径的 Rayleigh 滤蓝存红透射（中距离对冲后 0.98，贴线极远云
   // 仍 1.4-1.96；云关后同区纯黑定位到本链路）。修法=夜门内 transmittance 去色保亮度
   // （mix 到灰度——夜间 Purkinje 低色觉，远处云变暗不偏色）；inscatter 同窗口归零

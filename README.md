@@ -121,6 +121,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `cloudsQuality` | `high` | 质量档位 `low`/`medium`/`high`/`ultra`：march 步数/编译开关（光柱/细节/湍流/精确天光）/BSM 级联数与尺寸整档联动；键盘 `1`-`4` 运行时切换 |
 | `cloudsExposure` | 12 | 云层曝光（线性域缩放，链尾统一 tonemap；偏灰调大、过曝调小） |
 | `cloudsNightAmbient` | 0.12 | 夜间环境底光：太阳沉没后云照明地板（0 = 关闭回退纯黑夜间云）。夜间云无月光/气辉模型，LUT 归零后厚云成黑洞——此值标定到与夜空底光同量级 |
+| `cloudsTint` | 0.88,1,1 | 夜间云色调乘子（线性 RGB，乘底光+月光；沿革冷蓝 1.32→弱蓝 1.15→中性偏暖定稿） |
 | `cloudsShadow=0` | 开 | 关 BSM 自阴影（对比云体积感） |
 | `cloudsShadowAnchor=frustum` | world | 回退视锥锚定 BSM（AB 对照基线；默认 world 世界锚定固定网格，抗移动闪动） |
 | `cloudsShadowScale=N` | 1 | world 锚定 radii × N（诊断用，N=5 → {80,168,480}km 膨胀层） |

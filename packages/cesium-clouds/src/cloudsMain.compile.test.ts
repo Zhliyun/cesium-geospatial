@@ -358,16 +358,19 @@ describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
 // 修复 = skyIrradiance 抬 nightAmbient 地板，当地太阳仰角 -5°→-12° 淡入（白天 0 零回归）。
 // ─────────────────────────────────────────────────────────────────────────────
 describe('夜间环境底光 nightAmbient（方向 B）', () => {
-  it('uniform 声明 + 光照循环抬地板：skyIrradiance += NIGHT_AMBIENT_TINT * (nightAmbient * nightFactor)', () => {
+  it('uniform 声明 + 光照循环抬地板：skyIrradiance += u_nightTint * (nightAmbient * nightFactor)', () => {
     const src = buildCloudsMainFragmentShader({})
     expect(src).toContain('uniform float nightAmbient;')
     // 淡入区间 sin(-12°)=-0.2079 / sin(-5°)=-0.0872（LUT -5° 归零线 → 天文夜满值）
     expect(src).toContain('1.0 - smoothstep(-0.1045, -0.0175, muSunLocal)')
     // 抬在 skyIrradiance 上（经 skyGradient × scattering × 能量积分传播 → 云保有形体梯度）
-    expect(src).toContain('skyIrradiance += NIGHT_AMBIENT_TINT * (nightAmbient * nightFactor);')
-    // 冷蓝色调（2026-08-31 夜间天际线泛红修复：中性白底光 × 远距 transmittance Rayleigh
-    // 红化 → 天际线云 R/G=1.23 橙红；底光冷蓝对冲。2026-09-01 用户反馈云偏蓝：B 1.32→1.15 弱化一档）
-    expect(src).toContain('const vec3 NIGHT_AMBIENT_TINT = vec3(0.72, 1.0, 1.15);')
+    expect(src).toContain('skyIrradiance += u_nightTint * (nightAmbient * nightFactor);')
+    // 夜间云色调 uniform 化（2026-09-01 云偏蓝二轮反馈——每轮改常量成本高，?cloudsTint= URL 即调；
+    // 值由 cloudsDefaultParameters.nightTint 提供，沿革 (0.72,1,1.32)→(0.72,1,1.15)→三档拍板定稿）
+    expect(src).toContain('uniform vec3 u_nightTint;')
+    expect(src).not.toContain('NIGHT_AMBIENT_TINT')
+    // 月光项同 tint（底光/月光同色防夜间云面混色）
+    expect(src).toContain('* 2.5e-6 * moonLightScale * nightFactor * moonFactor * u_nightTint;')
   })
 
   it('glslang：含 nightAmbient 的完整 shader 真编译', () => {
