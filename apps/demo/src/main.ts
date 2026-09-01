@@ -556,8 +556,9 @@ async function main(): Promise<void> {
           // 全 0 dummy → Beer=1 无自阴影；开/关对比云体积感用）
           ...(getString('cloudsShadow') === '0' ? { shadowPass: false } : {}),
           // M4 temporal 开关（默认关——云端 resolve 收敛抖动待修，见 createCloudsStage 注释；
-          // ?cloudsTemporal=1 显式开启体验 1/4 分 march + Bayer 重建的帧率优势）
-          ...(getString('cloudsTemporal') === '1' ? { temporal: true } : {}),
+          // M4 temporal 默认开（2026-09-02 拍板对齐源库；含静止冻结——相机静止时
+          // Bayer 相位冻结→逐位稳定）；?cloudsTemporal=0 回退 M2/M3 全分行为
+          ...(getString('cloudsTemporal') === '0' ? { temporal: false } : {}),
           ...(getString('cloudsShadowTemporal') === '1' ? { shadowTemporal: true } : {}),
           // 噪声分解诊断（评审门禁实验）：冻结 cascade 矩阵（首帧后不更新）——「冻结+移动」
           // 录屏差分 = 非矩阵噪声地板（层切换/jitter/消费端），与不冻结对照相减得矩阵分量
@@ -603,6 +604,17 @@ async function main(): Promise<void> {
                         }
                         return {}
                       })()
+                    : {}),
+                  // M4 temporal resolve 调参（2026-09-02 缩放闪动→temporal 对齐源库迭代）：
+                  // ?temporalGamma= variance clipping AABB 宽度（默认 2.0=three 同款宽 AABB；
+                  // 1.0=playdead 标准值，裁错位 history 更狠）；
+                  // ?temporalAlpha= 输出对 current 的直混比（默认 0.1；0=纯 history 收敛慢，
+                  // 大=更快贴 current 抖动跟着大）
+                  ...(getNumber('temporalGamma') != null
+                    ? { temporalVarianceGamma: getNumber('temporalGamma')! }
+                    : {}),
+                  ...(getNumber('temporalAlpha') != null
+                    ? { temporalAlpha: getNumber('temporalAlpha')! }
                     : {})
                 }
               }
@@ -638,7 +650,7 @@ async function main(): Promise<void> {
             scene.postProcessStages.add(cloudsHandle.overlayStage) // 独立消费者 fallback（demo 不可达，防御）
           }
           console.info(
-            '[phase3-clouds] 体积云已接线（M3 稳定行为 + M5 云 god rays；?cloudsLightShafts=0 关光柱对比；?cloudsTemporal=1 开 Bayer 重建——帧率↑但有抖动；?cloudsShadow=0 无自阴影；?cloudsShadowAnchor=frustum 回退视锥锚定 AB 基线；?cloudsQuality=N 初始档/按键 1-4 切档）'
+            '[phase3-clouds] 体积云已接线（temporal 默认开（静止冻结）+ M5 云 god rays；?cloudsTemporal=0 回退全分；?cloudsLightShafts=0 关光柱对比；?cloudsShadow=0 无自阴影；?cloudsShadowAnchor=frustum 回退视锥锚定 AB 基线；?cloudsQuality=N 初始档/按键 1-4 切档）'
           )
           // 质量档位快捷键（setQuality 运行时验证入口，spec §8）：1/2/3/4 = low/medium/high/ultra。
           // 仅帧间触发（keydown 在 rAF 外，spec §7 调用时机约束天然满足）。

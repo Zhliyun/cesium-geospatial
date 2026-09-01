@@ -722,17 +722,46 @@ describe('M4 T7 temporal 编排', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
     const inst = resolvePassProbe.instances[0]
+    // 相机逐帧移动（Bayer 相位轮换需要 frame 递增——静止冻结是另一用例）
+    const camera = scene.camera as { positionWC: Cartesian3 }
+    const basePos = Cartesian3.clone(camera.positionWC)
     firePreRender(scene)
+    Cartesian3.add(basePos, new Cartesian3(10, 0, 0), camera.positionWC)
     firePreRender(scene)
+    Cartesian3.add(basePos, new Cartesian3(20, 0, 0), camera.positionWC)
     // swap 每帧一次（D2：preRender 开头，等价 three render 后 swap）
     expect(inst.swapBuffers).toHaveBeenCalledTimes(2)
     // jitter 非 0（Bayer offset≠格中心时）且相邻帧相位不同
     const j1 = Cartesian2.clone(
       (handle!.cloudsPass as any) && paramsOf(handle!)!.temporalJitter
     )
+    Cartesian3.add(basePos, new Cartesian3(30, 0, 0), camera.positionWC)
     firePreRender(scene)
     const j2 = paramsOf(handle!)!.temporalJitter
     expect(j2.x).not.toBeCloseTo(j1.x, 6)
+    handle!.destroy()
+  })
+
+  // 【静止冻结 2026-09-02】相机静止时 frame 不递增（Bayer/STBN 相位冻结 → resolve 收敛 →
+  // 高对比云区显示层逐位稳定；运动恢复递增）。修复前 temporal 开静止持续抖 20-40% 像素/帧。
+  it('相机静止：frame 冻结不递增；相机移动恢复递增', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
+    const camera = scene.camera as { positionWC: Cartesian3 }
+    // 首帧：prevCameraPos=undefined → 视为运动 → frame=1
+    firePreRender(scene)
+    expect(paramsOf(handle!)!.frame).toBe(1)
+    // 静止两帧：positionWC 不变 → frame 冻结
+    firePreRender(scene)
+    firePreRender(scene)
+    expect(paramsOf(handle!)!.frame).toBe(1)
+    // 移动相机（> 0.01m 阈值）→ 恢复递增
+    Cartesian3.add(camera.positionWC, new Cartesian3(10, 0, 0), camera.positionWC)
+    firePreRender(scene)
+    expect(paramsOf(handle!)!.frame).toBe(2)
+    // 再次静止 → 再冻结
+    firePreRender(scene)
+    expect(paramsOf(handle!)!.frame).toBe(2)
     handle!.destroy()
   })
 
@@ -751,20 +780,32 @@ describe('M4 T7 temporal 编排', () => {
     handle!.destroy()
   })
 
-  it('temporal=false：不建 resolvePass、march temporalUpscale=false、frame 仍递增（BSM 默认 temporal）', () => {
+  it('temporal 显式 false：不建 resolvePass、march temporalUpscale=false、frame 不递增（?cloudsTemporal=0 逃生门）', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
-      clouds: true
+      clouds: true,
+      temporal: false
     })
-    expect(createCloudsResolvePass).not.toHaveBeenCalled() // 默认 temporal=false（2026-08-17 抖动回退）
+    expect(createCloudsResolvePass).not.toHaveBeenCalled() // 显式 false = M2/M3 全分行为（2026-09-02 默认已翻 true）
     expect(scene.primitives.add).not.toHaveBeenCalled() // createCloudsPass 被 mock 不真 add——resolve 才会 add，此处 0 次
     // overlay bridge 回 march att0
     const bridge = handle!.overlayStage.uniforms.u_cloudsBuffer()
     expect((bridge as any)._texture.id).toBe('att0')
     firePreRender(scene)
-    expect(paramsOf(handle!)!.frame).toBe(0) // shadowTemporal 也默认 false → frame 不递增（全 M3 行为）
+    expect(paramsOf(handle!)!.frame).toBe(0) // shadowTemporal 也默认 false → frame 不递增
     // temporalJitter 恒 0（不计算）
     expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
+    handle!.destroy()
+  })
+
+  it('temporal 未传：默认开（2026-09-02 拍板对齐源库）——建 resolvePass、overlay bridge 切 resolve', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    expect(createCloudsResolvePass).toHaveBeenCalledTimes(1)
+    const bridge = handle!.overlayStage.uniforms.u_cloudsBuffer()
+    expect((bridge as any)._texture.id).toBe('resolve')
     handle!.destroy()
   })
 
@@ -1044,7 +1085,8 @@ describe('setQuality 行为（spec §7 v3）', () => {
   it('v2 §8.2.3 overlay 跨 impl 存活：setQuality 换档后引用不变 + u_cloudsBuffer 切新 bridge', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
-    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    // 显式 temporal=false（非 temporal → getColorBridge 分支；默认 temporal=true 走 resolve bridge）
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: false })
     const overlay = handle!.overlayStage
     const bridgeBefore = (overlay.uniforms.u_cloudsBuffer as () => unknown)()
     handle!.setQuality('low')

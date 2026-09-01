@@ -98,7 +98,14 @@ void temporalUpscale(
   // vec4 historyColor = textureCatmullRom(colorHistoryBuffer, prevUv);
   vec4 historyColor = texture(colorHistoryBuffer, prevUv);
   vec4 clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
-  outputColor = clippedColor;
+  // 【2026-09-02 静止收敛抖动修复】three 原文 outputColor = clippedColor 直出——variance
+  // clip 的 AABB 逐帧随 current(Bayer ±2px 轮换采样)移动,history 被 clip 拉向本帧
+  // current → 输出跟随 current 轮换不收敛。高对比云区(近云视角)显示层持续抖动
+  // (连拍 20-40% 像素逐帧变化;低对比远景/three storybook 场景不可见——分辨率×对比度
+  // 放大,机制 three 同款)。修法=TAA 标准混合:输出 = mix(clip(history), current, α)
+  // ——Bayer 轮换分量指数衰减(α=0.1 → 16 相位残留 0.9^16≈18%),fresh 直出帧保持
+  // 超采样语义不变。
+  outputColor = mix(clippedColor, currentColor, temporalAlpha);
 
   #ifdef SHADOW_LENGTH
   // Sampling the shadow length history using scene depth doesn't make much

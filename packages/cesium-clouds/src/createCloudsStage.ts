@@ -140,13 +140,20 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   shadowPass?: boolean
   /**
-   * M4 云 temporal resolve 开关（**默认 false**——2026-08-17 用户验收：静止云明显高频抖动
-   * （连拍逐对差分 12-16% 持续），根因是 velocity 含云前点 Bayer 相位跳动分量 + gamma=2
-   * 宽 AABB 下 history 错位值不被裁住，收敛锁建立不起来。修复需精化 velocity（相位差
-   * 纯化）或自适应 AABB，留专门迭代。true（demo `?cloudsTemporal=1`）= 1/4 分 march +
-   * CloudsResolvePass（Bayer 重建 + velocity reprojection + variance clipping）——帧率
-   * 优势明显（120fps vs 全分卡死），代价是当前抖动。false = M2/M3 稳定行为（全分 march、
-   * 无 resolve、overlay 直读 march att0）。
+   * M4 云 temporal resolve 开关（**默认 true**，2026-09-02 拍板对齐源库 three——其
+   * CloudsMaterial.temporalUpscale 默认 true）。1/4 分 march + CloudsResolvePass（Bayer
+   * 重建 + velocity reprojection + variance clipping + temporalAlpha 混合）——帧率优势
+   * 明显（120fps vs 全分卡死）。
+   *
+   * 历史：2026-08-17 曾默认 false——当时静止云持续高频抖动（连拍 12-16%）。2026-09-02
+   * 根因排查（readPixels 实证 march velocity 正确=−jitter；抖动源=Bayer 16 相位超采样
+   * 轮换本身，高对比云区被显示层放大；EMA 对 16 帧周期输入稳态无衰减）后两项修复：
+   * ① 静止冻结——相机静止（positionWC 距上帧 <0.01m）时 frame 不递增，jitter/STBN
+   *   相位恒定 → march 恒 → resolve 逐位稳（实测 30s 瓦片收敛后 npx>5=0）；
+   * ② resolve 输出 mix(clipped(history), current, temporalAlpha)——运动中轮换分量
+   *   EMA 平滑（对低频 16 相位不完全有效但降低可见度，TAA 标准做法）。
+   * false = M2/M3 稳定行为（全分 march、无 resolve、overlay 直读 march att0）；
+   * demo `?cloudsTemporal=0` 逃生门。
    */
   temporal?: boolean
   /**
@@ -285,7 +292,9 @@ function buildCloudsStageImpl(
   }).context
 
   // ── M4 temporal 开关（默认关——收敛抖动待修，见 CloudsStageOptions 注释；URL 显式开）──
-  const temporal = options.temporal === true
+  // temporal 默认 true（2026-09-02 拍板对齐源库；?cloudsTemporal=0 逃生门）。
+  // 显式 false 才关——注意 `=== false` 判定使 undefined（未传）走默认开。
+  const temporal = options.temporal !== false
   const shadowTemporal = options.shadowTemporal === true
 
   // ── 业务参数同源（M3 T5 上提）：CloudsPass 与 ShadowPass/共享 uniform 段共用一份 ──
@@ -466,6 +475,8 @@ function buildCloudsStageImpl(
   // createCloudsStage 的零直捕 listener 调用；prevCamera/matricesFrozen 是 per-impl 状态
   //（换 impl 自然归零——freeze 语义从新 impl 重新起算）。
   let prevCamera: TemporalCameraSnapshot | undefined
+  // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
+  let prevCameraPos: Cartesian3 | undefined
   // 诊断冻结状态（?cloudsShadowFreeze=1）：首帧 update 过后置 true
   let matricesFrozen = false
   const onPreRender = (time: JulianDate): void => {
@@ -473,9 +484,20 @@ function buildCloudsStageImpl(
 
     // ── M4 temporal：swap 最前（D2：swap 后 history=上帧输出、resolve=待写）+ frame 递增
     //    （D7：单端全关时不递增；march/BSM 生成端的 frame uniform 已按各端开关拆分绑定）──
+    // 【静止冻结 2026-09-02】相机静止时 frame 不递增——Bayer jitter/STBN 相位恒定 →
+    // march currentColor 恒定 → resolve 的 variance clip 收敛 → 输出逐位稳定。
+    // 动机：Bayer 16 相位超采样轮换在高对比云区显示层持续抖动（连拍 20-40% 像素逐帧
+    // 变化，readPixels 实证 march velocity 正确、抖动源=轮换采样本身；EMA 混合对 16 帧
+    // 周期输入稳态无衰减）。运动时恢复轮换（ legitimate 变化掩盖轮换 + temporal 重建
+    // 收益主要在运动中）。判定：positionWC 与上帧差 < 0.01m（远小于 1px 的世界投影）。
     resolvePass?.swapBuffers()
     if (temporal || shadowTemporal) {
-      params.frame++
+      if (prevCameraPos != null && Cartesian3.distance(camera.positionWC, prevCameraPos) < 0.01) {
+        // 静止：frame 不递增（jitter/STBN 相位冻结）
+      } else {
+        params.frame++
+      }
+      // prevCameraPos 在下方 temporal 分支 prevCamera 快照处一并更新（同一 if 内）
     }
 
     // 密切球再中心化（相机侧；shader 内 camera/scenePos 都用全量 altitudeCorrection）。
@@ -540,6 +562,8 @@ function buildCloudsStageImpl(
         viewMatrix: Matrix4.clone(viewMatrix, new Matrix4()),
         projectionMatrix: Matrix4.clone(projectionMatrix, new Matrix4())
       }
+      // 静止冻结判定（2026-09-02）：存上帧相机位置（下方每帧更新）
+      prevCameraPos = Cartesian3.clone(camera.positionWC, prevCameraPos ?? new Cartesian3())
     }
 
     // ── M3 BSM：级联矩阵更新 + 生成（sunDirection 更新后，本帧矩阵与光照一致）──
