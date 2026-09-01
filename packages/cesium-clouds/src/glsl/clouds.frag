@@ -65,7 +65,9 @@ uniform float powderExponent;
 // （实测 R/G=1.23，近景不红 0.99；moon=0 隔离排月光、nightAmbient=0 隔离定根因）。
 // 底光本身给冷蓝（模拟夜空散射的蓝移谱），中距对冲红化、远景残余暖色大幅减弱。
 uniform float nightAmbient;
-const vec3 NIGHT_AMBIENT_TINT = vec3(0.72, 1.0, 1.32); // 冷蓝（线性域；与月盘 u_moonTint 拍板值同款）
+// 冷蓝（线性域）。2026-09-01 用户反馈夜间云偏蓝：B 1.32→1.15 弱化蓝色一档
+//（R 不动——只收蓝不回红；与月盘 u_moonTint (0.72,1,1.32) 解耦，云/盘各自拍板）。
+const vec3 NIGHT_AMBIENT_TINT = vec3(0.72, 1.0, 1.15);
 
 // 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
 // （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/

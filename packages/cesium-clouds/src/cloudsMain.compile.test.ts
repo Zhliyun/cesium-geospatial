@@ -366,8 +366,8 @@ describe('夜间环境底光 nightAmbient（方向 B）', () => {
     // 抬在 skyIrradiance 上（经 skyGradient × scattering × 能量积分传播 → 云保有形体梯度）
     expect(src).toContain('skyIrradiance += NIGHT_AMBIENT_TINT * (nightAmbient * nightFactor);')
     // 冷蓝色调（2026-08-31 夜间天际线泛红修复：中性白底光 × 远距 transmittance Rayleigh
-    // 红化 → 天际线云 R/G=1.23 橙红；底光冷蓝对冲）
-    expect(src).toContain('const vec3 NIGHT_AMBIENT_TINT = vec3(0.72, 1.0, 1.32);')
+    // 红化 → 天际线云 R/G=1.23 橙红；底光冷蓝对冲。2026-09-01 用户反馈云偏蓝：B 1.32→1.15 弱化一档）
+    expect(src).toContain('const vec3 NIGHT_AMBIENT_TINT = vec3(0.72, 1.0, 1.15);')
   })
 
   it('glslang：含 nightAmbient 的完整 shader 真编译', () => {
