@@ -206,7 +206,14 @@ async function main(): Promise<void> {
     // - showGroundAtmosphere=false / fog.enabled=false：避免与后处理大气双重叠加。
     // - depthTestAgainstTerrain：createAtmosphereStage 内部强制（PostProcess depthTexture 拿真实地形深度）。
     scene.logarithmicDepthBuffer = true
-    scene.globe.enableLighting = getString('lighting') !== '0'
+    // 地面光色乘子联动（2026-09-01 拍板）：乘子开启（groundLighting≠0，默认开）时地面昼夜明暗+色温
+    // 整体归乘子一套来源——enableLighting 必须关（夜侧 N·L 置黑像素，乘法地板作用在黑像素上不可见；
+    // 硬晨昏线与乘子软过渡带 ±0.27° 叠加出双重过渡带，工程评审 G2/对抗审查 A 节）。
+    // ?lighting=1 显式保留原生光照（旧行为/对照）；?groundLighting=0 关乘子时也回到 enableLighting 默认开。
+    const groundLightingOn = getNumber('groundLighting') == null || getNumber('groundLighting') !== 0
+    scene.globe.enableLighting = groundLightingOn
+      ? getString('lighting') === '1' // 乘子开：默认 lighting=0（拍板），?lighting=1 显式保留
+      : getString('lighting') !== '0' // 乘子关：旧行为默认开
     scene.globe.showGroundAtmosphere = false
     scene.fog.enabled = false
     // 低 LOD 占位色：globe 对「地形几何已加载（depth<1，走 B 路径）但影像未贴图」的瓦片渲染 baseColor。
@@ -318,8 +325,20 @@ async function main(): Promise<void> {
       // 动态曝光可 URL 微调（默认 day=1.2 / night=0.1 / twilight±6°，按相机当地太阳高度角自动）
       ...(getNumber('exposureDay') != null ? { exposureDay: getNumber('exposureDay')! } : {}),
       ...(getNumber('exposureNight') != null ? { exposureNight: getNumber('exposureNight')! } : {}),
-      // 地面反射衰减（默认 0.5 压地面过曝；URL ?groundDim=N 微调，1.0=不衰减）
+      // 地面反射衰减（默认 0.43 与乘子联算重标；URL ?groundDim=N 微调，1.0=不衰减）
       ...(getNumber('groundDim') != null ? { groundDim: getNumber('groundDim')! } : {}),
+      // 地面光色乘子（2026-09-01 影像×大气同步，默认 1 启用）：?groundLighting=0 回旧合成
+      //（A/B 对照兼 CI 逃生门）；?groundNightAmbient=r,g,b 调夜间地板色（冷蓝默认，moonTint 同款解析）
+      ...(getNumber('groundLighting') != null ? { groundLighting: getNumber('groundLighting')! } : {}),
+      ...(getString('groundNightAmbient') != null
+        ? (() => {
+            const rgb = getString('groundNightAmbient')!.split(',').map(Number)
+            if (rgb.length === 3 && rgb.every(Number.isFinite)) {
+              return { groundNightAmbient: new Cartesian3(rgb[0], rgb[1], rgb[2]) }
+            }
+            return {}
+          })()
+        : {}),
       // URL ?hdr=0 强制 RGBA8 兜底（跳过 HalfFloat 检测，用于在 HalfFloat 设备上对比验证兜底路径）
       ...(getString('hdr') === '0' ? { disableHalfFloat: true } : {}),
       // phase2b LensFlare（spec §5.10）：默认全开，?lensflare=0 关闭回退 phase2a 行为。

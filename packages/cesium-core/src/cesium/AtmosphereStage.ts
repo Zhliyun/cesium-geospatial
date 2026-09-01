@@ -78,7 +78,17 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   exposureNight?: number // 太阳低于晨昏带时的曝光（默认 0.1）
   exposureTwilightAngleDegrees?: number // 晨昏过渡半角（默认 6°）：地平下 -angle 到地平上 +angle 间线性插值
   exposure?: number // 手动曝光（仅 exposureFollowTimeline=false 时生效）
-  groundDim?: number // 地面反射衰减（finalColor=originalColor·trans·groundDim+inscatter，分离 exposure 压地面过曝，默认 0.5）
+  groundDim?: number // 地面反射衰减（finalColor=originalColor·trans·groundDim+inscatter，分离 exposure 压地面过曝）
+  // 地面光色乘子（2026-09-01 影像×大气颜色同步，三专家评审定稿变体 1）：影像=正午白光快照，
+  // 乘子=(sunIrr+skyIrr)/ATMOSPHERE.solar_irradiance 让影像随太阳高度/大气状态染色（日落橙红/夜近黑）。
+  // groundLighting=1 启用（默认）；0=旧合成逐位等价（A/B 对照兼 CI 逃生门）。
+  // groundNightAmbient：夜间环境底色 vec3（sun/sky 双归零后乘子→0，max() 地板接住；色调可折入，
+  //   同 u_nightTint/u_moonTint 先例；默认 (0.55,0.62,0.78)——冷蓝夜面，量级按曝光链联算
+  //   （exposure 0.1 预放大，工程评审 G3），视觉拍板后定稿）。
+  // 注意：乘子开启时建议 demo 配 lighting=0——enableLighting 夜侧 N·L 置黑像素，乘法地板不可见，
+  //   且硬晨昏线与乘子软过渡带（±0.27°）叠加出双重过渡（工程评审 G2/对抗审查 A 节）。
+  groundLighting?: number
+  groundNightAmbient?: Cartesian3
   debugMode?: number // u_debugMode
   disableHalfFloat?: boolean // URL ?hdr=0 强制 UNSIGNED_BYTE 兜底调试（跳过 HalfFloat 能力检测）
   // phase2b LensFlare（spec §5.9）：lensflare 作为第三 stage 插在 atmosphere 与 tonomap 之间。
@@ -170,6 +180,8 @@ export interface ResolvedAtmosphereStageOptions
   exposureTwilightAngleDegrees: number
   exposure: number
   groundDim: number
+  groundLighting: number
+  groundNightAmbient: Cartesian3
   debugMode: number
   // phase2b LensFlare resolved 字段（spec §5.9）
   lensFlare: boolean
@@ -285,7 +297,14 @@ export function validateAtmosphereOptions(
     exposureNight: options.exposureNight ?? 0.1,
     exposureTwilightAngleDegrees: options.exposureTwilightAngleDegrees ?? 6,
     exposure: options.exposure ?? 1.5,
-    groundDim: options.groundDim ?? 0.5,
+    groundDim: options.groundDim ?? 0.43,
+    // 地面光色乘子默认（2026-09-01 影像×大气同步）：1=启用；groundDim 默认 0.5→0.43 重标——
+    // 正午乘子≈1.0-1.15（直射透射+天光占比），须压回与旧合成同量级（工程评审 E 节；?groundDim=
+    // 显式传值不受默认影响）。
+    groundLighting: options.groundLighting ?? 1.0,
+    // 夜间环境底色冷蓝（太阳沉没 >5° 后乘子精确归零，max() 地板接住；量级 0.55-0.78 按曝光链
+    // 预放大——夜间 exposure≈0.1，实际显示亮度≈0.06-0.08×ACES，工程评审 G3；三视角验收拍板后定稿）
+    groundNightAmbient: options.groundNightAmbient ?? new Cartesian3(0.55, 0.62, 0.78),
     debugMode: options.debugMode ?? 0,
     // phase2b LensFlare 默认（spec §5.9）：透传 lensFlareConstants 标定值。
     lensFlare: options.lensFlare ?? true,
@@ -402,6 +421,10 @@ export function buildAtmosphereUniforms(
     exposure: () => state.exposure, // 动态（preRender 更新）
     u_debugMode: options.debugMode,
     u_groundDim: options.groundDim,
+    // 地面光色乘子（2026-09-01 影像×大气同步）：u_groundLighting 开关 + u_groundNightAmbient
+    // 夜间环境底（FRAME_UNIFORMS 无条件声明；Cesium uniformMap 传 Cartesian3 → vec3）
+    u_groundLighting: options.groundLighting,
+    u_groundNightAmbient: options.groundNightAmbient,
     u_distanceScale: options.distanceScale,
     u_inscatterScale: options.inscatterScale,
     u_limbGlowIntensity: options.limbGlowIntensity,

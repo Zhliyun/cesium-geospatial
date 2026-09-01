@@ -76,6 +76,8 @@ export const AERIAL_PERSPECTIVE_UNIFORM_NAMES: string[] = [
   'exposure',
   'u_debugMode',
   'u_groundDim',
+  'u_groundLighting', // 地面光色乘子开关（FRAME_UNIFORMS 无条件声明+绑定；0=关——A/B 对照兼 CI 逃生门）
+  'u_groundNightAmbient', // 地面夜间环境底色 vec3（FRAME_UNIFORMS 无条件声明；开关 0 时无消费，绑了 Cesium 静默忽略——同 u_cloudsGodRaysGain 先例）
   'cosSunAngularRadius',
   'u_distanceScale',
   'u_inscatterScale',
@@ -113,12 +115,16 @@ uniform sampler3D higher_order_scattering_texture;
 // 每帧 uniform（命名对齐源仓库）。altitudeCorrection 单位米（shader 内 *METER_TO_LENGTH_UNIT 转 km）。
 // u_debugMode：0=正常 1=log(1+finalColor) 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor 7=线性输出（HDR 链验证，由 tonemap 归一化）。
 // u_groundDim：地面反射衰减（分离 exposure——exposure 管 inscatter/天空，groundDim 单独压地面过曝）。
+// u_groundLighting：地面光色乘子开关（2026-09-01 影像×大气颜色同步；1=启用默认，0=A/B 对照兼 CI 逃生门）。
+// u_groundNightAmbient：地面夜间环境底色（vec3，色调可折入——同 u_nightTint/u_moonTint 先例）。
 const FRAME_UNIFORMS_GLSL = `
 uniform vec3 sunDirection;
 uniform vec3 altitudeCorrection;
 uniform float exposure;
 uniform float u_debugMode;
 uniform float u_groundDim;
+uniform float u_groundLighting;
+uniform vec3 u_groundNightAmbient;
 uniform float u_distanceScale;  // 散射距离缩放（方案 A，等效空气密度倍率；1.0=phase1 物理，>1 中近距散射强）
 uniform float u_inscatterScale;  // inscatter 放大（方案 B 远处白雾浓；1.0=phase1 物理，>1 远处雾浓，可超物理饱和）
 uniform float u_limbGlowIntensity;  // limb outer glow 强度（太空视角大气边缘向外扩散辉光；0=关，~0.3-0.8 标定）
@@ -617,10 +623,41 @@ void main() {
   }
   vec3 transmittance = vec3(1.0);
   vec3 inscatter = vec3(0.0);
+  // 地面光色乘子（2026-09-01 影像×大气颜色同步，三专家评审定稿变体 1）：影像=正午白光快照，
+  // 乘子=「当前照明/白光照明」比值 (sunIrr+skyIrr)/ATMOSPHERE.solar_irradiance（π 两侧同消，
+  // 无量纲 O(1)；half-float LUT 比值消费是相对误差、无 A 路径 inscatter 式灾消——见 frag 头注释
+  // A 路径警告的区别：那边 irradiance 作绝对亮度×15 放大，这边只作归一分母/分子）。
+  // 天空像素初始化 1.0 零 LUT 采样；仅地面分支计算（分支内）。normal 必须向外 +normalize
+  //（评审 Critical：向内则直射 max(dot(n,sun),0) 恒 0、天光因子 (1+dot(n,p)/r)×0.5 恒 0 → 白天全黑）。
+  // 夜间地板 max()：sun/sky 双归零后乘子→0，vec3 环境底接住（乘法保地物纹理，非加法自发光）。
+  // 开关 mix(u_groundLighting)：1=启用默认 / 0=旧合成（A/B 对照兼 CI 逃生门）——避免 #define 新编译组合。
+  vec3 groundLightColor = vec3(1.0);
 ${o.moon ? '  vec3 moonDisc = vec3(0.0); // ground 分支保持 0（月盘只可能出自 sky 分支）\n' : ''}  vec3 finalColor;
   if (lookingAtGround && discG > 0.0) {
     // 地面基线：椭球面 tHitG（平滑）。
     vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
+    vec3 groundNormal = normalize(scenePosKm);
+    float groundMuS = dot(scenePosKm, sunDirection) / length(scenePosKm);
+    // 直射项（Lambert 几何 N·L——椭球法线宏观项，地形坡度明暗归 Cesium enableLighting；乘子开启
+    // 配 lighting=0 时昼夜明暗由乘子+天光接管）× 太阳朝地表透射（GetTransmittanceToSun 含
+    // smoothstep ±太阳角半径窗，太阳沉入 -0.27° 精确归零——物理评审 B 节，与日盘落山同步）。
+    vec3 groundSunIrr = ATMOSPHERE.solar_irradiance
+      * GetTransmittanceToSun(ATMOSPHERE, transmittance_texture, length(scenePosKm), groundMuS)
+      * max(dot(groundNormal, sunDirection), 0.0);
+    // 天空间接辐照度（irradiance LUT）× 非水平面近似因子——groundNormal=radialOut 时因子恒 1。
+    // 【不直接调 runtime 的 GetSunAndSkyIrradiance】runtime.glsl:460 末尾 #define 把它重定向到 Luminance 域
+    // 4 参 Illuminance 版（参数不匹配编译错），故按其内部实现内联（GetIrradiance/
+    // GetTransmittanceToSun 均不在宏名单，安全——云侧 clouds.frag 因 include 顺序不同无此坑）。
+    vec3 groundSkyIrr = GetIrradiance(
+      ATMOSPHERE,
+      irradiance_texture,
+      length(scenePosKm),
+      groundMuS
+    ) * (1.0 + dot(groundNormal, scenePosKm) / length(scenePosKm)) * 0.5;
+    groundLightColor = max(
+      (groundSunIrr + groundSkyIrr) / ATMOSPHERE.solar_irradiance,
+      u_groundNightAmbient
+    );
     inscatter = GetSkyRadianceToPointScaled(
       cameraPosition,
       scenePosKm,
@@ -699,7 +736,10 @@ ${o.moon ? '    moonDisc *= limbFade; // 与太阳盘行为一致（太空视角
   float skySunVisibility = smoothstep(-0.2079, -0.1045, muSunSky);
   inscatter *= skySunVisibility;
 
-  finalColor = originalColor.rgb * transmittance * u_groundDim + inscatter * u_inscatterScale${o.moon ? ' + moonDisc' : ''};
+  // 开关 mix：u_groundLighting=0 时乘子恒 1（旧合成逐位等价），1=启用（默认）
+  groundLightColor = mix(vec3(1.0), groundLightColor, u_groundLighting);
+
+  finalColor = originalColor.rgb * groundLightColor * transmittance * u_groundDim + inscatter * u_inscatterScale${o.moon ? ' + moonDisc' : ''};
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——

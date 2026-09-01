@@ -240,3 +240,58 @@ describe('夜间天空 inscatter 淡出 skyNightFade', () => {
     expect(ok).toBe(true)
   })
 })
+
+// ── 地面光色乘子 groundLightColor（2026-09-01 影像×大气颜色同步，三专家评审后定稿）──
+// 根因：地面合成式 originalColor·transmittance·groundDim+inscatter 无照明项——影像=正午白光
+// 快照，日落近景不染色、夜间均匀压暗成「暗淡的正午图」。修法=变体 1 光色乘子：
+// (sunIrr+skyIrr)/ATMOSPHERE.solar_irradiance（影像=白光快照的比值语义，π 同侧抵消；
+// half-float LUT 比值消费无 A 路径灾消）+ vec3 夜间地板 max()（乘法保地物纹理）。
+// 评审结论：normal 必须向外 +normalize（简报笔误向内会让直射/天光恒 0 白天全黑）；
+// 天空像素 groundLightColor=1.0 零 LUT 采样；开关 u_groundLighting 用 mix 门控（无新编译组合）。
+describe('地面光色乘子 groundLightColor', () => {
+  const build = () => buildAerialPerspectiveFragmentShader({})
+
+  it('乘子计算：内联 GetTransmittanceToSun+GetIrradiance + 向外 normal + solar_irradiance 归一（评审 G1/物理 A 节）', () => {
+    const src = build()
+    // LUT 调用（bruneton/common 现成函数）+ 归一锚=GLSL const ATMOSPHERE.solar_irradiance。
+    // 注意不能直接调 GetSunAndSkyIrradiance：runtime.glsl:460 #define 把它重定向到 Luminance 域
+    // 4 参 Illuminance 版（编译错）——必须按其内部实现内联（云侧 include 顺序不同无此坑）。
+    // not.toContain 不能用裸名/(\n 形态——runtime.glsl 的 #define 行与函数定义本身含之。
+    // 「不得直接调 GetSunAndSkyIrradiance」由下方 glslang 真编译守门（7 参调用会撞 Illuminance
+    // 重定向编译错），此处不断言。
+    expect(src).toContain('GetTransmittanceToSun(ATMOSPHERE, transmittance_texture, length(scenePosKm), groundMuS)')
+    expect(src).toContain('GetIrradiance(')
+    expect(src).toContain('/ ATMOSPHERE.solar_irradiance')
+    // normal 向外（评审 Critical：向内则直射 max(dot(n,sun),0) 恒 0、天光因子恒 0 → 地面全黑）
+    expect(src).toContain('vec3 groundNormal = normalize(scenePosKm);')
+    expect(src).not.toContain('-normalize(scenePosKm)')
+    // 乘子只在地表锚点算（天空像素走 1.0 初始化零采样）
+    expect(src).toContain('vec3 groundLightColor = vec3(1.0);')
+  })
+
+  it('夜间地板：vec3 uniform + max() 乘法语义（保地物纹理，非云侧加法自发光）', () => {
+    const src = build()
+    expect(src).toContain('uniform vec3 u_groundNightAmbient;')
+    expect(src).toContain('max(\n      (groundSunIrr + groundSkyIrr) / ATMOSPHERE.solar_irradiance,\n      u_groundNightAmbient\n    )')
+  })
+
+  it('开关：u_groundLighting mix 门控（1=启用默认，0=A/B 对照兼 CI 逃生门）', () => {
+    const src = build()
+    expect(src).toContain('uniform float u_groundLighting;')
+    expect(src).toContain('mix(vec3(1.0), groundLightColor, u_groundLighting)')
+  })
+
+  it('finalColor 合成：originalColor 乘 groundLightColor（乘 transmittance 之前）', () => {
+    const src = build()
+    expect(src).toContain(
+      'originalColor.rgb * groundLightColor * transmittance * u_groundDim + inscatter * u_inscatterScale'
+    )
+  })
+
+  it('glslang：含乘子的完整 shader 真编译', () => {
+    const src = buildStandaloneShaderForValidation({})
+    const { ok, output } = compileFragment(src)
+    if (!ok) throw new Error(`编译失败:\n${output}`)
+    expect(ok).toBe(true)
+  })
+})

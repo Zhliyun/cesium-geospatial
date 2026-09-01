@@ -292,7 +292,9 @@ describe('validateAtmosphereOptions', () => {
       exposureNight: 0.1,
       exposureTwilightAngleDegrees: 6,
       exposure: 1.5,
-      groundDim: 0.5,
+      groundDim: 0.43, // 0.5→0.43 重标（2026-09-01 地面光色乘子：正午乘子≈1.0-1.15 压回同量级）
+      groundLighting: 1.0, // 乘子默认启用（0=旧合成 A/B 对照兼 CI 逃生门）
+      groundNightAmbient: new Cartesian3(0.55, 0.62, 0.78), // 冷蓝夜面底色（按曝光链预放大，验收后定稿）
       debugMode: 0,
       distanceScale: 1.0,
       inscatterScale: 25.0,
