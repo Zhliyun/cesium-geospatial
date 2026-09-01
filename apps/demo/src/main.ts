@@ -559,11 +559,16 @@ async function main(): Promise<void> {
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
-          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null
+          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null
             ? {
                 parameters: {
                   ...(getNumber('cloudsNightAmbient') != null
                     ? { nightAmbient: getNumber('cloudsNightAmbient')! }
+                    : {}),
+                  // ?cloudsTwilightBoost= 暮光天光补偿倍率（2026-09-01 黄昏云过黑 A 案；
+                  // 默认 6=用户拍板物理档（云/天空 80%），1=关，只作用太阳 [+2°,-1.5°] 窗内的天光项）
+                  ...(getNumber('cloudsTwilightBoost') != null
+                    ? { twilightSkyBoost: getNumber('cloudsTwilightBoost')! }
                     : {}),
                   ...(getNumber('moonLightScale') != null
                     ? { moonLightScale: getNumber('moonLightScale')! }

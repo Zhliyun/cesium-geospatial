@@ -387,6 +387,37 @@ describe('夜间环境底光 nightAmbient（方向 B）', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 暮光天光补偿（2026-09-01）：黄昏云过黑根因——天光项 crude 单次近似（源库自认
+// "Crude approximation"）+ 云 overlay 不乘动态曝光（黄昏 atmo≈0.63 只压天空）→
+// 暮光云线性辐射仅天空 ~28%（物理应≈90%，云反照率 0.9 被天空照明应近天空亮度）。
+// 修复 = 太阳 [+2°,-1.5°] 窗内 skyLightScale 有效倍数 1→u_twilightSkyBoost（默认 3）；
+// 白天（>+2°）精确 1 零回归；<-6° LUT 天光归零后补偿自然无效（nightAmbient 接管）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('暮光天光补偿 twilightSkyBoost', () => {
+  it('uniform 声明 + 补偿式乘天光项（mix 1→boost，smoothstep 窗 [sin2°,sin-1.5°]）', () => {
+    const src = buildCloudsMainFragmentShader({})
+    expect(src).toContain('uniform float u_twilightSkyBoost;')
+    // 窗口：白天下沿 sin(+2°)=0.0349（零回归边界）→ 上沿 sin(-1.5°)=-0.0262（全额）；
+    // 锚 = muSunLocal（采样点当地太阳角，与 nightFactor 同源——远云曲率太阳角差已含）
+    expect(src).toContain('float twilightBoost = mix(1.0, u_twilightSkyBoost, smoothstep(0.0349, -0.0262, muSunLocal));')
+    // 乘在天光项 skyLightScale 之后（直射/月光/地面反照不动）
+    expect(src).toContain('skyIrradiance * RECIPROCAL_PI4 * skyGradient * skyLightScale * twilightBoost')
+  })
+
+  it('glslang：含 twilightBoost 的完整 shader 真编译', () => {
+    const src = buildStandaloneCloudsShaderForValidation({})
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(
+        `glslang 编译失败:\n${output}\n` +
+          src.split('\n').slice(0, 60).map((l, i) => `${i + 1}: ${l}`).join('\n')
+      )
+    }
+    expect(ok).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 月光方向性照明（2026-08-30 方向 C，spec r2 §6）：光照循环第四项——独立构造
 // moonIrradiance（非 sun 项乘系数），朝月独立 march 光深，两道门
 // （nightFactor 昼夜分账 + 月升落 smoothstep），相位复用 approximateMultipleScattering。

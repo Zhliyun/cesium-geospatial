@@ -404,7 +404,7 @@ describe('createCloudsPass', () => {
       'shapeDetailAmounts', 'weatherExponents', 'shapeAlteringBiases',
       'coverageFilterWidths', 'minHeight', 'maxHeight', 'shadowTopHeight',
       'shadowBottomHeight', 'shadowLayerMask', 'cameraHeight', 'nightAmbient',
-      'u_nightTint'
+      'u_nightTint', 'u_twilightSkyBoost'
     ]
     for (const name of expected) {
       expect(um[name], `uniform ${name} 应注入`).toBeDefined()
@@ -445,6 +445,25 @@ describe('createCloudsPass', () => {
     })
     const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     expect(um2.u_nightTint()).toEqual(new Cartesian3(0.85, 1.0, 1.0))
+    pass2.destroy()
+  })
+
+  it('暮光天光补偿 u_twilightSkyBoost：默认 6（用户拍板物理档）；parameters 覆盖生效（2026-09-01 黄昏云过黑拍板 A 案）', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    // 默认 6：实测云/天空显示比 80%（物理目标 85-90%；档位 3 温和=51%/6 物理=80%）
+    expect(um.u_twilightSkyBoost()).toBe(6.0)
+    pass.destroy()
+
+    vi.clearAllMocks()
+    const params = defaultCloudsParameters()
+    params.twilightSkyBoost = 1.5
+    const pass2 = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state, {
+      parameters: params
+    })
+    const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um2.u_twilightSkyBoost()).toBe(1.5)
     pass2.destroy()
   })
 })

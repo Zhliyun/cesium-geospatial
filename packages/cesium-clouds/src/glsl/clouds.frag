@@ -69,6 +69,14 @@ uniform float nightAmbient;
 // 每轮改常量成本高，?cloudsTint= URL 即调）。沿革：冷蓝 (0.72,1,1.32)（2026-08-31 泛红修复
 // 对冲远景 transmittance 红化）→ B 1.32→1.15（「偏蓝」一轮）→ 三档拍板后定稿。
 uniform vec3 u_nightTint;
+// 暮光天光补偿倍率（2026-09-01 黄昏云过黑拍板 A 案）：太阳 [+2°,-1.5°] 窗内 skyLightScale
+// 有效倍数 1→boost。根因：天光项 crude 单次近似（无云内多次散射增强，源库自认
+// "Crude approximation"）+ 云 overlay 不乘动态曝光（黄昏 atmo≈0.63 只压天空，源库云走
+// 全画面后处理吃曝光——移植 overlay 架构差异）→ 暮光云线性辐射仅天空 ~28%（物理应≈90%，
+// 云反照率 0.9 被天空照明应近天空亮度）。白天（>+2°）精确 1 零回归；<-6° LUT 天光归零后
+// 补偿自然无效（nightAmbient 接管）。?cloudsTwilightBoost= URL 即调（1=关）；默认 6=用户
+// 拍板物理档（2026-09-01，云/天空显示比 80%；档位 3 温和=51%）。
+uniform float u_twilightSkyBoost;
 
 // 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
 // （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/
@@ -642,7 +650,11 @@ vec4 marchClouds(
 
       // Crude approximation of sky gradient. Better than none in the shadows.
       float skyGradient = dot(weather.heightFraction * 0.5 + 0.5, media.weight);
-      radiance += skyIrradiance * RECIPROCAL_PI4 * skyGradient * skyLightScale;
+      // 暮光天光补偿（2026-09-01）：窗 [sin(+2°)=0.0349, sin(-1.5°)=-0.0262]，锚 =
+      // muSunLocal（采样点当地太阳角，与 nightFactor 同源——远云曲率太阳角差已含）。
+      // 白天精确 1 零回归；直射/月光/地面反照不动，只补天光项。
+      float twilightBoost = mix(1.0, u_twilightSkyBoost, smoothstep(0.0349, -0.0262, muSunLocal));
+      radiance += skyIrradiance * RECIPROCAL_PI4 * skyGradient * skyLightScale * twilightBoost;
 
       // Finally multiply by scattering.
       radiance *= media.scattering;
