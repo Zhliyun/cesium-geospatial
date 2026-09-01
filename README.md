@@ -85,7 +85,9 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `exposureDay` / `exposureNight` | 1.2 / 0.1 | 昼/夜曝光（按太阳高度角自动插值） |
-| `groundDim` | 0.5 | 地表反射衰减（压地面过曝；1=不衰减） |
+| `groundDim` | 0.43 | 地表反射衰减（压地面过曝；1=不衰减；0.5→0.43 与地面光色乘子联算重标——正午乘子≈1.0-1.15 压回同量级） |
+| `groundLighting` | 1 | 地面光色乘子（2026-09-01 影像×大气颜色同步）：影像=正午白光快照，乘子=(太阳直射透射+天光辐照)/solar_irradiance 让影像随太阳高度染色——日落近景橙红、夜间近黑（三专家评审定稿变体 1；0=旧合成 A/B 对照兼 CI 逃生门）。开启时自动配 lighting=0（enableLighting 夜侧 N·L 置黑像素与乘法地板冲突，?lighting=1 显式保留旧组合） |
+| `groundNightAmbient` | 0.55,0.62,0.78 | 地面夜间环境底色 r,g,b（sun/sky 双归零后乘子→0，max() 地板接住；冷蓝默认，按曝光链 0.1 预放大；量级显暗属预期——夜间 exposure 压回） |
 | `inscatterScale` | 25 | 内散射放大（1=回退物理量级，偏淡） |
 | `distanceScale` | 1 | 散射距离缩放（等效空气密度倍率） |
 | `ditherScale` | 1 | dithering 强度倍率（放大打散 banding） |

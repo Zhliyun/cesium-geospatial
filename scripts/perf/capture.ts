@@ -30,7 +30,11 @@ interface Scenario {
 }
 // 注：time 固定（关键：不固定则太阳方向随 wall-clock 变，ref/out 跨时间永不匹配；且夜间场景过暗门禁无判别力。
 //     2026-08-04T01:00:00Z 在 139E/34N（日本）为上午，日景）。其余公共参数见 baseline.md 表头。
-const COMMON = 'mode=atmosphere&inscatterScale=25&fps=0&time=2026-08-04T01:00:00Z'
+// groundLighting=0（2026-09-01 地面光色乘子上线）：现 ref 基线录于乘子前，SSIM 0.999 门禁保留
+// （抓 vite 缓存假绿的命门）——场景 query 显式关乘子保旧基线；视觉验收通过后 --saveRef 全量重录
+//（重录工序：pkill vite+rm .vite 清缓存 → ?groundLighting=1/0 成对活性断言 → 录 → =0 场景门禁须 fail
+// 负向验证 → results 记录，见对抗审查 D 节）。
+const COMMON = 'mode=atmosphere&inscatterScale=25&fps=0&time=2026-08-04T01:00:00Z&groundLighting=0'
 const SCENARIOS: Scenario[] = [
   // 4 个复现/混合视角（spec §0.3/§0.5）
   { name: 'camera-low', query: `${COMMON}&camera=139.2399,34.8752,5000,8.7,-21.1` },
