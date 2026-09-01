@@ -128,13 +128,14 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   // ── 月盘（2026-08-30 夜间光照 spec r2 §5）──
   // moon?: boolean 继承自 AerialPerspectiveFragOptions（默认 true；创建期语义：切换=重建 stage，
   // 同 sun/sky 惯例，运行时切换不在范围）。
-  /** 月盘亮度倍率（默认 3160=7111×(0.02/0.03)²——ω 拍板 0.02 后同式保显示亮度；URL ?moonRadiance=。
+  /** 月盘亮度倍率（默认 160=3160×(0.0045/0.02)²——ω 拍板 0.0045 后同式保显示亮度；URL ?moonRadiance=。
    *  亮度语系沿革：60=inscatterScale 补偿×diffuse 基准 → 1440=×12「与现实月面亮度一致」（2026-08-30
-   *  用户拍板，带 lf 光晕）→ 7111（ω=0.03 联动）→ 3160（2026-08-31 ω=0.02 联动「65px 偏大」）。
-   *  副作用：白天浅月同比变亮（较显眼））。 */
+   *  用户拍板，带 lf 光晕）→ 7111（ω=0.03 联动）→ 3160（2026-08-31 ω=0.02 联动「65px 偏大」）→
+   *  160（2026-09-01 ω=0.0045 物理值联动「恢复正常大小」）。副作用：白天浅月同比变化（待观感））。 */
   moonRadianceScale?: number
-  /** 月盘角半径 rad（默认 0.02=物理值×4.4 艺术放大，2026-08-31 用户二次拍板：0.03 的 65px 盘
-   *  「有点大」→ 0.02 的 ~45px；月海图案仍清晰可见。URL ?moonAngularRadius= 再调）。 */
+  /** 月盘角半径 rad（默认 0.0045=物理值，2026-09-01 用户拍板「恢复正常大小」：沿革 0.0135(×3)→
+   *  0.03(×6.7)→0.02(×4.4)→0.0045(物理,60° 视场 ~5-6px 盘径)；月海纹理此尺寸不可见（纹理代码
+   *  保留,加大角半径即恢复）。URL ?moonAngularRadius= 再调）。 */
   moonAngularRadius?: number
   /** 月盘色调乘子（线性 RGB，2026-08-31 用户反馈月盘偏暖——solar_irradiance 光谱基色+NASA
    *  纹理偏棕，实测 R/G=1.119 B/G=0.905。默认冷蓝 (0.72,1,1.32)（2026-08-31 用户三档拍板：
@@ -303,12 +304,13 @@ export function validateAtmosphereOptions(
     // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5；moon?: boolean 经 Required 传入本 resolved 类型，
     // 缺行会 tsc 报 TS2741——T3 接线在此之上追加 moonDirection/moonAngularRadius/u_moonRadiance uniforms）
     moon: options.moon ?? true,
-    // 月盘亮度/角半径默认（2026-08-30/31 用户视觉拍板沿革）：radiance 1440=「与现实月面亮度一致」（×12，
-    // 带 lf 光晕）；ω 0.0135→0.03（环形山可见需 ≥65px）→0.02（「65px 有点大」二次拍板，~45px 月海仍清晰）。
+    // 月盘亮度/角半径默认（2026-08-30/09-01 用户视觉拍板沿革）：radiance 1440=「与现实月面亮度一致」（×12，
+    // 带 lf 光晕）；ω 0.0135→0.03（环形山可见需 ≥65px）→0.02（「65px 有点大」二次拍板，~45px 月海仍清晰）
+    // →0.0045（2026-09-01「恢复正常大小」物理值，~5-6px；月海纹理此尺寸不可见）。
     // radiance ∝ 1/ω²（shader 2.5e-6/(π·ω²)），ω 改默认时 radiance 默认同步 ×(ω_new/ω_old)² 保显示亮度：
-    // 1440×(0.03/0.0135)²≈7111→×(0.02/0.03)²≈3160。
-    moonRadianceScale: options.moonRadianceScale ?? 3160,
-    moonAngularRadius: options.moonAngularRadius ?? 0.02,
+    // 1440×(0.03/0.0135)²≈7111→×(0.02/0.03)²≈3160→×(0.0045/0.02)²≈160。
+    moonRadianceScale: options.moonRadianceScale ?? 160,
+    moonAngularRadius: options.moonAngularRadius ?? 0.0045,
     // 月盘色调默认冷蓝（2026-08-31 用户反馈偏暖——solar_irradiance 光谱+NASA 纹理偏棕，实测
     // R/G=1.119 B/G=0.905；三档拍板冷蓝胜出：清冷月光/夜空氛围。中性白=0.78,1,1.25、轻冷=0.88,1,1.12）
     moonTint: options.moonTint ?? new Cartesian3(0.72, 1.0, 1.32),

@@ -304,8 +304,8 @@ describe('validateAtmosphereOptions', () => {
       cloudsGodRaysGain: 1.0,
       // 月盘默认 true（2026-08-30 夜间光照 spec r2 §5）+ 月盘亮度/角半径默认（T3 接线）
       moon: true,
-      moonRadianceScale: 3160, // 7111×(0.02/0.03)²——ω 拍板 0.02 后同式保显示亮度（2026-08-31）
-      moonAngularRadius: 0.02, // 物理 0.0045×4.4（2026-08-31 二次拍板：65px 有点大→~45px）
+      moonRadianceScale: 160, // 3160×(0.0045/0.02)²——ω 拍板 0.0045 后同式保显示亮度（2026-09-01）
+      moonAngularRadius: 0.0045, // 物理值（2026-09-01「恢复正常大小」拍板：沿革 0.0135→0.03→0.02→0.0045）
       moonTint: new Cartesian3(0.72, 1.0, 1.32), // 冷蓝默认（2026-08-31 月盘偏暖反馈，三档拍板）
       moonSkyGlowScale: 150000, // 月晕默认（2026-09-01 拍板 125000 后用户「再稍微强烈」上调）
       lensFlare: true,
@@ -850,11 +850,11 @@ describe('depthTemporal options 参数化（Task 12）', () => {
 
 // —— 月光 T3：options/state/uniforms/preRender 接线（2026-08-30 夜间光照 spec r2 §5.4）——
 describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
-  it('validate 默认：moonRadianceScale=3160 / moonAngularRadius≈0.02（moon=true 已固化于默认值用例）', () => {
+  it('validate 默认：moonRadianceScale=160 / moonAngularRadius≈0.0045（moon=true 已固化于默认值用例）', () => {
     const r = validateAtmosphereOptions({})
     expect(r.moon).toBe(true)
-    expect(r.moonRadianceScale).toBe(3160)
-    expect(r.moonAngularRadius).toBeCloseTo(0.02, 6)
+    expect(r.moonRadianceScale).toBe(160)
+    expect(r.moonAngularRadius).toBeCloseTo(0.0045, 8)
     // 色调乘子默认冷蓝（2026-08-31 用户反馈月盘偏暖：solar_irradiance 光谱+NASA 纹理偏棕，
     // 实测 R/G=1.119 B/G=0.905；三档拍板冷蓝 (0.72,1,1.32) 胜出——清冷月光/夜空氛围）
     expect(r.moonTint).toEqual(new Cartesian3(0.72, 1.0, 1.32))
@@ -890,8 +890,8 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
     // moonDirection 闭包持 state 引用（preRender 原地更新自动生效）
     expect(typeof u.moonDirection).toBe('function')
     expect((u.moonDirection as () => Cartesian3)()).toBe(state.moonDirection)
-    expect(u.moonAngularRadius).toBeCloseTo(0.02, 6)
-    expect(u.u_moonRadiance).toBe(3160)
+    expect(u.moonAngularRadius).toBeCloseTo(0.0045, 8)
+    expect(u.u_moonRadiance).toBe(160)
     expect(u.u_moonTint).toEqual(new Cartesian3(0.72, 1.0, 1.32))
   })
 

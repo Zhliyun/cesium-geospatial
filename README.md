@@ -99,8 +99,8 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `moon=0` | 开 | 全关（月盘不渲染 + 云月光乘 0，诊断基线） |
-| `moonRadiance` | 3160 | 月盘亮度倍率（改 `moonAngularRadius` 时自动 ×k² 补偿保亮度） |
-| `moonAngularRadius` | 0.02 | 月盘角半径 rad（物理值 ×4.4，~45px 盘径） |
+| `moonRadiance` | 160 | 月盘亮度倍率（改 `moonAngularRadius` 时自动 ×k² 补偿保亮度） |
+| `moonAngularRadius` | 0.0045 | 月盘角半径 rad（物理值，~5-6px 盘径；月海纹理此尺寸不可见） |
 | `moonTint` | 0.72,1,1.32 | 月盘色调乘子（线性 RGB；`1,1,1` 回中性） |
 | `moonDispScale` | 1 | 环形山对比度强度（0=纯颜色图，>1 更强） |
 | `moonSurface=0` | 开 | 关月面纹理（均匀月面基线） |

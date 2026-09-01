@@ -309,9 +309,9 @@ async function main(): Promise<void> {
         console.warn('[moon-surface] 月面纹理加载失败，退回均匀月面', e)
       }
     }
-    // 纹理在载时 moonRadiance 默认基准（3160=7111×(0.02/0.03)²，ω 拍板 0.02 时同式显示亮度）
+    // 纹理在载时 moonRadiance 默认基准（160=3160×(0.0045/0.02)²，ω 拍板 0.0045 物理值时同式显示亮度）
     const moonRadianceDefault =
-      moonSurfaceTexture != null ? 3160 / moonSurfaceAlbedoMean : 3160
+      moonSurfaceTexture != null ? 160 / moonSurfaceAlbedoMean : 160
 
     const options: AtmosphereStageOptions = {
       debugMode: getNumber('debug') ?? 0,
@@ -344,8 +344,8 @@ async function main(): Promise<void> {
       // M5 云 god rays 光柱增益：默认 1 物理精确（subtle 对齐 three）；?cloudsGodRays=20 艺术放大出可见光柱
       ...(getNumber('cloudsGodRays') != null ? { cloudsGodRaysGain: getNumber('cloudsGodRays')! } : {}),
       // 月光（2026-08-30 方向 C）：?moon=0 全关（月盘不编入+云月光乘 0）——诊断基线；
-      // ?moonRadiance= 月盘倍率（默认 3160=7111×(0.02/0.03)²，ω 拍板 0.02 后同式保显示亮度，纹理在载时按均值放大）；
-      // ?moonAngularRadius= 月盘角半径 rad（默认 0.02=物理×4.4，2026-08-31 二次拍板：0.03 的 65px「有点大」→ ~45px；
+      // ?moonRadiance= 月盘倍率（默认 160=3160×(0.0045/0.02)²，ω 拍板 0.0045 物理值后同式保显示亮度，纹理在载时按均值放大）；
+      // ?moonAngularRadius= 月盘角半径 rad（默认 0.0045=物理值，2026-09-01「恢复正常大小」拍板：沿革 0.0135→0.03→0.02→0.0045；
       // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 25000，2026-08-31 偏亮反馈拍板减半）；
       // ?moonSurface=0 关月面纹理（均匀月面基线）；?moonTint=r,g,b 月盘色调乘子（默认库冷蓝
       // 0.72,1,1.32——2026-08-31 偏暖反馈三档拍板；?moonTint=1,1,1 回中性）；
@@ -366,11 +366,11 @@ async function main(): Promise<void> {
       ...(getNumber('moonAngularRadius') != null
         ? (() => {
             const omega = getNumber('moonAngularRadius')!
-            const k = omega / 0.02 // 库默认比（0.02=物理 0.0045×4.4，2026-08-31 二次拍板）
+            const k = omega / 0.0045 // 库默认比（0.0045=物理值，2026-09-01「恢复正常大小」拍板）
             // ω 可调时倍率**默认值**同步 ×k²（同式下每像素 radiance ∝ 1/ω²，保持显示亮度——
             // spec §5.2）。仅未显式传 ?moonRadiance= 时补偿；显式值用户自理不补偿（brief 行内
             // 注释/全局约束/spec 三处一致；守卫式而非 spread 顺序——两参同传语义不随顺序漂移）。
-            // moonRadianceDefault = 库默认 3160（纹理在载时已按均值放大；AtmosphereStage.ts/demo 拍板基准）。
+            // moonRadianceDefault = 库默认 160（纹理在载时已按均值放大；AtmosphereStage.ts/demo 拍板基准）。
             return getNumber('moonRadiance') != null
               ? { moonAngularRadius: omega }
               : { moonAngularRadius: omega, moonRadianceScale: moonRadianceDefault * k * k }
