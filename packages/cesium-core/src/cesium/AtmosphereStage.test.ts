@@ -307,7 +307,7 @@ describe('validateAtmosphereOptions', () => {
       moonRadianceScale: 1546, // 774×(0.014/0.0099)²——ω 拍板 0.014 后同式保显示亮度（2026-09-01）
       moonAngularRadius: 0.014, // 物理×3.1（2026-09-01 验收档位后定稿：沿革 0.0135→0.03→0.02→0.0045→0.0099→0.014）
       moonTint: new Cartesian3(0.72, 1.0, 1.32), // 冷蓝默认（2026-08-31 月盘偏暖反馈，三档拍板）
-      moonSkyGlowScale: 150000, // 月晕默认（2026-09-01 拍板 125000 后用户「再稍微强烈」上调）
+      moonSkyGlowScale: 200000, // 月晕默认（2026-09-01 用户定稿饱满档：沿革 125000→150000→200000）
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
@@ -904,11 +904,11 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
       exposure: 1,
       moonIlluminatedFraction: 0.85
     }
-    // validate 默认：拍板 125000 后用户「再稍微强烈」上调 150000（满月深夜实测紧邻盘缘峰值≈28/255）
-    expect(validateAtmosphereOptions({}).moonSkyGlowScale).toBe(150000)
+    // validate 默认：用户定稿 200000 饱满档（满月深夜实测紧邻盘缘峰值≈33/255；沿革 125000→150000→200000）
+    expect(validateAtmosphereOptions({}).moonSkyGlowScale).toBe(200000)
     expect(validateAtmosphereOptions({ moonSkyGlowScale: 0 }).moonSkyGlowScale).toBe(0)
     const u = buildAtmosphereUniforms(stubLuts, validateAtmosphereOptions({}), state)
-    expect(u.u_moonSkyScale).toBe(150000)
+    expect(u.u_moonSkyScale).toBe(200000)
     // 月相照明分数闭包（preRender 由 state 两方向 dot 即得，零天文计算）
     expect(typeof u.u_moonIlluminatedFraction).toBe('function')
     expect((u.u_moonIlluminatedFraction as () => number)()).toBeCloseTo(0.85, 6)

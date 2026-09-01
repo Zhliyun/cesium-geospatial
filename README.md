@@ -105,7 +105,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `moonDispScale` | 1 | 环形山对比度强度（0=纯颜色图，>1 更强） |
 | `moonSurface=0` | 开 | 关月面纹理（均匀月面基线） |
 | `moonLightScale` | 25000 | 云月光倍率 |
-| `moonGlow` | 150000 | 月晕倍率（月光天空散射——月盘周围天空柔光增亮；`0`=关） |
+| `moonGlow` | 200000 | 月晕倍率（月光天空散射——月盘周围天空柔光增亮；`0`=关） |
 
 ### 镜头光晕（LensFlare）
 

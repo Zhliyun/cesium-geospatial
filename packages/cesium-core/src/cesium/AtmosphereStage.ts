@@ -153,8 +153,8 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   /**
    * 月晕（月光天空散射，2026-09-01 用户反馈「月亮周围缺少光晕」）：月亮把月盘周围天空
    * 照亮的柔光增亮（物理：朝月向大气散射 ×2.5e-6×月相，Mie 前向峰使月盘邻近更亮、低仰角
-   * 偏红、月落渐熄）。默认 150000（2026-09-01 三档拍板 125000 后用户「再稍微强烈」上调；
-   * 沿革 75000 微光/125000 柔光清晰/150000✓/200000 饱满但夜空微灰）；0=关（夜间像素零变化）。
+   * 偏红、月落渐熄）。默认 200000（2026-09-01 用户定稿：沿革 75000 微光/125000 柔光清晰/
+   * 150000「再稍微强烈」/200000✓饱满——接受夜空微灰代价）；0=关（夜间像素零变化）。
    * URL demo ?moonGlow=。白天由 shader 内 nightFactor 门归零（像素级零回归）。
    */
   moonSkyGlowScale?: number
@@ -317,9 +317,9 @@ export function validateAtmosphereOptions(
     // R/G=1.119 B/G=0.905；三档拍板冷蓝胜出：清冷月光/夜空氛围。中性白=0.78,1,1.25、轻冷=0.88,1,1.12）
     moonTint: options.moonTint ?? new Cartesian3(0.72, 1.0, 1.32),
     moonSurfaceTexture: options.moonSurfaceTexture,
-    // 月晕默认 150000（2026-09-01 三档拍板 125000 后用户「再稍微强烈」上调：75000 微光克制/
-    // 125000 柔光清晰/150000✓/200000 饱满但夜空微灰；满月深夜实测 150000 紧邻盘缘峰值≈28/255）
-    moonSkyGlowScale: options.moonSkyGlowScale ?? 150000,
+    // 月晕默认 200000（2026-09-01 用户定稿：75000 微光克制/125000 柔光清晰/150000「再稍微强烈」
+    // /200000✓饱满（接受夜空微灰）；满月深夜实测 200000 紧邻盘缘峰值≈33/255）
+    moonSkyGlowScale: options.moonSkyGlowScale ?? 200000,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
