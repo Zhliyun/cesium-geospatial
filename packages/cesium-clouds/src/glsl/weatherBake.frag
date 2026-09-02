@@ -35,13 +35,15 @@ uniform vec2 u_seedOffset;  // WEATHER_BAKE_SEED 派生的固定偏移（确定�
 
 // vec3 特征点修正版 Worley FBM（spec §1 根因 4：tileableNoise:56 标量 hash 把特征点
 // 钉在 cell 对角线——三路相位错开标量噪声合成 vec3 偏移打散，turbulence.frag 手法）。
-float worleyFeatureOffset(const vec3 tp, const float cellCount, const float seed) {
+// 返回必须 vec3 分量独立（评审 Critical：若求和成标量再广播回 (s,s,s)，修正失效且
+// s∈[0,3) 超 cell 边界破坏 ±1 邻域完备性——cell 边界接缝）。
+vec3 worleyFeatureOffset(const vec3 tp, const float cellCount, const float seed) {
   vec3 o = vec3(
     noise(mod(tp + seed, cellCount)),
     noise(mod(tp + seed + 17.31, cellCount)),
     noise(mod(tp + seed + 43.7, cellCount))
   );
-  return o.x + o.y + o.z;
+  return o;
 }
 
 float getWorleyNoiseV3(const vec3 p, const float cellCount, const float seed) {
@@ -93,8 +95,8 @@ void main() {
   // Mid clouds（freq 8 + vec3(0.5) 相位，smoothstep(1.0,1.4)）
   float mid = getWorleyFbmV3(bakePoint + vec3(0.5, 0.5, 0.0), 8.0, 9.2);
   mid = smoothstep(1.0, 1.4, mid);
-  mid = max(mid, low); // 与旧图语义一致：low 是 mid 去除后的余量——旧图 r = saturate(worley-g)；
-  // 此处烘焙为独立通道（采样端 clouds.glsl:96 remap 链按通道独立），保持低/中云视觉分层。
+  mid = max(mid, low); // 旧图为挖除语义（r = saturate(worley - g)，低中互斥）；此处有意改
+  // 独立通道 + max（mid 覆盖 low）——采样端 clouds.glsl:96 remap 按通道独立，无需减除。
 
   // High clouds（perlin 4D w 维扫掠，对齐 high 路线 freq vec3(6,12,1)）
   float high = perlin(

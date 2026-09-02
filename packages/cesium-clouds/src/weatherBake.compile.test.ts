@@ -37,4 +37,17 @@ describe('weatherBake.frag 编译（spec §5.1/§5.2）', () => {
     // 复合顺序钉死（spec §5.2）：演化偏移在 warp 之后（pw 已含 p）
     expect(src).toContain('vec3 bakePoint = vec3(pw + ringOffset')
   })
+
+  it('评审修复钉死（fix round 1）：worleyFeatureOffset 返回 vec3 分量独立 + precision 无重复', () => {
+    const src = glslIndex.weatherBakeFrag
+    // 评审 Critical：返回标量和会把三路独立 hash 广播回 (s,s,s)——特征点仍钉 cell 对角线
+    // （spec §1 根因 4 修正失效），且 s∈[0,3) 超 cell 边界破坏 ±1 邻域完备性。钉死 vec3 签名
+    // 与直接返回 o 的函数体。
+    expect(src).toContain('vec3 worleyFeatureOffset(')
+    expect(src).toContain('  return o;')
+    // 评审 Minor 2：组装产物 precision highp float 恰好 1 处（shader 本体自带；
+    // assembler 只补 #version 头）——重复声明合法但属噪音，防回归再现。
+    const assembled = buildStandaloneWeatherBakeShader(glslIndex)
+    expect(assembled.split('precision highp float;').length - 1).toBe(1)
+  })
 })
