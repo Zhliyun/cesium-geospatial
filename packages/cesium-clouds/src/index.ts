@@ -56,3 +56,6 @@ export {
   type ResolvedCloudsQuality,
   type AppliedCloudsQuality
 } from './qualityPresets'
+
+// 云分布重设计 T2：层参数 → packed uniforms 纯函数派生（spec §6.3，云高度偏移前提）
+export * from './cloudLayersPacking'
