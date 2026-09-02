@@ -78,7 +78,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `time` | ISO8601 时间，决定太阳方向（昼夜、太阳高度角）。例：`2026-08-28T17:30:00Z` |
 | `camera` | 初始视角 `lon,lat,height,heading,pitch`（角度制；heading/pitch 可省略，默认 0/-90） |
 | `ionToken` | URL 传 Cesium ion token（优先级低于 `.env.local` 的 `VITE_ION_TOKEN`） |
-| `fps=0` | 关闭左下角帧率显示（默认开） |
+| `fps=0` | 关闭右上角帧率/帧时显示（默认开） |
 
 ### 大气调节
 

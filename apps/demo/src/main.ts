@@ -114,7 +114,7 @@ async function main(): Promise<void> {
   // scene.globe.tilesLoaded / 触发截帧。不改任何渲染行为，仅挂全局引用。
   ;(window as unknown as { __viewer?: Viewer }).__viewer = viewer
 
-  // FPS 显示（性能优化 Phase 0 基线工具）：默认开启，画面左下角实时帧率（ms/帧）。
+  // FPS 显示（性能优化 Phase 0 基线工具）：默认开启，画面右上角实时帧率（ms/帧 + FPS）。
   // 覆盖所有 mode（大气/sky/depth 通用）。URL ?fps=0 关闭。
   // 注意：只给整体帧率；各 PostProcessStage（atmosphere/tonemap/lensflare/depthTemporal）
   // 的 GPU 细分计时需 Chrome DevTools Performance 面板或 EXT_disjoint_timer_query_webgl2。
