@@ -144,6 +144,15 @@ describe('M4 T4 CloudsResolvePass', () => {
     p4.destroy()
   })
 
+  it('upscaleDivisor=1（全分 march，2026-09-02 追加）：走 TAA 分支（无 TEMPORAL_UPSCALE define）', () => {
+    const p1 = createCloudsResolvePass({ ...mkOpts(), upscaleDivisor: 1 })
+    const src = primitiveCalls.at(-1)!.opts.fragmentShaderSource as string
+    expect(src).not.toContain('#define TEMPORAL_UPSCALE')
+    expect(src).toContain('#define UPSCALE_DIVISOR 1')
+    expect(src).toContain('temporalAntialiasing(coord') // TAA 分支 main 内被选中
+    p1.destroy()
+  })
+
   it('setTemporalAlpha 动态生效（运动自适应 T2）：uniformMap 闭包读最新值', () => {
     const p = createCloudsResolvePass(mkOpts())
     const um = primitiveCalls.at(-1)!.opts.uniformMap

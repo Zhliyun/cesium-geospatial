@@ -543,10 +543,12 @@ async function main(): Promise<void> {
             ? cloudsQualityRaw
             : undefined
         // 涂抹修复 T1（2026-09-02）：?cloudsUpscale=2 march 半分（RT 面积 ×4，涂抹感约减半，
-        // 帧率代价实测）；缺省随档位（ultra=2），显式 > 档位。非法值忽略（白名单守卫同上）。
+        // 帧率代价实测）；?cloudsUpscale=1 march 全分+resolve TAA（画质最佳，成本最高）；
+        // 缺省随档位（ultra=2），显式 > 档位。非法值忽略（白名单守卫同上）。
         const cloudsUpscaleRaw = getString('cloudsUpscale')
         const cloudsUpscale =
-          cloudsUpscaleRaw === '2' ? 2 as const
+          cloudsUpscaleRaw === '1' ? 1 as const
+          : cloudsUpscaleRaw === '2' ? 2 as const
           : cloudsUpscaleRaw === '4' ? 4 as const
           : undefined
         const cloudsHandle = createCloudsStage(scene, luts, weather, {

@@ -35,7 +35,7 @@ export interface CloudsResolveOptions {
    * frag 据此选低分坐标除法与直通 Bayer 映射（2 → 2×2 块 4 相位；4 → 4×4 块 16 相位
    * three 原文）。须与 CloudsPass options.upscaleDivisor 传同值。缺省 4 零回归。
    */
-  upscaleDivisor?: 2 | 4
+  upscaleDivisor?: 1 | 2 | 4
 }
 
 type ResolvedCloudsResolveOptions = Required<CloudsResolveOptions>

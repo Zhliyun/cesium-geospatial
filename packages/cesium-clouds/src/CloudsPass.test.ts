@@ -558,6 +558,27 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     pass.destroy()
   })
 
+  it('upscaleDivisor=1（全分 march，2026-09-02 追加）：MRT 全分 + mipLevelScale=1 + frame 仍递增', () => {
+    vi.clearAllMocks()
+    const params = defaultCloudsParameters()
+    params.frame = 5
+    const pass = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
+      temporalUpscale: true,
+      upscaleDivisor: 1,
+      parameters: params
+    })
+    expect(pass.marchWidth).toBe(1920) // ceil(1920/1) = 全分
+    expect(pass.marchHeight).toBe(1080)
+    expect(pass.colorTexture.width).toBe(1920)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    const res = um.resolution() as Cartesian2
+    expect(res.x).toBe(1920) // lowRes*1
+    expect(res.y).toBe(1080)
+    expect(um.mipLevelScale()).toBe(1.0) // 1/1
+    expect(um.frame()).toBe(5) // temporalUpscale=true → frame 仍跟随（TAA 亚像素抖动需要相位）
+    pass.destroy()
+  })
+
   it('upscaleDivisor 缺省=4（零回归）+ 非法值（3/0/负数）回落 4', () => {
     vi.clearAllMocks()
     const p4 = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {

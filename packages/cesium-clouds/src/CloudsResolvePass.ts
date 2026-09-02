@@ -59,8 +59,11 @@ export interface CloudsResolvePassOptions {
   /**
    * upscale 降采样分母（涂抹修复 T1，2026-09-02）：注入 resolve shader 宏 UPSCALE_DIVISOR，
    * 须与 CloudsPass options.upscaleDivisor 传同值。缺省 4 零回归。
+   * 1 = 全分 march——resolve 不走 TEMPORAL_UPSCALE（低分重建无意义）而走 three 原生
+   * temporalAntialiasing（TAA）分支：全分 texelFetch + velocity 重投影 + variance clipping
+   * + α 混合（全分辨率画质 + 时域降噪）。
    */
-  upscaleDivisor?: 2 | 4
+  upscaleDivisor?: 1 | 2 | 4
 }
 
 /** 云 resolve Pass 句柄。 */
@@ -94,7 +97,8 @@ export function createCloudsResolvePass(
   // T2（2026-09-02）：α 由 const 改 let——setTemporalAlpha 每帧改写，uniformMap 闭包读最新值
   let temporalAlpha = options.temporalAlpha ?? 0.1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
-  const upscaleDivisor = options.upscaleDivisor === 2 ? 2 : 4
+  const upscaleDivisor =
+    options.upscaleDivisor === 2 || options.upscaleDivisor === 1 ? options.upscaleDivisor : 4
 
   // history 经 texture() bilinear 采样 → LINEAR（march 输出走 texelFetch 与 filter 无关）
   const sampler = new Sampler({
@@ -128,8 +132,12 @@ export function createCloudsResolvePass(
     temporalDisocclusion: () => temporalDisocclusion
   }
 
+  // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——
+  // 低分重建语义（lowResCoord/直通 Bayer）对全分输入无意义；TAA 分支 per-pixel
+  // texelFetch + velocity 重投影 + variance clipping + α 混合（three 原生路径）。
+  // N>1：temporalUpscale=true → upscale 分支（宏 UPSCALE_DIVISOR 选直通映射）。
   const fragmentShaderSource = buildCloudsResolveFragmentShader({
-    temporalUpscale: true,
+    temporalUpscale: upscaleDivisor > 1,
     upscaleDivisor
   })
   // ⚠️ viewport 必须显式 = 全分：RenderState.viewport 为 undefined 时 Cesium 不动 GL viewport

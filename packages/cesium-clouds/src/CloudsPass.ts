@@ -141,10 +141,12 @@ export interface CloudsPassOptions extends CloudsMainOptions {
   /**
    * temporal upscale 的降采样分母（涂抹修复 T1，2026-09-02）：2 = march 半分（RT 面积 ×4，
    * 细节上限 4px→2px 周期，涂抹感约减半）；缺省/非法值 = 4（three 原文 1/4 行为零回归）。
+   * 1 = march 全分（公式自然退化 ceil(w/1)=w、mipLevelScale=1）——resolve 侧随之走
+   * TAA 分支（temporalAntialiasing）= 全分辨率 + 时域降噪（用户 2026-09-02 追加档）。
    * resolve 侧 shader 宏（UPSCALE_DIVISOR）与直通 Bayer 映射同源——须与 CloudsResolvePass
    * options.upscaleDivisor 传同值。
    */
-  upscaleDivisor?: 2 | 4
+  upscaleDivisor?: 1 | 2 | 4
 }
 
 /**
@@ -310,7 +312,8 @@ export function createCloudsPass(
   // lowRes*divisor（对齐「全分等效」）可能略超 drawingBuffer → targetUvScale < 1 修正 depth 采样域。
   // T1（2026-09-02）：divisor 可选 2（半分 march，涂抹感约减半）——缺省/非法回落 4 零回归。
   const temporalUpscale = options.temporalUpscale === true
-  const upscaleDivisor = options.upscaleDivisor === 2 ? 2 : 4
+  const upscaleDivisor =
+    options.upscaleDivisor === 2 || options.upscaleDivisor === 1 ? options.upscaleDivisor : 4
   const marchWidth = temporalUpscale ? Math.ceil(width / upscaleDivisor) : width
   const marchHeight = temporalUpscale ? Math.ceil(height / upscaleDivisor) : height
 

@@ -189,9 +189,11 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * temporal upscale 降采样分母（涂抹修复 T1，2026-09-02）：2 = march 半分（RT 面积 ×4，
    * 细节上限 4px→2px 像素周期，涂抹感约减半；帧率代价需实测）。缺省随档位（仅 ultra=2），
    * 无档位时 4（three 原文行为零回归）。用户显式 > 档位（spec §5 合并规则）。
-   * demo `?cloudsUpscale=2|4`。
+   * 1 = march 全分 + resolve 走 TAA 分支（temporalAntialiasing）= 全分辨率 + 时域降噪
+   * （2026-09-02 用户追加档；march 成本最高，画质最佳）。
+   * demo `?cloudsUpscale=1|2|4`。
    */
-  upscaleDivisor?: 2 | 4
+  upscaleDivisor?: 1 | 2 | 4
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy + setQuality。

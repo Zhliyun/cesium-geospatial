@@ -79,6 +79,7 @@ describe('applyQualityPreset 合并语义（spec §5）', () => {
     expect(applyQualityPreset('high', {}).upscaleDivisor).toBe(4)
     expect(applyQualityPreset('ultra', { upscaleDivisor: 4 }).upscaleDivisor).toBe(4) // 用户显式优先
     expect(applyQualityPreset('high', { upscaleDivisor: 2 }).upscaleDivisor).toBe(2)
+    expect(applyQualityPreset('high', { upscaleDivisor: 1 }).upscaleDivisor).toBe(1) // N=1 全分 TAA 档透传
   })
   it('low：params 生效 + dummy 数组按 cascadeCount 截断（spec §4）', () => {
     const r = applyQualityPreset('low', {})
