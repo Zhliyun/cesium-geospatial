@@ -418,6 +418,28 @@ describe('暮光天光补偿 twilightSkyBoost', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 分布重设计 T4：sampleWeather 3D atlas 采样 + 纬度气候带 + 风平流（spec §4/§5.3）
+// ─────────────────────────────────────────────────────────────────────────────
+describe('weather 3D atlas：sampleWeather 改造（spec §4）', () => {
+  it('sampleWeather 为 3D atlas 采样+气候带（spec §4）', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    expect(src).toContain('weatherAtlasTexture')
+    expect(src).toContain('u_atlasT')
+    expect(src).toContain('getClimateBandFactor')
+    expect(src).not.toContain('localWeatherSpeed') // evolution hack 已删
+  })
+
+  it('glslang：3D atlas 采样+气候带版完整 shader 真编译', () => {
+    const src = buildStandaloneCloudsShaderForValidation({})
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(`glslang 编译失败:\n${output}\n` + src.split('\n').slice(0, 60).map((l, i) => `${i + 1}: ${l}`).join('\n'))
+    }
+    expect(ok).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 月光方向性照明（2026-08-30 方向 C，spec r2 §6）：光照循环第四项——独立构造
 // moonIrradiance（非 sun 项乘系数），朝月独立 march 光深，两道门
 // （nightFactor 昼夜分账 + 月升落 smoothstep），相位复用 approximateMultipleScattering。

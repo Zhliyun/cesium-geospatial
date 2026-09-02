@@ -72,18 +72,40 @@ vec4 shapeAlteringFunction(const vec4 heightFraction, const vec4 bias) {
   return 1.0 - x * x;
 }
 
-WeatherSample sampleWeather(const vec2 uv, const float height, const float mipLevel) {
+// clouds.glsl —— 在 sampleWeather 前插入气候带包络（spec §5.4）
+// latSin = normalize(position).z（ECEF z=极轴，地心纬度正弦；密切球系偏差 ≤0.4° 不可见）
+float getClimateBandFactor(const float latSin) {
+  float latAbs = abs(latSin);
+  // ITCZ 峰：中心 u_itczCenterSin、半宽 ±10°（sin 域 0.174），cos 窗
+  float d = abs(latSin - u_itczCenterSin);
+  float itcz = 1.0 - smoothstep(0.0, 0.174, d);
+  // 副热带高压谷（|latSin| 0.42-0.50）
+  float subtropicsDip = smoothstep(0.32, 0.42, latAbs) * (1.0 - smoothstep(0.50, 0.60, latAbs));
+  // 中纬度风暴带峰（|latSin| 0.707-0.866 = 45-60°，r2 修正 r1 笔误 0.66-0.77）
+  float midlatPeak = smoothstep(0.62, 0.707, latAbs) * (1.0 - smoothstep(0.866, 0.94, latAbs));
+  // 极地衰减（>72°，sin 0.951）
+  float polarDry = smoothstep(0.951, 0.995, latAbs);
+  float band = 1.0
+    + 0.45 * itcz
+    - 0.45 * subtropicsDip
+    + 0.30 * midlatPeak
+    - 0.35 * polarDry;
+  band = clamp(band, 0.2, 1.3); // 上界 1.3 防「实心白环」（spec §5.4）
+  return mix(1.0, band, u_climateBands); // u_climateBands=0 → 恒 1（纯随机分布）
+}
+
+WeatherSample sampleWeather(const vec2 uv, const vec3 position, const float height, const float mipLevel) {
   WeatherSample weather;
   weather.heightFraction = remapClamped(vec4(height), minLayerHeights, maxLayerHeights);
 
+  // 3D atlas 采样（spec §4）：z=u_atlasT 相邻切片 LINEAR 插值；平流 tile 单位 mod 1
+  vec3 weatherCoord = vec3(uv * localWeatherRepeat + localWeatherOffset + u_windOffset, u_atlasT);
   vec4 localWeather = pow(
-    textureLod(
-      localWeatherTexture,
-      uv * localWeatherRepeat + localWeatherOffset,
-      mipLevel
-    ).LOCAL_WEATHER_CHANNELS,
+    textureLod(weatherAtlasTexture, weatherCoord, mipLevel).LOCAL_WEATHER_CHANNELS,
     weatherExponents
   );
+  // 纬度气候带（spec §5.4，采样侧——march 手上有真实 position）
+  localWeather *= getClimateBandFactor(normalize(position).z);
   #ifdef SHADOW
   localWeather *= shadowLayerMask;
   #endif // SHADOW
@@ -128,8 +150,6 @@ MediaSample sampleMedia(
 
   // TODO: Define in physical length.
   vec3 surfaceNormal = normalize(position);
-  float localWeatherSpeed = length(localWeatherOffset);
-  vec3 evolution = -surfaceNormal * localWeatherSpeed * 2e4;
 
   vec3 turbulence = vec3(0.0);
   #ifdef TURBULENCE
@@ -140,7 +160,7 @@ MediaSample sampleMedia(
     dot(density, remapClamped(weather.heightFraction, vec4(0.3), vec4(0.0)));
   #endif // TURBULENCE
 
-  vec3 shapePosition = (position + evolution + turbulence) * shapeRepeat + shapeOffset;
+  vec3 shapePosition = (position + turbulence) * shapeRepeat + shapeOffset;
   float shape = texture(shapeTexture, shapePosition).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 

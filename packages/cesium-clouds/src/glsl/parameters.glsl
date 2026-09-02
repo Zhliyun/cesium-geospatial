@@ -18,11 +18,16 @@ uniform float minDensity;
 uniform float minExtinction;
 uniform float minTransmittance;
 
-// Shape and weather
-uniform sampler2D localWeatherTexture;
+// Shape and weather（spec §4/§5.3：2D PNG → 时间切片 3D atlas）
+uniform sampler3D weatherAtlasTexture;
 uniform vec2 localWeatherRepeat;
 uniform vec2 localWeatherOffset;
 uniform float coverage;
+// WeatherAtlas 运行时调制（CPU float64 mod 后传入，spec §4.1 精度陷阱）
+uniform vec2 u_windOffset;      // 平流偏移，tile 单位 mod 1，加在 uv×repeat 后
+uniform float u_atlasT;         // 演化相位 tNorm ∈[0,1)，3D 纹理 z 坐标
+uniform float u_itczCenterSin;  // ITCZ 中心纬度正弦（CPU 按 doy 公式算）
+uniform float u_climateBands;   // 气候带强度 0=关 1=默认（spec §6.1）
 uniform sampler3D shapeTexture;
 uniform vec3 shapeRepeat;
 uniform vec3 shapeOffset;

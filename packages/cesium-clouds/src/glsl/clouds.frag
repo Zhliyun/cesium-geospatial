@@ -404,7 +404,7 @@ float marchOpticalDepth(
     vec3 position = rayDistance * rayDirection + rayOrigin;
     vec2 uv = getGlobeUv(position);
     float height = length(position) - bottomRadius;
-    WeatherSample weather = sampleWeather(uv, height, mipLevel);
+    WeatherSample weather = sampleWeather(uv, position, height, mipLevel);
     MediaSample media = sampleMedia(weather, position, uv, mipLevel, jitter);
     opticalDepth += media.extinction * stepSize;
     nextDistance += stepSize;
@@ -545,7 +545,7 @@ vec4 marchClouds(
 
     // Sample rough weather.
     vec2 uv = getGlobeUv(position);
-    WeatherSample weather = sampleWeather(uv, height, mipLevel);
+    WeatherSample weather = sampleWeather(uv, position, height, mipLevel);
 
     #ifdef DEBUG_SHOW_SAMPLE_COUNT
     ++sampleCount.x;
