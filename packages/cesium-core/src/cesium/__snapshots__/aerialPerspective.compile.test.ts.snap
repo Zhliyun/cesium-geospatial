@@ -1407,10 +1407,19 @@ void main() {
   // 在 camera 高（horizonKm=905km > CLOSE_KM=20km）反向 + 过渡带 885km 太宽 → fore/base inscatter 在
   // sceneDist 同心圆缓慢变化 → 圆圈内外大气散射阶梯（等高线）。正向窄过渡（20~40km）让 fore 快速衰减到
   // base 基线，圆圈消失。近处 sceneDist<CLOSE_KM mask=1（山体不透明）；远处 mask→0 走基线。
-  if (hasScene) {
-    float mask = smoothstep(CLOSE_KM * 2.0, CLOSE_KM, sceneDist);  // 近=1 远=0，过渡带 20km
+  // 【2026-09-02 地平线灰膜修复（depth=1 fallback）】Cesium 多 frustum 分段/瓦片流送窗口内，
+  // PostProcess depthTexture 可能整块丢失地形深度（depth=1，debug=5 实锤：丢失区边界=屏幕上
+  // 锐利水平直线，时有时无随流送时序——用户报「分界线与首次加载视角相关、不随视角更新」）。
+  // hasScene=false → fore 关闭 → 打山视线（与海平面椭球无交 discG<0，Bruneton 无地形概念归
+  // 天空分支）落回天空近似 final=original×0.5+全路径 skyInscatter×25 → 近山变中性灰膜
+  // （实测 84,83,76），与上方 fore 正常渲染的远山形成直线分界。fallback：hasScene=false 且
+  // discG>0 时用椭球交点 tHitG 充当 sceneDist 启用 fore——近地形 tHitG≈真实距离（地面≈海
+  // 平面），恢复正确透视；真天空 discG<0 不进 fallback、tHitG>40km mask=0，均零影响。
+  float foreDist = hasScene ? sceneDist : (discG > 0.0 ? tHitG : -1.0);
+  if (foreDist > 0.0) {
+    float mask = smoothstep(CLOSE_KM * 2.0, CLOSE_KM, foreDist);  // 近=1 远=0，过渡带 20km
     if (mask > 0.0) {
-      vec3 scenePosKm = cameraPosition + rayDirection * sceneDist;
+      vec3 scenePosKm = cameraPosition + rayDirection * foreDist;
       vec3 foreTrans;
       vec3 foreInscatter = GetSkyRadianceToPointScaled(
         cameraPosition,
