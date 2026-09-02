@@ -88,9 +88,11 @@ describe('M4 T2 cloudsResolve.frag surgery 断言', () => {
     )
   })
 
-  it('upscaleDivisor 缺省=4：#define UPSCALE_DIVISOR 4 + N=4 分支（three 原文路径）在场', () => {
-    const src = buildCloudsResolveFragmentShader(OPTS)
-    expect(src).toContain('#define UPSCALE_DIVISOR 4')
-    expect(src).toContain('bayerIndices[coord.x % 4][coord.y % 4]')
+  it('upscaleDivisor 缺省=1（2026-09-02 定稿）：TAA 运行时组合（temporalUpscale=false）注入 #define UPSCALE_DIVISOR 1', () => {
+    // 运行时 N=1 恒走 temporalUpscale=false（CloudsResolvePass.ts：temporalUpscale: upscaleDivisor > 1）
+    const src = buildCloudsResolveFragmentShader({ ...OPTS, temporalUpscale: false })
+    expect(src).toContain('#define UPSCALE_DIVISOR 1')
+    expect(src).toContain('temporalAntialiasing(coord')
+    expect(src).not.toContain('#define TEMPORAL_UPSCALE')
   })
 })

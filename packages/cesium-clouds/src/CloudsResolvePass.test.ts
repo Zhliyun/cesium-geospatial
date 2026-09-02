@@ -135,13 +135,15 @@ describe('M4 T4 CloudsResolvePass', () => {
     expect((p.resolvedTexture as any).destroy).toHaveBeenCalledTimes(1)
   })
 
-  it('upscaleDivisor=2（涂抹修复 T1）：fragmentShaderSource 注入 #define UPSCALE_DIVISOR 2；缺省=4', () => {
+  it('upscaleDivisor=2（涂抹修复 T1）：fragmentShaderSource 注入 #define UPSCALE_DIVISOR 2；缺省=1（2026-09-02 定稿全分 TAA）', () => {
     const p2 = createCloudsResolvePass({ ...mkOpts(), upscaleDivisor: 2 })
     expect(primitiveCalls.at(-1)!.opts.fragmentShaderSource).toContain('#define UPSCALE_DIVISOR 2')
     p2.destroy()
-    const p4 = createCloudsResolvePass(mkOpts())
-    expect(primitiveCalls.at(-1)!.opts.fragmentShaderSource).toContain('#define UPSCALE_DIVISOR 4')
-    p4.destroy()
+    const pDefault = createCloudsResolvePass(mkOpts())
+    const srcDefault = primitiveCalls.at(-1)!.opts.fragmentShaderSource as string
+    expect(srcDefault).toContain('#define UPSCALE_DIVISOR 1')
+    expect(srcDefault).not.toContain('#define TEMPORAL_UPSCALE') // 缺省走 TAA 分支
+    pDefault.destroy()
   })
 
   it('upscaleDivisor=1（全分 march，2026-09-02 追加）：走 TAA 分支（无 TEMPORAL_UPSCALE define）', () => {

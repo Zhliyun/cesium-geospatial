@@ -313,7 +313,7 @@ export function createCloudsPass(
   // T1（2026-09-02）：divisor 可选 2（半分 march，涂抹感约减半）——缺省/非法回落 4 零回归。
   const temporalUpscale = options.temporalUpscale === true
   const upscaleDivisor =
-    options.upscaleDivisor === 2 || options.upscaleDivisor === 1 ? options.upscaleDivisor : 4
+    options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
   const marchWidth = temporalUpscale ? Math.ceil(width / upscaleDivisor) : width
   const marchHeight = temporalUpscale ? Math.ceil(height / upscaleDivisor) : height
 

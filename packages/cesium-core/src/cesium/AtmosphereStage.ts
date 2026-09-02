@@ -314,7 +314,7 @@ export function validateAtmosphereOptions(
     lensFlareHalo: options.lensFlareHalo ?? HALO_AMOUNT_DEFAULT,
     lensFlarePreBlur: options.lensFlarePreBlur ?? 3.0, // 默认 3.0（用户验收：ghost 模糊效果与半径加大）
     distanceScale: options.distanceScale ?? 1.0, // 默认 1.0 = phase1 行为零回归
-    inscatterScale: options.inscatterScale ?? 25.0, // 用户验收远处白雾浓默认 25；URL ?inscatterScale=1 回退 phase1 物理量级
+    inscatterScale: options.inscatterScale ?? 8.0, // 2026-09-02 用户定稿 25→8（近景海景视角实测）；URL ?inscatterScale=1 回退 phase1 物理量级、=25 回退旧默认
     ditherScale: options.ditherScale ?? 1.0, // 默认 1.0 = phase1 dithering ±1.5/255 零回归
     // limb outer glow 默认（太空视角大气边缘扩散辉光）：intensity 1.0 线性域（独立加 finalColor，不 ×inscatterScale）、decay 30km 扩散范围，URL ?limbGlow/?limbDecay 调
     limbGlowIntensity: options.limbGlowIntensity ?? 1.0,

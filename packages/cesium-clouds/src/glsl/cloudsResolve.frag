@@ -1,11 +1,12 @@
 precision highp float;
 precision highp sampler2DArray;
 
-// 【Cesium 适配扩展（涂抹修复 T1，2026-09-02）】upscale 分母缺省 4（three 原文语义）——
-// 运行时由 buildCloudsResolveFragmentShader defines 恒注入；此缺省保 raw source 独立编译
+// 【Cesium 适配扩展（涂抹修复 T1，2026-09-02）】upscale 分母缺省 1（2026-09-02 用户定稿
+// 全分 TAA 档为默认；1=全分走 TAA 分支，2/4=低分 upscale）——运行时由
+// buildCloudsResolveFragmentShader defines 恒注入；此缺省保 raw source 独立编译
 // 可过（GLSL ES：未定义宏参与 #if 表达式是编译错）。
 #ifndef UPSCALE_DIVISOR
-#define UPSCALE_DIVISOR 4
+#define UPSCALE_DIVISOR 1
 #endif // UPSCALE_DIVISOR
 
 #include "core/turbo"

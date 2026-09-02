@@ -486,12 +486,13 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     altitudeCorrection: new Cartesian3()
   })
 
-  it('temporalUpscale=true：MRT 尺寸 ceil(w/4) + resolution=lowRes*4 + targetUvScale/mipLevelScale 切低分语义', () => {
+  it('temporalUpscale=true 且 upscaleDivisor=4：MRT 尺寸 ceil(w/4) + resolution=lowRes*4 + targetUvScale/mipLevelScale 切低分语义', () => {
     vi.clearAllMocks()
     const params = defaultCloudsParameters()
     params.frame = 5 // D7：temporal 开时 march frame 跟随 params.frame
     const pass = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
       temporalUpscale: true,
+      upscaleDivisor: 4, // N=4 公式测试（缺省已改 1=全分，见缺省用例）
       parameters: params
     })
     expect(pass.marchWidth).toBe(480) // ceil(1920/4)
@@ -510,12 +511,13 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     pass.destroy()
   })
 
-  it('temporalUpscale=true 且高不整除（1081）：resolution=lowRes*4=1084 + targetUvScale=1084/1081', () => {
+  it('temporalUpscale=true 且高不整除（1081，divisor=4）：resolution=lowRes*4=1084 + targetUvScale=1084/1081', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
     scene.context.drawingBufferHeight = 1081
     const pass = createCloudsPass(scene, createMockLuts(), createMockWeather(), st(), {
-      temporalUpscale: true
+      temporalUpscale: true,
+      upscaleDivisor: 4
     })
     expect(pass.marchHeight).toBe(271) // ceil(1081/4)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
@@ -579,19 +581,19 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     pass.destroy()
   })
 
-  it('upscaleDivisor 缺省=4（零回归）+ 非法值（3/0/负数）回落 4', () => {
+  it('upscaleDivisor 缺省=1（2026-09-02 用户定稿全分 TAA 档）+ 非法值（3/0/负数）回落 1', () => {
     vi.clearAllMocks()
-    const p4 = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
+    const p1 = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
       temporalUpscale: true
     })
-    expect(p4.marchWidth).toBe(480)
-    p4.destroy()
+    expect(p1.marchWidth).toBe(1920) // ceil(1920/1) 全分
+    p1.destroy()
     vi.clearAllMocks()
     const pBad = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
       temporalUpscale: true,
       upscaleDivisor: 3 as 2 | 4
     })
-    expect(pBad.marchWidth).toBe(480) // 非法 → 4
+    expect(pBad.marchWidth).toBe(1920) // 非法 → 1
     pBad.destroy()
   })
 

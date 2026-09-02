@@ -34,7 +34,8 @@ export interface ResolvedCloudsQuality {
   shadow: { cascadeCount: number; mapSize: number; march: CloudsShadowMarchParameters }
   /**
    * temporal upscale 降采样分母（涂抹修复 T1，2026-09-02）：2 = 半分 march（RT 面积 ×4，
-   * 涂抹感约减半、帧率代价需实测）。可选——未设的档位继承缺省 4（three 原文行为）。
+   * 涂抹感约减半、帧率代价需实测）。可选——未设的档位继承缺省 1（2026-09-02 用户定稿
+   * 全分 TAA 档；T1 合并时缺省 4=three 原文行为）。
    * 目前仅 ultra 设 2；用户显式 options.upscaleDivisor 优先于档位（spec §5 合并规则）。
    */
   upscaleDivisor?: 1 | 2 | 4
@@ -90,7 +91,7 @@ export interface AppliedCloudsQuality {
   params: CloudsParameters
   /** BSM 结构（mapSize 此时尚未消费——Task 4 buildImpl 接线）。 */
   shadow: { cascadeCount: number; mapSize: number }
-  /** upscale 降采样分母（解析后必有值：用户显式 > 档位 > 缺省 4；1=全分 TAA）。 */
+  /** upscale 降采样分母（解析后必有值：用户显式 > 档位 > 缺省 1=全分 TAA；2026-09-02 定稿）。 */
   upscaleDivisor: 1 | 2 | 4
 }
 
@@ -146,8 +147,9 @@ export function applyQualityPreset(quality: CloudsQualityPreset, options: Clouds
   params.shadowIntervals = Array.from({ length: n }, () => new Cartesian2(0, 0))
   params.shadowMatrices = Array.from({ length: n }, () => new Matrix4())
 
-  // upscaleDivisor：用户显式 > 档位 > 缺省 4（涂抹修复 T1；spec §5 合并规则同构）
-  const upscaleDivisor: 1 | 2 | 4 = options.upscaleDivisor ?? preset.upscaleDivisor ?? 4
+  // upscaleDivisor：用户显式 > 档位 > 缺省 1（2026-09-02 用户定稿全分 TAA 档为默认；
+  // T1 合并时缺省 4=three 原文零回归，ultra 档显式 2 沿用）
+  const upscaleDivisor: 1 | 2 | 4 = options.upscaleDivisor ?? preset.upscaleDivisor ?? 1
 
   return { main, params, shadow: { cascadeCount: n, mapSize: preset.shadow.mapSize }, upscaleDivisor }
 }

@@ -58,7 +58,8 @@ export interface CloudsResolvePassOptions {
   temporalDisocclusion?: number
   /**
    * upscale 降采样分母（涂抹修复 T1，2026-09-02）：注入 resolve shader 宏 UPSCALE_DIVISOR，
-   * 须与 CloudsPass options.upscaleDivisor 传同值。缺省 4 零回归。
+   * 须与 CloudsPass options.upscaleDivisor 传同值。缺省 1（2026-09-02 用户定稿全分档；
+   * T1 合并时缺省 4=three 原文）。
    * 1 = 全分 march——resolve 不走 TEMPORAL_UPSCALE（低分重建无意义）而走 three 原生
    * temporalAntialiasing（TAA）分支：全分 texelFetch + velocity 重投影 + variance clipping
    * + α 混合（全分辨率画质 + 时域降噪）。
@@ -98,7 +99,7 @@ export function createCloudsResolvePass(
   let temporalAlpha = options.temporalAlpha ?? 0.1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
   const upscaleDivisor =
-    options.upscaleDivisor === 2 || options.upscaleDivisor === 1 ? options.upscaleDivisor : 4
+    options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
 
   // history 经 texture() bilinear 采样 → LINEAR（march 输出走 texelFetch 与 filter 无关）
   const sampler = new Sampler({

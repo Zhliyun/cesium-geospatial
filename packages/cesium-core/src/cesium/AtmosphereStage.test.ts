@@ -297,7 +297,7 @@ describe('validateAtmosphereOptions', () => {
       groundNightAmbient: new Cartesian3(0.55, 0.62, 0.78), // 冷蓝夜面底色（按曝光链预放大，验收后定稿）
       debugMode: 0,
       distanceScale: 1.0,
-      inscatterScale: 25.0,
+      inscatterScale: 8.0, // 2026-09-02 用户定稿 25→8
       ditherScale: 1.0,
       // limb outer glow（太空视角大气边缘扩散辉光）：默认 intensity 1.0（线性域独立加 finalColor）/ decay 30km
       limbGlowIntensity: 1.0,

@@ -88,7 +88,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `groundDim` | 0.43 | 地表反射衰减（压地面过曝；1=不衰减；0.5→0.43 与地面光色乘子联算重标——正午乘子≈1.0-1.15 压回同量级） |
 | `groundLighting` | 1 | 地面光色乘子（2026-09-01 影像×大气颜色同步）：影像=正午白光快照，乘子=(太阳直射透射+天光辐照)/solar_irradiance 让影像随太阳高度染色——日落近景橙红、夜间近黑（三专家评审定稿变体 1；0=旧合成 A/B 对照兼 CI 逃生门）。开启时自动配 lighting=0（enableLighting 夜侧 N·L 置黑像素与乘法地板冲突，?lighting=1 显式保留旧组合） |
 | `groundNightAmbient` | 0.55,0.62,0.78 | 地面夜间环境底色 r,g,b（sun/sky 双归零后乘子→0，max() 地板接住；冷蓝默认，按曝光链 0.1 预放大；量级显暗属预期——夜间 exposure 压回） |
-| `inscatterScale` | 25 | 内散射放大（1=回退物理量级，偏淡） |
+| `inscatterScale` | 8 | 内散射放大（2026-09-02 定稿 25→8，近景海景视角实测；1=回退物理量级，偏淡；25=旧默认） |
 | `distanceScale` | 1 | 散射距离缩放（等效空气密度倍率） |
 | `ditherScale` | 1 | dithering 强度倍率（放大打散 banding） |
 | `limbGlow` / `limbDecay` | 0.3 / 30 | 太空视角大气边缘辉光强度 / 扩散范围 km |
@@ -131,7 +131,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `cloudsShadowFreeze=1` | – | 冻结 BSM 矩阵（首帧后不更新，噪声分解诊断） |
 | `cloudsShadowTemporal=1` | 关 | BSM 时序累积 |
 | `cloudsTemporal=0` | 开 | 云时序重建开关（`0` 回退全分 march 无 resolve）：march 低分辨率 + resolve 时域重建（帧率↑）。默认开对齐源库；含静止冻结——相机静止时相位冻结逐位稳定 |
-| `cloudsUpscale` | 4 | march 降采样分母 `4`/`2`/`1`：4=1/4 分（源库原行为）；2=半分（RT 面积 ×4，涂抹感约减半，实测仍 60FPS）；1=全分 march + resolve 切 TAA 分支（画质最佳、静止最稳、成本最高）。用户显式 > 质量档位（ultra 档默认 2） |
+| `cloudsUpscale` | 1 | march 降采样分母 `4`/`2`/`1`：1=全分 march + resolve 切 TAA 分支（**默认**，画质最佳、静止最稳；实测 60FPS）；2=半分（RT 面积 ×4，涂抹感约减半）；4=1/4 分（源库原行为，低端 GPU 余量）。用户显式 > 质量档位（ultra 档默认 2） |
 | `cloudsMotionAlpha` | 0.4 | 运动中混合比上限：相机移动/旋转超阈值时 resolve 的新帧占比从 0.1 平滑升至此值（拖影/错位换细颗粒，防移动抖动；停止自动回落收敛）。= temporalAlpha 时等效禁用 |
 | `temporalAlpha` | 0.1 | 云 resolve 静止混合比（新帧占比；0=纯 history 收敛慢，1=纯 current 无降噪） |
 | `temporalGamma` | 2.0 | variance clipping AABB 宽度（大=更宽容 history 拖影多；小=更快贴 current 抖动大） |
