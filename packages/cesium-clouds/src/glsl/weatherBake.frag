@@ -1,0 +1,107 @@
+// packages/cesium-clouds/src/glsl/weatherBake.frag
+//
+// WeatherAtlas 烘焙 shader（spec §5）：256²×64 切片中第 floor(u_slice×64) 层。
+// 设计：
+//  - 周期化铁律（spec §5.1）：全部噪声以烘焙域为周期——Worley 整频（p 空间周期 1）、
+//    perlin periodic 版（rep=frequency）。
+//  - 时间维扫掠（spec §5.2 主方案）：Worley 采 z=u_slice×Z_CYCLES（平面扫过 3D 特征点
+//    → 云单体原生长大/缩小/消亡）；perlin 采 w=u_slice×W_CYCLES（4D 第 4 维）。
+//    Z_CYCLES/W_CYCLES 必须整数——演化闭合铁律（环回绕 u_slice=0 与 1 同点）。
+//  - 圆环漂移（辅助低频分量）：ringOffset = R×(cos,sin)(2π·u_slice)。
+//  - 复合顺序钉死：F(p + warp(p) + ringOffset)——warp 作用于未平移 p（反向复合=纯
+//    刚体平移零形变，spec BLOCKER 修订）。
+//  - 第 4 通道恒 1（现状 local_weather.png 死值语义，spec §4.6）。
+precision highp float;
+precision highp int;
+
+#include "perlin"
+#include "tileableNoise"
+
+in vec2 vUv;
+
+layout(location = 0) out vec4 outputColor;
+
+uniform float u_slice;      // i/N ∈ [0,1)
+uniform vec2 u_seedOffset;  // WEATHER_BAKE_SEED 派生的固定偏移（确定性，spec §4.5）
+
+// 演化闭合整数行程（spec §5.2 铁律）
+#define Z_CYCLES 4.0
+#define W_CYCLES 2.0
+#define EVOLVE_RADIUS 0.25
+// 域扭曲：整数频率（周期化铁律）、互质防共振；warpAmp 以低云基频 cell 数标定
+#define WARP_F1 3
+#define WARP_F2 5
+#define WARP_AMP 0.06
+
+// vec3 特征点修正版 Worley FBM（spec §1 根因 4：tileableNoise:56 标量 hash 把特征点
+// 钉在 cell 对角线——三路相位错开标量噪声合成 vec3 偏移打散，turbulence.frag 手法）。
+float worleyFeatureOffset(const vec3 tp, const float cellCount, const float seed) {
+  vec3 o = vec3(
+    noise(mod(tp + seed, cellCount)),
+    noise(mod(tp + seed + 17.31, cellCount)),
+    noise(mod(tp + seed + 43.7, cellCount))
+  );
+  return o.x + o.y + o.z;
+}
+
+float getWorleyNoiseV3(const vec3 p, const float cellCount, const float seed) {
+  vec3 cell = p * cellCount;
+  float d = 1.0e10;
+  for (int x = -1; x <= 1; ++x) {
+    for (int y = -1; y <= 1; ++y) {
+      for (int z = -1; z <= 1; ++z) {
+        vec3 tp = floor(cell) + vec3(x, y, z);
+        vec3 tpo = cell - tp - worleyFeatureOffset(tp, cellCount, seed);
+        d = min(d, dot(tpo, tpo));
+      }
+    }
+  }
+  return clamp(d, 0.0, 1.0);
+}
+
+float getWorleyFbmV3(const vec3 p, const float freq, const float seed) {
+  float amp = 0.4;
+  float f = freq;
+  float sum = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    sum += amp * (1.0 - getWorleyNoiseV3(p, f, seed + float(i) * 11.3));
+    f *= 2.0;
+    amp *= 0.95;
+  }
+  return sum;
+}
+
+void main() {
+  vec2 p = vUv;
+  float zPhase = u_slice * Z_CYCLES;
+  float wPhase = u_slice * W_CYCLES;
+  float ringAngle = 6.28318530718 * u_slice;
+  vec2 ringOffset = EVOLVE_RADIUS * vec2(cos(ringAngle), sin(ringAngle));
+
+  // 周期化域扭曲（perlin 4D，w=wPhase 使扭曲场本身随时间演化——形变局部化）
+  vec2 warpA = vec2(
+    perlin(vec4(p * float(WARP_F1), 0.0, wPhase), vec4(float(WARP_F1), float(WARP_F1), 1.0, W_CYCLES)),
+    perlin(vec4(p * float(WARP_F2), 0.0, wPhase), vec4(float(WARP_F2), float(WARP_F2), 1.0, W_CYCLES))
+  );
+  vec2 pw = p + WARP_AMP * warpA;         // warp 作用于未平移 p
+  vec3 bakePoint = vec3(pw + ringOffset + u_seedOffset, zPhase + u_seedOffset.x);
+
+  // Low clouds（对齐 localWeather.frag low 路线：freq 16 → smoothstep(0.8,1.4)）
+  float low = getWorleyFbmV3(bakePoint, 16.0, 1.7);
+  low = smoothstep(0.8, 1.4, low);
+
+  // Mid clouds（freq 8 + vec3(0.5) 相位，smoothstep(1.0,1.4)）
+  float mid = getWorleyFbmV3(bakePoint + vec3(0.5, 0.5, 0.0), 8.0, 9.2);
+  mid = smoothstep(1.0, 1.4, mid);
+  mid = max(mid, low); // 与旧图语义一致：low 是 mid 去除后的余量——旧图 r = saturate(worley-g)；
+  // 此处烘焙为独立通道（采样端 clouds.glsl:96 remap 链按通道独立），保持低/中云视觉分层。
+
+  // High clouds（perlin 4D w 维扫掠，对齐 high 路线 freq vec3(6,12,1)）
+  float high = perlin(
+    vec4(bakePoint.xy * vec2(6.0, 12.0), 0.0, wPhase + 0.3),
+    vec4(6.0, 12.0, 1.0, W_CYCLES)
+  );
+  high = smoothstep(-0.5, 0.5, high * 2.2); // perlin 输出约 ±0.45（perlin.glsl:210 语义）
+
+  outputColor = vec4(low, mid, high, 1.0);
+}

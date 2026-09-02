@@ -42,6 +42,7 @@ import _shadowVert from './glsl/shadow.vert?raw'
 import _shadowResolveFrag from './glsl/shadowResolve.frag?raw'
 import _shadowResolveVert from './glsl/shadowResolve.vert?raw'
 import _turbulenceFrag from './glsl/turbulence.frag?raw'
+import _weatherBakeFrag from './glsl/weatherBake.frag?raw'
 
 export const glslIndex = {
   // —— Three chunk 兼容桩 ——
@@ -77,5 +78,6 @@ export const glslIndex = {
   shadowVert: _shadowVert,
   shadowResolveFrag: _shadowResolveFrag,
   shadowResolveVert: _shadowResolveVert,
-  turbulenceFrag: _turbulenceFrag
+  turbulenceFrag: _turbulenceFrag,
+  weatherBakeFrag: _weatherBakeFrag
 } as const
