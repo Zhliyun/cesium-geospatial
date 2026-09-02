@@ -412,11 +412,11 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
-  it('夜间环境底光 nightAmbient：默认 0.12；parameters 覆盖生效（夜间云照明地板，方向 B）', () => {
+  it('夜间环境底光 nightAmbient：默认 0.03；parameters 覆盖生效（夜间云照明地板，方向 B）', () => {
     vi.clearAllMocks()
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
-    expect(um.nightAmbient(), '默认 0.12（标定推导值：×RECIPROCAL_PI4×skyGradient×scattering×E12 ≈ 18/255 ≈ 夜空底光）').toBe(0.12)
+    expect(um.nightAmbient(), '默认 0.03（2026-09-02 过亮修复重标：原 0.12 标定漏算 ACES+gamma 暗部放大——线性值×255≈18/255 误当 display，实际显示 ~86/255 且实测夜空底光仅 ~5/255；headed 扫描定标 0.03：无月夜云带 avg 61/>120 清零，见 clouds.frag 注释）').toBe(0.03)
     pass.destroy()
 
     vi.clearAllMocks()

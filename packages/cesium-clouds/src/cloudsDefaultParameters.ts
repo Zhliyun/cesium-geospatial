@@ -125,7 +125,8 @@ export interface CloudsParameters {
   powderScale: number
   powderExponent: number
   /** 夜间环境底光（方向 B，2026-08-29）：夜间云照明地板——LUT 归零后 skyIrradiance 抬此值，
-   *  太阳当地仰角 -5°→-12° 淡入。默认 0.12 标定到与夜空底光同量级（见 clouds.frag 注释）。
+   *  太阳当地仰角 -5°→-12° 淡入。默认 0.03（2026-09-02 过亮重标——原 0.12 标定漏算
+   *  ACES+gamma 暗部放大，见 clouds.frag 注释）。
    *  0 = 关闭（回退纯黑夜间云）。不进质量档位（视觉参数，与 march 档无关）。 */
   nightAmbient: number
   /** 夜间云色调乘子（线性 RGB，乘底光+月光两项；2026-09-01 云偏蓝二轮反馈 uniform 化）。
@@ -281,8 +282,11 @@ export function defaultCloudsParameters(): CloudsParameters {
     groundBounceScale: 1.0,
     powderScale: 0.8,
     powderExponent: 150.0,
-    // 夜间环境底光（方向 B；本仓库新增，非 three 移植——上游无夜间光源是已知缺失）
-    nightAmbient: 0.12,
+    // 夜间环境底光（方向 B；本仓库新增，非 three 移植——上游无夜间光源是已知缺失）。
+    // 0.12→0.03（2026-09-02 夜间云过亮重标）：原 0.12 标定漏算 ACES+gamma 暗部放大
+    // （线性×255≈18/255 误当 display，实际 ~86/255，且月光落地后叠加从未整体验收——
+    // 深夜云带 avg 147 vs 夜空底光实测 ~5）。headed 扫描定标 0.03：无月夜云带 61/>120 清零。
+    nightAmbient: 0.03,
     // 暮光天光补偿（2026-09-01 黄昏云过黑 A 案）：6=用户拍板物理档（实测云/天空显示比 80%，
     // 接近物理目标 85-90%；档位沿革 3 温和=51%/6 物理=80%，?cloudsTwilightBoost= URL 即调）
     twilightSkyBoost: 6.0,

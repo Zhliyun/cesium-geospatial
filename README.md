@@ -122,7 +122,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 |---|---|---|
 | `cloudsQuality` | `high` | 质量档位 `low`/`medium`/`high`/`ultra`：march 步数/编译开关（光柱/细节/湍流/精确天光）/BSM 级联数与尺寸整档联动（ultra 另含 march 半分，见 `cloudsUpscale`）；键盘 `1`-`4` 运行时切换 |
 | `cloudsExposure` | 12 | 云层曝光（线性域缩放，链尾统一 tonemap；偏灰调大、过曝调小） |
-| `cloudsNightAmbient` | 0.12 | 夜间环境底光：太阳沉没后云照明地板（0 = 关闭回退纯黑夜间云）。夜间云无月光/气辉模型，LUT 归零后厚云成黑洞——此值标定到与夜空底光同量级 |
+| `cloudsNightAmbient` | 0.03 | 夜间环境底光：太阳沉没后云照明地板（0 = 关闭回退纯黑夜间云）。2026-09-02 过亮重标（原 0.12 标定漏算 ACES+gamma 暗部放大+月光叠加未整体验收，深夜云带亮度达夜空底光 30 倍）；?cloudsNightAmbient=0.12 可回旧行为 |
 | `cloudsTint` | 0.88,1,1 | 夜间云色调乘子（线性 RGB，乘底光+月光；沿革冷蓝 1.32→弱蓝 1.15→中性偏暖定稿） |
 | `cloudsTwilightBoost` | 6 | 暮光天光补偿倍率：太阳 [+2°,-1.5°] 窗内云天光项 1→boost（黄昏云过黑修复——crude 天光+overlay 不乘动态曝光欠亮 ~3×；实测云/天空显示比 32%→80%；1=关；白天零回归） |
 | `cloudsShadow=0` | 开 | 关 BSM 自阴影（对比云体积感） |
