@@ -120,7 +120,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `cloudsQuality` | `high` | 质量档位 `low`/`medium`/`high`/`ultra`：march 步数/编译开关（光柱/细节/湍流/精确天光）/BSM 级联数与尺寸整档联动；键盘 `1`-`4` 运行时切换 |
+| `cloudsQuality` | `high` | 质量档位 `low`/`medium`/`high`/`ultra`：march 步数/编译开关（光柱/细节/湍流/精确天光）/BSM 级联数与尺寸整档联动（ultra 另含 march 半分，见 `cloudsUpscale`）；键盘 `1`-`4` 运行时切换 |
 | `cloudsExposure` | 12 | 云层曝光（线性域缩放，链尾统一 tonemap；偏灰调大、过曝调小） |
 | `cloudsNightAmbient` | 0.12 | 夜间环境底光：太阳沉没后云照明地板（0 = 关闭回退纯黑夜间云）。夜间云无月光/气辉模型，LUT 归零后厚云成黑洞——此值标定到与夜空底光同量级 |
 | `cloudsTint` | 0.88,1,1 | 夜间云色调乘子（线性 RGB，乘底光+月光；沿革冷蓝 1.32→弱蓝 1.15→中性偏暖定稿） |
@@ -130,7 +130,12 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `cloudsShadowScale=N` | 1 | world 锚定 radii × N（诊断用，N=5 → {80,168,480}km 膨胀层） |
 | `cloudsShadowFreeze=1` | – | 冻结 BSM 矩阵（首帧后不更新，噪声分解诊断） |
 | `cloudsShadowTemporal=1` | 关 | BSM 时序累积 |
-| `cloudsTemporal=1` | 关 | 云 march 时序 1/4 分辨率重建（帧率↑，有抖动） |
+| `cloudsTemporal=0` | 开 | 云时序重建开关（`0` 回退全分 march 无 resolve）：march 低分辨率 + resolve 时域重建（帧率↑）。默认开对齐源库；含静止冻结——相机静止时相位冻结逐位稳定 |
+| `cloudsUpscale` | 4 | march 降采样分母 `4`/`2`/`1`：4=1/4 分（源库原行为）；2=半分（RT 面积 ×4，涂抹感约减半，实测仍 60FPS）；1=全分 march + resolve 切 TAA 分支（画质最佳、静止最稳、成本最高）。用户显式 > 质量档位（ultra 档默认 2） |
+| `cloudsMotionAlpha` | 0.4 | 运动中混合比上限：相机移动/旋转超阈值时 resolve 的新帧占比从 0.1 平滑升至此值（拖影/错位换细颗粒，防移动抖动；停止自动回落收敛）。= temporalAlpha 时等效禁用 |
+| `temporalAlpha` | 0.1 | 云 resolve 静止混合比（新帧占比；0=纯 history 收敛慢，1=纯 current 无降噪） |
+| `temporalGamma` | 2.0 | variance clipping AABB 宽度（大=更宽容 history 拖影多；小=更快贴 current 抖动大） |
+| `cloudsDisocclusion` | 0.5 | disocclusion rejection 阈值（`1.01`=禁用）：云 alpha 差异超阈拒 history 直出 current（黑块修复） |
 | `cloudsLightShafts=0` | 开 | 关云间 god rays 光柱 |
 | `cloudsGodRays=N` | 1 | god rays 增益（20=艺术放大出明显光柱） |
 | `cloudsShapeDetail=0` / `cloudsTurbulence=0` / `cloudsAccurate=0` | – | 关对应噪声/光照分支（隔离诊断） |
