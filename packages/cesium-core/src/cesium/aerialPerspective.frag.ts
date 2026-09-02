@@ -627,37 +627,41 @@ void main() {
   // 乘子=「当前照明/白光照明」比值 (sunIrr+skyIrr)/ATMOSPHERE.solar_irradiance（π 两侧同消，
   // 无量纲 O(1)；half-float LUT 比值消费是相对误差、无 A 路径 inscatter 式灾消——见 frag 头注释
   // A 路径警告的区别：那边 irradiance 作绝对亮度×15 放大，这边只作归一分母/分子）。
-  // 天空像素初始化 1.0 零 LUT 采样；仅地面分支计算（分支内）。normal 必须向外 +normalize
-  //（评审 Critical：向内则直射 max(dot(n,sun),0) 恒 0、天光因子 (1+dot(n,p)/r)×0.5 恒 0 → 白天全黑）。
+  // normal 必须向外 +normalize（评审 Critical：向内则直射 max(dot(n,sun),0) 恒 0、天光因子
+  // (1+dot(n,p)/r)×0.5 恒 0 → 白天全黑）。
   // 夜间地板 max()：sun/sky 双归零后乘子→0，vec3 环境底接住（乘法保地物纹理，非加法自发光）。
   // 开关 mix(u_groundLighting)：1=启用默认 / 0=旧合成（A/B 对照兼 CI 逃生门）——避免 #define 新编译组合。
-  vec3 groundLightColor = vec3(1.0);
-${o.moon ? '  vec3 moonDisc = vec3(0.0); // ground 分支保持 0（月盘只可能出自 sky 分支）\n' : ''}  vec3 finalColor;
-  if (lookingAtGround && discG > 0.0) {
-    // 地面基线：椭球面 tHitG（平滑）。
-    vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
-    vec3 groundNormal = normalize(scenePosKm);
-    float groundMuS = dot(scenePosKm, sunDirection) / length(scenePosKm);
-    // 直射项（Lambert 几何 N·L——椭球法线宏观项，地形坡度明暗归 Cesium enableLighting；乘子开启
-    // 配 lighting=0 时昼夜明暗由乘子+天光接管）× 太阳朝地表透射（GetTransmittanceToSun 含
-    // smoothstep ±太阳角半径窗，太阳沉入 -0.27° 精确归零——物理评审 B 节，与日盘落山同步）。
-    vec3 groundSunIrr = ATMOSPHERE.solar_irradiance
-      * GetTransmittanceToSun(ATMOSPHERE, transmittance_texture, length(scenePosKm), groundMuS)
-      * max(dot(groundNormal, sunDirection), 0.0);
-    // 天空间接辐照度（irradiance LUT）× 非水平面近似因子——groundNormal=radialOut 时因子恒 1。
-    // 【不直接调 runtime 的 GetSunAndSkyIrradiance】runtime.glsl:460 末尾 #define 把它重定向到 Luminance 域
-    // 4 参 Illuminance 版（参数不匹配编译错），故按其内部实现内联（GetIrradiance/
-    // GetTransmittanceToSun 均不在宏名单，安全——云侧 clouds.frag 因 include 顺序不同无此坑）。
-    vec3 groundSkyIrr = GetIrradiance(
+  // 【2026-09-02 地平线直线分界修复（mul 统一锚点）】乘子此前仅在 ground 分支内计算（锚=椭球
+  // 交点），天空分支恒 1.0——切线角（数学地平线，俯角 0.62°@488m）翻转处 mul 1.0↔黄昏小值
+  // 跳变 ×original → 地表亮度锐利直线切过山坡（用户定位 groundLighting=0 线消失）。修法=
+  // mul 锚点统一、分支前计算：discG>0 用椭球交点、discG<0（打山/天空视线）用径向脚点——
+  // 贴地场景两者太阳角差 <0.5°，mul 全屏连续，直线消失。真天空像素 original≈clearColor≈0，
+  // 乘 mul 无影响；打山像素乘 mul=暮光暗照山体（物理正确）。
+  vec3 groundLightColor;
+  {
+    vec3 mulAnchorKm = discG > 0.0
+      ? cameraPosition + rayDirection * tHitG
+      : normalize(cameraPosition) * ATMOSPHERE.bottom_radius;
+    vec3 mulNormal = normalize(mulAnchorKm);
+    float mulMuS = dot(mulAnchorKm, sunDirection) / length(mulAnchorKm);
+    vec3 mulSunIrr = ATMOSPHERE.solar_irradiance
+      * GetTransmittanceToSun(ATMOSPHERE, transmittance_texture, length(mulAnchorKm), mulMuS)
+      * max(dot(mulNormal, sunDirection), 0.0);
+    vec3 mulSkyIrr = GetIrradiance(
       ATMOSPHERE,
       irradiance_texture,
-      length(scenePosKm),
-      groundMuS
-    ) * (1.0 + dot(groundNormal, scenePosKm) / length(scenePosKm)) * 0.5;
+      length(mulAnchorKm),
+      mulMuS
+    ) * (1.0 + dot(mulNormal, mulAnchorKm) / length(mulAnchorKm)) * 0.5;
     groundLightColor = max(
-      (groundSunIrr + groundSkyIrr) / ATMOSPHERE.solar_irradiance,
+      (mulSunIrr + mulSkyIrr) / ATMOSPHERE.solar_irradiance,
       u_groundNightAmbient
     );
+  }
+${o.moon ? '  vec3 moonDisc = vec3(0.0); // ground 分支保持 0（月盘只可能出自 sky 分支）\n' : ''}  vec3 finalColor;
+  if (lookingAtGround && discG > 0.0) {
+    // 地面基线：椭球面 tHitG（平滑）。（mul 已在分支前按统一锚点计算——2026-09-02 直线修复）
+    vec3 scenePosKm = cameraPosition + rayDirection * tHitG;
     inscatter = GetSkyRadianceToPointScaled(
       cameraPosition,
       scenePosKm,
@@ -682,8 +686,10 @@ ${skyBranch}  }
   // discG>0 时用椭球交点 tHitG 充当 sceneDist 启用 fore——近地形 tHitG≈真实距离（地面≈海
   // 平面），恢复正确透视；真天空 discG<0 不进 fallback、tHitG>40km mask=0，均零影响。
   float foreDist = hasScene ? sceneDist : (discG > 0.0 ? tHitG : -1.0);
+  float foreMask = 0.0;
   if (foreDist > 0.0) {
     float mask = smoothstep(CLOSE_KM * 2.0, CLOSE_KM, foreDist);  // 近=1 远=0，过渡带 20km
+    foreMask = mask;
     if (mask > 0.0) {
       vec3 scenePosKm = cameraPosition + rayDirection * foreDist;
       vec3 foreTrans;
@@ -751,12 +757,26 @@ ${o.moon ? '    moonDisc *= limbFade; // 与太阳盘行为一致（太空视角
   finalColor = originalColor.rgb * groundLightColor * transmittance * u_groundDim + inscatter * u_inscatterScale${o.moon ? ' + moonDisc' : ''};
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
-  //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化）——
+  //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化；
+  //    8=ground/sky 分支+foreMask 9=transmittance 10=inscatter(×50 clamp)——2026-09-02 地平线直线定位）——
   // 整个级联被 if (u_debugMode < 6.5) 包裹：debug=7（>6.5）跳过所有可视化分支，直接落到末端线性输出
   //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
   // 归一化验证 HDR 承载 >1（spec §5.2/§6.3）。曾因降序级联无统一上限，debug=7 被 >4.5 分支截断输出
-  // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。
-  if (u_debugMode < 6.5) {
+  // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。8/9/10 同理外置（>7.5）。
+  if (u_debugMode < 6.5 || u_debugMode > 7.5) {
+    if (u_debugMode > 7.5) {
+      if (u_debugMode > 9.5) {
+        out_FragColor = vec4(clamp(inscatter * 50.0, 0.0, 1.0), 1.0);
+        return;
+      }
+      if (u_debugMode > 8.5) {
+        out_FragColor = vec4(transmittance, 1.0);
+        return;
+      }
+      // 8：R=ground/sky 分支（discG>0 亮）G=foreMask B=lookingAtGround
+      out_FragColor = vec4(discG > 0.0 ? 0.8 : 0.2, foreMask, lookingAtGround ? 1.0 : 0.0, 1.0);
+      return;
+    }
     if (u_debugMode > 5.5) {
       out_FragColor = originalColor;
       return;

@@ -259,20 +259,23 @@ describe('地面光色乘子 groundLightColor', () => {
     // not.toContain 不能用裸名/(\n 形态——runtime.glsl 的 #define 行与函数定义本身含之。
     // 「不得直接调 GetSunAndSkyIrradiance」由下方 glslang 真编译守门（7 参调用会撞 Illuminance
     // 重定向编译错），此处不断言。
-    expect(src).toContain('GetTransmittanceToSun(ATMOSPHERE, transmittance_texture, length(scenePosKm), groundMuS)')
+    // 【2026-09-02 地平线直线修复】锚点统一 mulAnchorKm（discG>0=椭球交点 / discG<0=径向脚点）
+    // ——原 scenePosKm 锚只在 ground 分支算、天空分支恒 1.0，切线角 mul 跳变=地表亮度直线。
+    expect(src).toContain('GetTransmittanceToSun(ATMOSPHERE, transmittance_texture, length(mulAnchorKm), mulMuS)')
     expect(src).toContain('GetIrradiance(')
     expect(src).toContain('/ ATMOSPHERE.solar_irradiance')
     // normal 向外（评审 Critical：向内则直射 max(dot(n,sun),0) 恒 0、天光因子恒 0 → 地面全黑）
-    expect(src).toContain('vec3 groundNormal = normalize(scenePosKm);')
-    expect(src).not.toContain('-normalize(scenePosKm)')
-    // 乘子只在地表锚点算（天空像素走 1.0 初始化零采样）
-    expect(src).toContain('vec3 groundLightColor = vec3(1.0);')
+    expect(src).toContain('vec3 mulNormal = normalize(mulAnchorKm);')
+    expect(src).not.toContain('-normalize(mulAnchorKm)')
+    // mul 统一锚点、分支前计算（discG<0 打山/天空视线用径向脚点锚——mul 全屏连续）
+    expect(src).toContain('vec3 mulAnchorKm = discG > 0.0')
+    expect(src).toContain('normalize(cameraPosition) * ATMOSPHERE.bottom_radius')
   })
 
   it('夜间地板：vec3 uniform + max() 乘法语义（保地物纹理，非云侧加法自发光）', () => {
     const src = build()
     expect(src).toContain('uniform vec3 u_groundNightAmbient;')
-    expect(src).toContain('max(\n      (groundSunIrr + groundSkyIrr) / ATMOSPHERE.solar_irradiance,\n      u_groundNightAmbient\n    )')
+    expect(src).toContain('max(\n      (mulSunIrr + mulSkyIrr) / ATMOSPHERE.solar_irradiance,\n      u_groundNightAmbient\n    )')
   })
 
   it('开关：u_groundLighting mix 门控（1=启用默认，0=A/B 对照兼 CI 逃生门）', () => {
