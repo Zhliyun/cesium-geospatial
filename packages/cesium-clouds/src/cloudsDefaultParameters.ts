@@ -207,6 +207,13 @@ export interface CloudsParameters {
   temporalVarianceGamma: number
   /** temporal 混合 α（默认 0.1；upscale 分支不消费，TAA 分支用——编译对齐）。 */
   temporalAlpha: number
+  /**
+   * disocclusion rejection 阈值（默认 0.5，2026-09-02 云地平线黑块修复）：resolve 采样
+   * history 后 |current.a − history.a| 超此值 = 遮挡关系翻转（云/非云跨界错采），拒绝
+   * history 直出 current。>1 恒不触发（禁用）。黑块毒源 |Δa|=1（0↔1）稳触发；云边缘
+   * 相位噪声 |Δa|<0.3 不误杀。
+   */
+  temporalDisocclusion: number
 }
 
 /**
@@ -344,8 +351,10 @@ export function defaultCloudsParameters(): CloudsParameters {
     viewReprojectionMatrix: new Matrix4(),
     temporalJitter: new Cartesian2(0.0, 0.0),
 
-    // M4 云 resolve（three CloudsResolveMaterial 默认）
+    // M4 云 resolve（three CloudsResolveMaterial 默认；temporalDisocclusion 为本项目
+    // 2026-09-02 黑块修复新增，three 无此项）
     temporalVarianceGamma: 2.0,
-    temporalAlpha: 0.1
+    temporalAlpha: 0.1,
+    temporalDisocclusion: 0.5
   }
 }

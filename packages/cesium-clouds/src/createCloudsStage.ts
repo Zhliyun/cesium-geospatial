@@ -460,7 +460,8 @@ function buildCloudsStageImpl(
         depthVelocityBuffer: cloudsPass.depthVelocityTexture,
         frame: () => params.frame,
         varianceGamma: params.temporalVarianceGamma,
-        temporalAlpha: params.temporalAlpha
+        temporalAlpha: params.temporalAlpha,
+        temporalDisocclusion: params.temporalDisocclusion
       })
     : undefined
   if (resolvePass != null) {

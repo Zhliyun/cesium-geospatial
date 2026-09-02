@@ -91,6 +91,19 @@ describe('M4 T4 CloudsResolvePass', () => {
     p.destroy()
   })
 
+  // 2026-09-02 云地平线黑块修复：disocclusion rejection 阈值 uniform 注册
+  //（默认 0.5=跨云边界 |Δa|=1 稳触发；显式覆盖透传；>1 禁用语义由 shader 比较）。
+  it('uniformMap：temporalDisocclusion 默认 0.5 + 显式覆盖透传', () => {
+    const p1 = createCloudsResolvePass(mkOpts())
+    const um1 = primitiveCalls.at(-1)!.opts.uniformMap
+    expect(um1.temporalDisocclusion()).toBe(0.5)
+    p1.destroy()
+    const p2 = createCloudsResolvePass({ ...mkOpts(), temporalDisocclusion: 1.01 })
+    const um2 = primitiveCalls.at(-1)!.opts.uniformMap
+    expect(um2.temporalDisocclusion()).toBe(1.01)
+    p2.destroy()
+  })
+
   it('swapBuffers：外壳 primitive 稳定 + resolvedTexture/history uniform 轮换（ping-pong 两轮复原）', () => {
     const opts = mkOpts()
     const p = createCloudsResolvePass(opts)

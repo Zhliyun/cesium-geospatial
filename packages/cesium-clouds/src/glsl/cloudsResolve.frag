@@ -18,6 +18,7 @@ uniform vec2 texelSize;
 uniform int frame;
 uniform float varianceGamma;
 uniform float temporalAlpha;
+uniform float temporalDisocclusion;
 uniform vec2 jitterOffset;
 
 in vec2 vUv;
@@ -97,6 +98,24 @@ void temporalUpscale(
   // clouds.
   // vec4 historyColor = textureCatmullRom(colorHistoryBuffer, prevUv);
   vec4 historyColor = texture(colorHistoryBuffer, prevUv);
+  // 【2026-09-02 云地平线黑块修复（disocclusion rejection）】四组俯冲 A/B 定位黑块源=
+  // resolve history 混合（temporal=0 / α=1 / γ=0.5 / α=0.5 全零黑块，默认参数必现）。
+  // 云海地平线深度不连续处：低分 march 读 depth 带 temporalJitter，相位轮换使部分帧被
+  // 地形深度切空（color=vec4(0)）写入 history；运动中 getClosestFragment 3×3 最近深度
+  // 取 velocity 跨界污染 → prevUv 错位 → history 采到云/非云交界无效 texel → γ=2 宽
+  // AABB（邻域亮云/透明混布方差大）剪不住 → mix(clip(history), current, 0.1) 以 90%
+  // history 权重输出暗块；1/16 currentFrame 直通 texel 露出真值 = 黑块内规则白点阵
+  // （用户截图同形态）。修法=TAA disocclusion 检测：current/history 云 alpha 差异超阈 =
+  // 遮挡关系翻转，不信任 history 直出 current（同 prevUv 越界 rejection 路径）。阈值
+  // 默认 0.5：跨云边界错采 |Δa|=1（0↔1）稳触发；云边缘正常相位噪声 |Δa|<0.3 不误杀
+  // （误杀代价仅该 texel 一帧直出=可接受）。
+  if (abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+    outputColor = currentColor;
+    #ifdef SHADOW_LENGTH
+    outputShadowLength = currentShadowLength.r;
+    #endif // SHADOW_LENGTH
+    return; // Disocclusion rejection
+  }
   vec4 clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
   // 【2026-09-02 静止收敛抖动修复】three 原文 outputColor = clippedColor 直出——variance
   // clip 的 AABB 逐帧随 current(Bayer ±2px 轮换采样)移动,history 被 clip 拉向本帧

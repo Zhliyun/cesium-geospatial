@@ -609,12 +609,17 @@ async function main(): Promise<void> {
                   // ?temporalGamma= variance clipping AABB 宽度（默认 2.0=three 同款宽 AABB；
                   // 1.0=playdead 标准值，裁错位 history 更狠）；
                   // ?temporalAlpha= 输出对 current 的直混比（默认 0.1；0=纯 history 收敛慢，
-                  // 大=更快贴 current 抖动跟着大）
+                  // 大=更快贴 current 抖动跟着大）；
+                  // ?cloudsDisocclusion= disocclusion rejection 阈值（默认 0.5=云地平线
+                  // 黑块修复；1.01=禁用对照）
                   ...(getNumber('temporalGamma') != null
                     ? { temporalVarianceGamma: getNumber('temporalGamma')! }
                     : {}),
                   ...(getNumber('temporalAlpha') != null
                     ? { temporalAlpha: getNumber('temporalAlpha')! }
+                    : {}),
+                  ...(getNumber('cloudsDisocclusion') != null
+                    ? { temporalDisocclusion: getNumber('cloudsDisocclusion')! }
                     : {})
                 }
               }

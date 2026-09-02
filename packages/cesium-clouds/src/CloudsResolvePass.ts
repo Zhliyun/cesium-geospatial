@@ -51,6 +51,11 @@ export interface CloudsResolvePassOptions {
   varianceGamma?: number
   /** temporal 混合 α（three 默认 0.1；upscale 分支不消费此值，编译进 TAA 分支）。 */
   temporalAlpha?: number
+  /**
+   * disocclusion rejection 阈值（本项目 2026-09-02 黑块修复新增，默认 0.5；>1 禁用）。
+   * |current.a − history.a| 超阈 = 遮挡关系翻转，拒绝 history 直出 current。
+   */
+  temporalDisocclusion?: number
 }
 
 /** 云 resolve Pass 句柄。 */
@@ -76,6 +81,7 @@ export function createCloudsResolvePass(
   const { context } = options
   const varianceGamma = options.varianceGamma ?? 2
   const temporalAlpha = options.temporalAlpha ?? 0.1
+  const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
 
   // history 经 texture() bilinear 采样 → LINEAR（march 输出走 texelFetch 与 filter 无关）
   const sampler = new Sampler({
@@ -105,7 +111,8 @@ export function createCloudsResolvePass(
     texelSize: () => texelSize,
     frame: options.frame,
     varianceGamma: () => varianceGamma,
-    temporalAlpha: () => temporalAlpha
+    temporalAlpha: () => temporalAlpha,
+    temporalDisocclusion: () => temporalDisocclusion
   }
 
   const fragmentShaderSource = buildCloudsResolveFragmentShader({ temporalUpscale: true })
