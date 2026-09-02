@@ -524,6 +524,56 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     pass.destroy()
   })
 
+  it('upscaleDivisor=2：MRT ceil(w/2) + resolution=lowRes*2 + mipLevelScale=0.5（涂抹修复 T1）', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
+      temporalUpscale: true,
+      upscaleDivisor: 2
+    })
+    expect(pass.marchWidth).toBe(960) // ceil(1920/2)
+    expect(pass.marchHeight).toBe(540)
+    expect(pass.colorTexture.width).toBe(960)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    const res = um.resolution() as Cartesian2
+    expect(res.x).toBe(1920) // lowRes*2 = drawingBuffer（恰整除）
+    expect(res.y).toBe(1080)
+    const tus = um.targetUvScale() as Cartesian2
+    expect(tus.x).toBe(1)
+    expect(um.mipLevelScale()).toBe(0.5) // 1/divisor
+    pass.destroy()
+  })
+
+  it('upscaleDivisor=2 且高不整除（1081）：resolution=lowRes*2=1082 + targetUvScale 修正', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    scene.context.drawingBufferHeight = 1081
+    const pass = createCloudsPass(scene, createMockLuts(), createMockWeather(), st(), {
+      temporalUpscale: true,
+      upscaleDivisor: 2
+    })
+    expect(pass.marchHeight).toBe(541) // ceil(1081/2)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect((um.resolution() as Cartesian2).y).toBe(1082)
+    expect((um.targetUvScale() as Cartesian2).y).toBeCloseTo(1082 / 1081)
+    pass.destroy()
+  })
+
+  it('upscaleDivisor 缺省=4（零回归）+ 非法值（3/0/负数）回落 4', () => {
+    vi.clearAllMocks()
+    const p4 = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
+      temporalUpscale: true
+    })
+    expect(p4.marchWidth).toBe(480)
+    p4.destroy()
+    vi.clearAllMocks()
+    const pBad = createCloudsPass(createMockScene(), createMockLuts(), createMockWeather(), st(), {
+      temporalUpscale: true,
+      upscaleDivisor: 3 as 2 | 4
+    })
+    expect(pBad.marchWidth).toBe(480) // 非法 → 4
+    pBad.destroy()
+  })
+
   it('temporalUpscale 默认 false（M3 零回归）：MRT 全分 + resolution=drawingBuffer + mipLevelScale=1 + frame 恒 0', () => {
     vi.clearAllMocks()
     const params = defaultCloudsParameters()

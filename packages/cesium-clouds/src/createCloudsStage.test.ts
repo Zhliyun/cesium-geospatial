@@ -98,6 +98,9 @@ vi.mock('./CloudsResolvePass', () => ({
       resolvedTexture: { _texture: { id: 'resolve' }, _target: 0x0de1 },
       swapBuffers: vi.fn(),
       getResolvedBridge: vi.fn(() => ({ _texture: { id: 'resolve' }, _target: 0x0de1 })),
+      // T2 运动自适应 α（2026-09-02）：onPreRender 每帧调——记录调用序列供断言
+      setTemporalAlpha: vi.fn((v: number) => { inst.lastMotionAlpha = v }),
+      lastMotionAlpha: undefined as number | undefined,
       destroy: vi.fn()
     }
     resolvePassProbe.instances.push(inst)
@@ -123,6 +126,8 @@ function createMockScene(): any {
     },
     camera: {
       positionWC: new Cartesian3(6378137, 0, 0),
+      // T2 运动自适应 α 消费 look 方向（真 camera 恒有；mock 给 +X 单位向量）
+      directionWC: new Cartesian3(1, 0, 0),
       // ECEF world 系相机位姿（three camera.matrixWorld 等价；CascadedShadowMaps 真实现消费）
       inverseViewMatrix: Matrix4.clone(Matrix4.IDENTITY),
       // M4 T7：viewMatrix（jitter reprojection 用；静止相机 mock 用 identity）
@@ -762,6 +767,34 @@ describe('M4 T7 temporal 编排', () => {
     // 再次静止 → 再冻结
     firePreRender(scene)
     expect(paramsOf(handle!)!.frame).toBe(2)
+    handle!.destroy()
+  })
+
+  // 【T2 运动自适应 α 2026-09-02】静止 α=base（0.1 收敛）；运动超阈值（FULL=300m/帧）
+  // α 单调升向 motionAlpha（0.4）——history 拖影/错位权重下降；停止后逐帧回落。
+  it('T2 运动自适应 α：静止保持 base；运动升向 motionAlpha；停止回落', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
+    const inst = resolvePassProbe.instances.at(-1)!
+    const camera = scene.camera as { positionWC: Cartesian3 }
+    // 首帧 + 静止帧：motion=0 → α 目标 base，保持 0.1
+    firePreRender(scene)
+    firePreRender(scene)
+    expect(inst.lastMotionAlpha).toBeCloseTo(0.1)
+    // 快速移动 500m（>FULL）→ α 开始上升
+    Cartesian3.add(camera.positionWC, new Cartesian3(500, 0, 0), camera.positionWC)
+    firePreRender(scene)
+    const a1 = inst.lastMotionAlpha!
+    expect(a1).toBeGreaterThan(0.1)
+    // 持续运动 → 继续逼近 0.4（单调）
+    Cartesian3.add(camera.positionWC, new Cartesian3(500, 0, 0), camera.positionWC)
+    firePreRender(scene)
+    expect(inst.lastMotionAlpha!).toBeGreaterThan(a1)
+    // 停止 → 逐帧回落（lerp 向 base）
+    firePreRender(scene)
+    const a3 = inst.lastMotionAlpha!
+    firePreRender(scene)
+    expect(inst.lastMotionAlpha!).toBeLessThan(a3)
     handle!.destroy()
   })
 

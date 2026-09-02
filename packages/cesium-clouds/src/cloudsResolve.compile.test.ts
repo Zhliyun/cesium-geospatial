@@ -77,4 +77,20 @@ describe('M4 T2 cloudsResolve.frag surgery 断言', () => {
       'temporalUpscale=false'
     )
   })
+
+  it('upscaleDivisor=2（涂抹修复 T1）：注入 #define UPSCALE_DIVISOR 2 + 2×2 Bayer 直通分支在场 + glslang 过', () => {
+    const src = buildCloudsResolveFragmentShader({ temporalUpscale: true, upscaleDivisor: 2 })
+    expect(src).toContain('#define UPSCALE_DIVISOR 2')
+    expect(src).toContain('bayerIndices2') // N=2 直通映射表
+    compileOrFail(
+      buildStandaloneCloudsResolveShaderForValidation({ temporalUpscale: true, upscaleDivisor: 2 }),
+      'upscaleDivisor=2'
+    )
+  })
+
+  it('upscaleDivisor 缺省=4：#define UPSCALE_DIVISOR 4 + N=4 分支（three 原文路径）在场', () => {
+    const src = buildCloudsResolveFragmentShader(OPTS)
+    expect(src).toContain('#define UPSCALE_DIVISOR 4')
+    expect(src).toContain('bayerIndices[coord.x % 4][coord.y % 4]')
+  })
 })

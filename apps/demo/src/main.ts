@@ -542,12 +542,20 @@ async function main(): Promise<void> {
           || cloudsQualityRaw === 'high' || cloudsQualityRaw === 'ultra'
             ? cloudsQualityRaw
             : undefined
+        // 涂抹修复 T1（2026-09-02）：?cloudsUpscale=2 march 半分（RT 面积 ×4，涂抹感约减半，
+        // 帧率代价实测）；缺省随档位（ultra=2），显式 > 档位。非法值忽略（白名单守卫同上）。
+        const cloudsUpscaleRaw = getString('cloudsUpscale')
+        const cloudsUpscale =
+          cloudsUpscaleRaw === '2' ? 2 as const
+          : cloudsUpscaleRaw === '4' ? 4 as const
+          : undefined
         const cloudsHandle = createCloudsStage(scene, luts, weather, {
           clouds: true,
           // 质量档位（spec 2026-08-29）：?cloudsQuality=low|medium|high|ultra（缺省 high=现状；
           // 白名单守卫——非法值忽略，防 Record 键 undefined 崩创建。局部 const 收窄使
           // getString 的 string|null 收敛到字面量联合，无需 as 断言）
           ...(cloudsQuality != null ? { quality: cloudsQuality } : {}),
+          ...(cloudsUpscale != null ? { upscaleDivisor: cloudsUpscale } : {}),
           ...(cloudsDebugShow != null ? { debugShow: cloudsDebugShow } : {}),
           ...(getString('cloudsShapeDetail') === '0' ? { shapeDetail: false } : {}),
           ...(getString('cloudsTurbulence') === '0' ? { turbulence: false } : {}),
@@ -620,6 +628,11 @@ async function main(): Promise<void> {
                     : {}),
                   ...(getNumber('cloudsDisocclusion') != null
                     ? { temporalDisocclusion: getNumber('cloudsDisocclusion')! }
+                    : {}),
+                  // T2 运动自适应 α（2026-09-02）：?cloudsMotionAlpha= 运动中 α 上限
+                  //（默认 0.4；= temporalAlpha 时等效禁用；静止恒 temporalAlpha 不受影响）
+                  ...(getNumber('cloudsMotionAlpha') != null
+                    ? { motionAlpha: getNumber('cloudsMotionAlpha')! }
                     : {})
                 }
               }

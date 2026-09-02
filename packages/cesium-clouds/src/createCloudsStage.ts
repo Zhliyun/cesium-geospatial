@@ -101,6 +101,8 @@ import { createCloudsResolvePass, type CloudsResolvePass } from './CloudsResolve
 import {
   computeTemporalJitter,
   buildReprojectionMatrices,
+  computeMotionAlpha,
+  MOTION_EQUIV_RADIUS_M,
   type TemporalCameraSnapshot
 } from './temporalMath'
 import { CascadedShadowMaps } from './CascadedShadowMaps'
@@ -183,6 +185,13 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * radii×5={80,168,480}km 膨胀层覆盖全程航迹）。
    */
   worldRadii?: number[]
+  /**
+   * temporal upscale 降采样分母（涂抹修复 T1，2026-09-02）：2 = march 半分（RT 面积 ×4，
+   * 细节上限 4px→2px 像素周期，涂抹感约减半；帧率代价需实测）。缺省随档位（仅 ultra=2），
+   * 无档位时 4（three 原文行为零回归）。用户显式 > 档位（spec §5 合并规则）。
+   * demo `?cloudsUpscale=2|4`。
+   */
+  upscaleDivisor?: 2 | 4
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy + setQuality。
@@ -371,7 +380,10 @@ function buildCloudsStageImpl(
     lightShafts: applied.main.lightShafts,
     shadowCascadeCount: applied.main.shadowCascadeCount,
     parameters: params,
-    temporalUpscale: temporal
+    temporalUpscale: temporal,
+    // 涂抹修复 T1（2026-09-02）：applied.upscaleDivisor 已按「用户显式 > 档位 > 4」合并——
+    // 防止 options.upscaleDivisor 原键（若有）漏档位合并，这里显式覆盖为 applied 值
+    upscaleDivisor: applied.upscaleDivisor
   })
 
   // ── ShadowPass 生成端（options.shadowPass=false 跳过——诊断基线 Beer=1）──
@@ -461,7 +473,8 @@ function buildCloudsStageImpl(
         frame: () => params.frame,
         varianceGamma: params.temporalVarianceGamma,
         temporalAlpha: params.temporalAlpha,
-        temporalDisocclusion: params.temporalDisocclusion
+        temporalDisocclusion: params.temporalDisocclusion,
+        upscaleDivisor: applied.upscaleDivisor
       })
     : undefined
   if (resolvePass != null) {
@@ -478,6 +491,9 @@ function buildCloudsStageImpl(
   let prevCamera: TemporalCameraSnapshot | undefined
   // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
   let prevCameraPos: Cartesian3 | undefined
+  // 运动自适应 α（T2，2026-09-02）：上帧 look 方向（旋转分量）+ 当前 α 状态（lerp 平滑）
+  let prevDirWC: Cartesian3 | undefined
+  let motionAlphaCurrent: number | undefined
   // 诊断冻结状态（?cloudsShadowFreeze=1）：首帧 update 过后置 true
   let matricesFrozen = false
   const onPreRender = (time: JulianDate): void => {
@@ -563,8 +579,30 @@ function buildCloudsStageImpl(
         viewMatrix: Matrix4.clone(viewMatrix, new Matrix4()),
         projectionMatrix: Matrix4.clone(projectionMatrix, new Matrix4())
       }
-      // 静止冻结判定（2026-09-02）：存上帧相机位置（下方每帧更新）
+      // ── T2 运动自适应 α（2026-09-02 涂抹+抖动修复）：此刻 prevCameraPos 仍是上帧
+      // 位置（下方才更新）——运动标量 = 平移距离 + 方向角变化 × 等效半径（旋转
+      // positionWC 不动但画面全动，必须计入）。运动中超阈值时 α 从 temporalAlpha
+      // （静止收敛值）平滑升至 motionAlpha——history 重投影错位/拖影的权重下降
+      // （快速抖动换细颗粒噪声）；停止后 lerp 回 base 收敛。首帧参考 undefined →
+      // motion=0 → α 从 base 起步（history 尚未建立，base 慢收敛更稳）。
+      const transM =
+        prevCameraPos != null ? Cartesian3.distance(camera.positionWC, prevCameraPos) : 0
+      let dirAngle = 0
+      if (prevDirWC != null) {
+        const d = Cartesian3.dot(prevDirWC, camera.directionWC)
+        dirAngle = Math.acos(Math.min(1, Math.max(-1, d)))
+      }
+      motionAlphaCurrent = computeMotionAlpha(
+        transM + dirAngle * MOTION_EQUIV_RADIUS_M,
+        params.temporalAlpha,
+        params.motionAlpha,
+        motionAlphaCurrent ?? params.temporalAlpha
+      )
+      resolvePass?.setTemporalAlpha(motionAlphaCurrent)
+
+      // 静止冻结判定（2026-09-02）：存上帧相机位置 + T2 上帧 look 方向（块末统一更新）
       prevCameraPos = Cartesian3.clone(camera.positionWC, prevCameraPos ?? new Cartesian3())
+      prevDirWC = Cartesian3.clone(camera.directionWC, prevDirWC ?? new Cartesian3())
     }
 
     // ── M3 BSM：级联矩阵更新 + 生成（sunDirection 更新后，本帧矩阵与光照一致）──

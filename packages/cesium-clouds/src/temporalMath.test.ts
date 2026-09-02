@@ -12,6 +12,7 @@ import {
   bayerOffsets,
   computeTemporalJitter,
   buildReprojectionMatrices,
+  computeMotionAlpha,
   type TemporalCameraSnapshot
 } from './temporalMath'
 
@@ -120,5 +121,42 @@ describe('M4 T1 temporalMath', () => {
     Matrix4.setColumn(expected, 2, col, expected)
     Matrix4.multiply(expected, curV, expected)
     expect(reprojectionMatrix).toEqual(expected)
+  })
+})
+
+// ── T2 运动自适应 α（2026-09-02 涂抹+抖动修复）────────────────────────────────
+describe('computeMotionAlpha（T2 运动自适应混合比）', () => {
+  const BASE = 0.1
+  const MOTION = 0.4
+
+  it('静止（motion=0）→ 目标=base，α 从 base 出发保持 base', () => {
+    expect(computeMotionAlpha(0, BASE, MOTION, BASE)).toBeCloseTo(BASE)
+  })
+
+  it('全速（motion≥FULL）→ 目标=motionAlpha；9 帧内到达 90% 以上', () => {
+    let a = BASE
+    for (let i = 0; i < 9; i++) a = computeMotionAlpha(500, BASE, MOTION, a)
+    expect(a).toBeGreaterThan(0.9 * MOTION + 0.1 * BASE)
+  })
+
+  it('中速平滑插值（smoothstep 单调、介于 base 与 motionAlpha 之间）', () => {
+    const a1 = computeMotionAlpha(150, BASE, MOTION, BASE)
+    expect(a1).toBeGreaterThan(BASE)
+    expect(a1).toBeLessThan(MOTION)
+    // 单调性：更大运动 → 更大 α（一次 lerp 后仍保序）
+    const a2 = computeMotionAlpha(250, BASE, MOTION, BASE)
+    expect(a2).toBeGreaterThan(a1)
+  })
+
+  it('lerp 平滑：目标阶跃后 α 连续逼近，单帧增量 = 25% 差距', () => {
+    const prev = BASE
+    const a = computeMotionAlpha(1e5, BASE, MOTION, prev)
+    expect(a - prev).toBeCloseTo((MOTION - prev) * 0.25, 10)
+  })
+
+  it('motionAlpha=base 时恒等于 base（等效禁用逃生门）', () => {
+    let a = BASE
+    for (let i = 0; i < 20; i++) a = computeMotionAlpha(1e5, BASE, BASE, a)
+    expect(a).toBeCloseTo(BASE)
   })
 })

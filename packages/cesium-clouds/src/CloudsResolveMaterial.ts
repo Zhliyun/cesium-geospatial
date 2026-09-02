@@ -30,12 +30,19 @@ export interface CloudsResolveOptions {
    * false 走 temporalAntialiasing（同分 TAA）分支——M4 不用，编译分支保留对齐 three。
    */
   temporalUpscale?: boolean
+  /**
+   * upscale 降采样分母（涂抹修复 T1，2026-09-02）：注入 #define UPSCALE_DIVISOR N，
+   * frag 据此选低分坐标除法与直通 Bayer 映射（2 → 2×2 块 4 相位；4 → 4×4 块 16 相位
+   * three 原文）。须与 CloudsPass options.upscaleDivisor 传同值。缺省 4 零回归。
+   */
+  upscaleDivisor?: 2 | 4
 }
 
 type ResolvedCloudsResolveOptions = Required<CloudsResolveOptions>
 
 const DEFAULTS: ResolvedCloudsResolveOptions = {
-  temporalUpscale: true
+  temporalUpscale: true,
+  upscaleDivisor: 4
 }
 
 // 文本手术：vUv 桥接 + 删 jitterOffset。锚点唯一性：`in vec2 vUv;` 一处、
@@ -64,7 +71,10 @@ export function buildCloudsResolveFragmentShader(
   options: CloudsResolveOptions = {}
 ): string {
   const o: ResolvedCloudsResolveOptions = { ...DEFAULTS, ...options }
-  const defines = [o.temporalUpscale ? '#define TEMPORAL_UPSCALE' : '']
+  const defines = [
+    o.temporalUpscale ? '#define TEMPORAL_UPSCALE' : '',
+    `#define UPSCALE_DIVISOR ${o.upscaleDivisor}`
+  ]
     .filter((s) => s.length > 0)
     .join('\n')
   const merged = [defines, surgeryCloudsResolveFrag(glslIndex.cloudsResolveFrag)].join('\n\n')

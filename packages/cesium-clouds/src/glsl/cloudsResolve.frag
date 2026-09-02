@@ -1,6 +1,13 @@
 precision highp float;
 precision highp sampler2DArray;
 
+// 【Cesium 适配扩展（涂抹修复 T1，2026-09-02）】upscale 分母缺省 4（three 原文语义）——
+// 运行时由 buildCloudsResolveFragmentShader defines 恒注入；此缺省保 raw source 独立编译
+// 可过（GLSL ES：未定义宏参与 #if 表达式是编译错）。
+#ifndef UPSCALE_DIVISOR
+#define UPSCALE_DIVISOR 4
+#endif // UPSCALE_DIVISOR
+
 #include "core/turbo"
 #include "catmullRomSampling"
 #include "varianceClipping"
@@ -46,6 +53,14 @@ const ivec4[4] bayerIndices = ivec4[4](
   ivec4(2, 14, 1, 13),
   ivec4(10, 6, 9, 5)
 );
+
+// 【Cesium 适配扩展（涂抹修复 T1，2026-09-02）】UPSCALE_DIVISOR=2：半分 march（RT 面积 ×4，
+// 细节上限 4px→2px 像素周期）下直通块从 4×4 变 2×2——16 相位 4×4 表不适用，改 2×2 Bayer
+// 4 相位表 + frame%4 直通（每像素每 4 帧直通一次，逐轮消费 march 端 16 相位 jitter 的不同
+// 真值）。N=4 路径（#else）保持 three 原文逐字，便于上游 diff。
+#if UPSCALE_DIVISOR == 2
+const int bayerIndices2[4] = int[4](0, 2, 3, 1);
+#endif // UPSCALE_DIVISOR == 2
 
 vec4 getClosestFragment(const ivec2 coord) {
   vec4 result = vec4(1e7, 0.0, 0.0, 0.0);
@@ -185,9 +200,15 @@ void main() {
   #endif // !defined(SHADOW_LENGTH)
 
   #ifdef TEMPORAL_UPSCALE
+  #if UPSCALE_DIVISOR == 2
+  ivec2 lowResCoord = coord / 2;
+  int bayerValue = bayerIndices2[(coord.y % 2) * 2 + (coord.x % 2)];
+  bool currentFrame = bayerValue == frame % 4;
+  #else // UPSCALE_DIVISOR == 2
   ivec2 lowResCoord = coord / 4;
   int bayerValue = bayerIndices[coord.x % 4][coord.y % 4];
   bool currentFrame = bayerValue == frame % 16;
+  #endif // UPSCALE_DIVISOR == 2
   temporalUpscale(coord, lowResCoord, currentFrame, outputColor, outputShadowLength);
   #else // TEMPORAL_UPSCALE
   temporalAntialiasing(coord, outputColor, outputShadowLength);

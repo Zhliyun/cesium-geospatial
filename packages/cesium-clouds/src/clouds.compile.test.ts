@@ -83,7 +83,11 @@ const ENTRY_CASES: EntryCase[] = [
   {
     name: 'cloudsResolve.frag（时域上采样 / TAA + 方差裁剪）',
     source: glslIndex.cloudsResolveFrag,
-    stage: 'frag'
+    stage: 'frag',
+    // UPSCALE_DIVISOR 必须显式注入：GLSL ES 预处理器「未定义宏参与 #if 表达式」是
+    // 编译错（es profile）——运行时由 buildCloudsResolveFragmentShader defines 恒注入，
+    // 此处对齐 N=4 缺省（T1 涂抹修复 2026-09-02）
+    defines: { UPSCALE_DIVISOR: 4 }
   },
   { name: 'cloudsResolve.vert', source: glslIndex.cloudsResolveVert, stage: 'vert' },
   {

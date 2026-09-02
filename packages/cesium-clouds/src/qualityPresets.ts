@@ -32,6 +32,12 @@ export interface ResolvedCloudsQuality {
   /** BSM 结构 + 生成端 march（spec §3 BSM 表；march 含恒定量 opticalDepthTailScale=2，
    *  来源参考库 ShadowMaterial.ts:104 而非 qualityPresets.ts——spec §3 表注）。 */
   shadow: { cascadeCount: number; mapSize: number; march: CloudsShadowMarchParameters }
+  /**
+   * temporal upscale 降采样分母（涂抹修复 T1，2026-09-02）：2 = 半分 march（RT 面积 ×4，
+   * 涂抹感约减半、帧率代价需实测）。可选——未设的档位继承缺省 4（three 原文行为）。
+   * 目前仅 ultra 设 2；用户显式 options.upscaleDivisor 优先于档位（spec §5 合并规则）。
+   */
+  upscaleDivisor?: 2 | 4
 }
 
 // high/defaults 基线（= defaultCloudsParameters 现状，spec §3「high」列）
@@ -67,10 +73,12 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
     shadow: { cascadeCount: 3, mapSize: 512, march: { ...HIGH_MARCH } }
   },
   // ultra：仅 minStepSize 50→10 + mapSize 512→1024
+  // ultra：minStepSize 50→10 + mapSize 512→1024 + march 半分（upscaleDivisor=2，涂抹修复 T1）
   ultra: {
     main: { ...HIGH_MAIN },
     params: { minStepSize: 10, shadowCascadeCount: 3 },
-    shadow: { cascadeCount: 3, mapSize: 1024, march: { ...HIGH_MARCH } }
+    shadow: { cascadeCount: 3, mapSize: 1024, march: { ...HIGH_MARCH } },
+    upscaleDivisor: 2
   }
 }
 
@@ -82,6 +90,8 @@ export interface AppliedCloudsQuality {
   params: CloudsParameters
   /** BSM 结构（mapSize 此时尚未消费——Task 4 buildImpl 接线）。 */
   shadow: { cascadeCount: number; mapSize: number }
+  /** upscale 降采样分母（解析后必有值：用户显式 > 档位 > 缺省 4）。 */
+  upscaleDivisor: 2 | 4
 }
 
 /**
@@ -136,5 +146,8 @@ export function applyQualityPreset(quality: CloudsQualityPreset, options: Clouds
   params.shadowIntervals = Array.from({ length: n }, () => new Cartesian2(0, 0))
   params.shadowMatrices = Array.from({ length: n }, () => new Matrix4())
 
-  return { main, params, shadow: { cascadeCount: n, mapSize: preset.shadow.mapSize } }
+  // upscaleDivisor：用户显式 > 档位 > 缺省 4（涂抹修复 T1；spec §5 合并规则同构）
+  const upscaleDivisor: 2 | 4 = options.upscaleDivisor ?? preset.upscaleDivisor ?? 4
+
+  return { main, params, shadow: { cascadeCount: n, mapSize: preset.shadow.mapSize }, upscaleDivisor }
 }

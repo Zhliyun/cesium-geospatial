@@ -214,6 +214,12 @@ export interface CloudsParameters {
    * 相位噪声 |Δa|<0.3 不误杀。
    */
   temporalDisocclusion: number
+  /**
+   * 运动中 α 上限（默认 0.4，2026-09-02 运动自适应混合比）：相机运动标量超阈值时
+   * resolve 的 temporalAlpha 从 temporalAlpha（静止收敛值）平滑升至本值——history
+   * 拖影/重投影错位权重下降（抖动换细颗粒）。= temporalAlpha 时等效禁用。
+   */
+  motionAlpha: number
 }
 
 /**
@@ -355,6 +361,7 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 2026-09-02 黑块修复新增，three 无此项）
     temporalVarianceGamma: 2.0,
     temporalAlpha: 0.1,
-    temporalDisocclusion: 0.5
+    temporalDisocclusion: 0.5,
+    motionAlpha: 0.4
   }
 }

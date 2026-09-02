@@ -138,6 +138,13 @@ export interface CloudsPassOptions extends CloudsMainOptions {
    * mipLevelScale=0.25/viewport 全部切低分语义，velocity 写 att1 供 CloudsResolvePass。
    */
   temporalUpscale?: boolean
+  /**
+   * temporal upscale 的降采样分母（涂抹修复 T1，2026-09-02）：2 = march 半分（RT 面积 ×4，
+   * 细节上限 4px→2px 周期，涂抹感约减半）；缺省/非法值 = 4（three 原文 1/4 行为零回归）。
+   * resolve 侧 shader 宏（UPSCALE_DIVISOR）与直通 Bayer 映射同源——须与 CloudsResolvePass
+   * options.upscaleDivisor 传同值。
+   */
+  upscaleDivisor?: 2 | 4
 }
 
 /**
@@ -298,12 +305,14 @@ export function createCloudsPass(
   const params = options.parameters ?? defaultCloudsParameters()
   const width = context.drawingBufferWidth || 256
   const height = context.drawingBufferHeight || 256
-  // M4 T6（plan D3）：temporal 时 march 降到 ceil(w/4)（three CloudsPass.setSize 的
-  // temporalUpscale 分支同款）；ceil 保证 4 的整倍数上取，march 的 resolution = lowRes*4
-  //（4 对齐「全分等效」）可能略超 drawingBuffer → targetUvScale < 1 修正 depth 采样域。
+  // M4 T6（plan D3）：temporal 时 march 降到 ceil(w/divisor)（three CloudsPass.setSize 的
+  // temporalUpscale 分支同款，divisor=4 原文语义）；ceil 保证整倍数上取，march 的 resolution =
+  // lowRes*divisor（对齐「全分等效」）可能略超 drawingBuffer → targetUvScale < 1 修正 depth 采样域。
+  // T1（2026-09-02）：divisor 可选 2（半分 march，涂抹感约减半）——缺省/非法回落 4 零回归。
   const temporalUpscale = options.temporalUpscale === true
-  const marchWidth = temporalUpscale ? Math.ceil(width / 4) : width
-  const marchHeight = temporalUpscale ? Math.ceil(height / 4) : height
+  const upscaleDivisor = options.upscaleDivisor === 2 ? 2 : 4
+  const marchWidth = temporalUpscale ? Math.ceil(width / upscaleDivisor) : width
+  const marchHeight = temporalUpscale ? Math.ceil(height / upscaleDivisor) : height
 
   // ── HDR pixel datatype 检测（内联，对齐 core resolvePostHdrDatatype）──
   // colorTex 需 HDR 承载线性云 radiance（applyAerialPerspective 输出线性 >1 段）；depthVel/shadowLen
@@ -404,11 +413,11 @@ export function createCloudsPass(
   // |positionWC| 地心距——赤道海平面地心距 6.378e6 ≠ 测地高 0，会错走「相机在云上方」分支）。
   const cameraHeight = (): number => scene.camera.positionCartographic.height
   // resolution scratch：闭包持 module-scratch Cartesian2（避免每帧分配，仿 lensflare texelSizeForSourceScale）。
-  // M4 T6（plan D3/D10）：temporal 时 resolution = lowRes*4（4 对齐全分等效——three 语义：
-  // 噪声种子 gl_FragCoord+jitter*resolution 的量纲基底、ray 重建 jitter 偏移基底）；
-  // 非 temporal = drawingBuffer（M2 语义）。
-  const resolutionFullW = temporalUpscale ? marchWidth * 4 : width
-  const resolutionFullH = temporalUpscale ? marchHeight * 4 : height
+  // M4 T6（plan D3/D10）：temporal 时 resolution = lowRes*divisor（对齐全分等效——three 语义：
+  // 噪声种子 gl_FragCoord+jitter*resolution 的量纲基底、ray 重建 jitter 偏移基底；
+  // T1 起 divisor 可为 2）；非 temporal = drawingBuffer（M2 语义）。
+  const resolutionFullW = temporalUpscale ? marchWidth * upscaleDivisor : width
+  const resolutionFullH = temporalUpscale ? marchHeight * upscaleDivisor : height
   const resolutionScratch = new Cartesian2(resolutionFullW, resolutionFullH)
   const resolution = (): Cartesian2 => {
     resolutionScratch.x = resolutionFullW
@@ -416,12 +425,12 @@ export function createCloudsPass(
     return resolutionScratch
   }
 
-  // M4 T6：temporal 时 targetUvScale = lowRes*4/drawingBuffer（低分 UV → 全分 depth 纹理
-  // 子区域；ceil 后 *4 可能 > 全分故 <1——three CloudsMaterial.setSize 同款修正）、
-  // mipLevelScale = 0.25（低分 march 采样 weather 提 mip 2 级）。
+  // M4 T6：temporal 时 targetUvScale = lowRes*divisor/drawingBuffer（低分 UV → 全分 depth 纹理
+  // 子区域；ceil 后 *divisor 可能 > 全分故 <1——three CloudsMaterial.setSize 同款修正）、
+  // mipLevelScale = 1/divisor（低分 march 采样 weather 提对应 mip 级）。
   const targetUvScaleTemporal = new Cartesian2(
-    (marchWidth * 4) / width,
-    (marchHeight * 4) / height
+    (marchWidth * upscaleDivisor) / width,
+    (marchHeight * upscaleDivisor) / height
   )
 
   const uniformMap: { [name: string]: () => unknown } = {
@@ -435,7 +444,7 @@ export function createCloudsPass(
     cameraHeight,
     resolution,
     targetUvScale: () => (temporalUpscale ? targetUvScaleTemporal : params.targetUvScale),
-    mipLevelScale: () => (temporalUpscale ? 0.25 : params.mipLevelScale),
+    mipLevelScale: () => (temporalUpscale ? 1 / upscaleDivisor : params.mipLevelScale),
 
     // 主 raymarch
     maxIterationCount: () => params.maxIterationCount,

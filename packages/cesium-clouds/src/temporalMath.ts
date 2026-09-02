@@ -103,3 +103,40 @@ export function buildReprojectionMatrices(
     result.viewReprojectionMatrix
   )
 }
+
+// ── T2 运动自适应 α（2026-09-02 涂抹+抖动修复）────────────────────────────────
+// 相机运动中 resolve 的 history 重投影错位（低分 velocity 误差）+ 直通像素块内轮换 =
+// 「快速抖动」感知源；history 权重（1-α）越高拖影/错位越持久。运动中把 α 升高
+// → 输出更贴本帧低分 march（拖影换细颗粒噪声，感知更稳）；静止回到 base α 收敛。
+// 阈值单位 m/帧（30m/帧 ≈ 1800m/s @60fps 的快速平移量级）。
+/** 运动启动阈值（m/帧）：低于此值视为静止/微动，α 保持 base（保护静止收敛）。 */
+export const MOTION_ALPHA_START_M = 1
+/** 全速阈值（m/帧）：高于此值 α 直达 motionAlpha 上限。 */
+export const MOTION_ALPHA_FULL_M = 300
+/** 旋转→等效平移换算半径（m/弧度）：方向变化 1 弧度 ≈ 5km 等效位移（云距量级）。 */
+export const MOTION_EQUIV_RADIUS_M = 5000
+/** 每帧 α 向目标的 lerp 系数：0.25 → 约 9 帧到达 95%，防 α 阶跃本身引入闪动。 */
+export const MOTION_ALPHA_LERP = 0.25
+
+/**
+ * 运动标量（m/帧）→ 本帧 α（含向目标的 lerp 平滑）。
+ *
+ * @param motionM 运动标量（平移距离 + 方向角变化 × MOTION_EQUIV_RADIUS_M）。
+ * @param baseAlpha 静止 α（= params.temporalAlpha，缺省 0.1）。
+ * @param motionAlpha 运动中 α 上限（= params.motionAlpha，缺省 0.4）。
+ * @param prevAlpha 上帧输出 α（首帧传 baseAlpha）。
+ */
+export function computeMotionAlpha(
+  motionM: number,
+  baseAlpha: number,
+  motionAlpha: number,
+  prevAlpha: number
+): number {
+  const t = Math.min(
+    1,
+    Math.max(0, (motionM - MOTION_ALPHA_START_M) / (MOTION_ALPHA_FULL_M - MOTION_ALPHA_START_M))
+  )
+  const smooth = t * t * (3 - 2 * t) // smoothstep
+  const target = baseAlpha + (motionAlpha - baseAlpha) * smooth
+  return prevAlpha + (target - prevAlpha) * MOTION_ALPHA_LERP
+}

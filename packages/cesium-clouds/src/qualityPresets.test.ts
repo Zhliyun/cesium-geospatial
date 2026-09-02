@@ -49,11 +49,14 @@ describe('cloudsQualityPresets 档位表（spec §3 逐字对齐）', () => {
       march: { ...d.shadowMarch }
     })
   })
-  it('ultra：仅 minStepSize 50→10 + mapSize 1024（其余 = high）', () => {
+  it('ultra：minStepSize 50→10 + mapSize 1024 + upscaleDivisor 4→2（涂抹修复 T1；其余 = high）', () => {
     const p = cloudsQualityPresets.ultra
     expect(p.params).toMatchObject({ minStepSize: 10, shadowCascadeCount: 3 })
     expect(p.shadow).toEqual({ ...cloudsQualityPresets.high.shadow, mapSize: 1024 })
     expect(p.main).toEqual(cloudsQualityPresets.high.main)
+    expect(p.upscaleDivisor).toBe(2)
+    // 其余档不设（undefined → 默认 4）——high 现状零回归
+    expect(cloudsQualityPresets.high.upscaleDivisor).toBeUndefined()
   })
 })
 
@@ -70,6 +73,12 @@ describe('applyQualityPreset 合并语义（spec §5）', () => {
     expect(r.params.maxIterationCountToGround).toBe(d.maxIterationCountToGround)
     expect(r.params.shadowCascadeCount).toBe(3)
     expect(r.shadow).toEqual({ cascadeCount: 3, mapSize: 512 })
+  })
+  it('upscaleDivisor 合并：ultra 档默认 2；用户显式 > 档位；其余档 = 4（涂抹修复 T1）', () => {
+    expect(applyQualityPreset('ultra', {}).upscaleDivisor).toBe(2)
+    expect(applyQualityPreset('high', {}).upscaleDivisor).toBe(4)
+    expect(applyQualityPreset('ultra', { upscaleDivisor: 4 }).upscaleDivisor).toBe(4) // 用户显式优先
+    expect(applyQualityPreset('high', { upscaleDivisor: 2 }).upscaleDivisor).toBe(2)
   })
   it('low：params 生效 + dummy 数组按 cascadeCount 截断（spec §4）', () => {
     const r = applyQualityPreset('low', {})

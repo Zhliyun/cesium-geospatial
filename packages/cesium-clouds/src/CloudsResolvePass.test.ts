@@ -134,4 +134,24 @@ describe('M4 T4 CloudsResolvePass', () => {
     expect(internalB.destroy).toHaveBeenCalledTimes(1)
     expect((p.resolvedTexture as any).destroy).toHaveBeenCalledTimes(1)
   })
+
+  it('upscaleDivisor=2（涂抹修复 T1）：fragmentShaderSource 注入 #define UPSCALE_DIVISOR 2；缺省=4', () => {
+    const p2 = createCloudsResolvePass({ ...mkOpts(), upscaleDivisor: 2 })
+    expect(primitiveCalls.at(-1)!.opts.fragmentShaderSource).toContain('#define UPSCALE_DIVISOR 2')
+    p2.destroy()
+    const p4 = createCloudsResolvePass(mkOpts())
+    expect(primitiveCalls.at(-1)!.opts.fragmentShaderSource).toContain('#define UPSCALE_DIVISOR 4')
+    p4.destroy()
+  })
+
+  it('setTemporalAlpha 动态生效（运动自适应 T2）：uniformMap 闭包读最新值', () => {
+    const p = createCloudsResolvePass(mkOpts())
+    const um = primitiveCalls.at(-1)!.opts.uniformMap
+    expect(um.temporalAlpha()).toBe(0.1)
+    p.setTemporalAlpha(0.4)
+    expect(um.temporalAlpha()).toBe(0.4)
+    p.setTemporalAlpha(0.1)
+    expect(um.temporalAlpha()).toBe(0.1)
+    p.destroy()
+  })
 })

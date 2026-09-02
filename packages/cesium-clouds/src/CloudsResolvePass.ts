@@ -56,6 +56,11 @@ export interface CloudsResolvePassOptions {
    * |current.a − history.a| 超阈 = 遮挡关系翻转，拒绝 history 直出 current。
    */
   temporalDisocclusion?: number
+  /**
+   * upscale 降采样分母（涂抹修复 T1，2026-09-02）：注入 resolve shader 宏 UPSCALE_DIVISOR，
+   * 须与 CloudsPass options.upscaleDivisor 传同值。缺省 4 零回归。
+   */
+  upscaleDivisor?: 2 | 4
 }
 
 /** 云 resolve Pass 句柄。 */
@@ -64,10 +69,16 @@ export interface CloudsResolvePass {
   readonly resolvedTexture: Texture
   /** 稳定外壳 primitive（createCloudsStage add 到 scene.primitives，在 march 之后；swap 不换引用）。 */
   readonly primitive: VolumetricPrimitive
-  /** resolve↔history 交换（preRender 开头调；三引用轮换：resolvePrim/primB/两 Texture）。 */
+  /** resolve↔history 交换（preRender 开头调；三引用轮换：resolvePrim/primB 与两 Texture）。 */
   swapBuffers(): void
   /** resolve 输出的 bridge（{_texture,_target}——overlay u_cloudsBuffer 用，temporal 开启时）。 */
   getResolvedBridge(): { _texture: unknown; _target: number }
+  /**
+   * 动态改 temporal α（运动自适应 T2，2026-09-02）：uniformMap 闭包每帧读最新值，
+   * 下一 resolve draw 即生效。静止收敛用小 α、相机运动中用大 α——由 createCloudsStage
+   * preRender 按相机速度驱动。
+   */
+  setTemporalAlpha(value: number): void
   /** 释放：双内部 primitive（各含 FBO）+ 双 Texture。幂等。 */
   destroy(): void
 }
@@ -80,8 +91,10 @@ export function createCloudsResolvePass(
 ): CloudsResolvePass {
   const { context } = options
   const varianceGamma = options.varianceGamma ?? 2
-  const temporalAlpha = options.temporalAlpha ?? 0.1
+  // T2（2026-09-02）：α 由 const 改 let——setTemporalAlpha 每帧改写，uniformMap 闭包读最新值
+  let temporalAlpha = options.temporalAlpha ?? 0.1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
+  const upscaleDivisor = options.upscaleDivisor === 2 ? 2 : 4
 
   // history 经 texture() bilinear 采样 → LINEAR（march 输出走 texelFetch 与 filter 无关）
   const sampler = new Sampler({
@@ -115,7 +128,10 @@ export function createCloudsResolvePass(
     temporalDisocclusion: () => temporalDisocclusion
   }
 
-  const fragmentShaderSource = buildCloudsResolveFragmentShader({ temporalUpscale: true })
+  const fragmentShaderSource = buildCloudsResolveFragmentShader({
+    temporalUpscale: true,
+    upscaleDivisor
+  })
   // ⚠️ viewport 必须显式 = 全分：RenderState.viewport 为 undefined 时 Cesium 不动 GL viewport
   //（保持上一个 draw 遗留值）——resolve 跟在低分 march 后执行会继承 march 的低分 viewport，
   // 只在全分纹理左下角 1/16 区域写入（实测 M4：resolveTex 其余全 0、云整体消失）。
@@ -170,6 +186,9 @@ export function createCloudsResolvePass(
     getResolvedBridge(): { _texture: unknown; _target: number } {
       const internal = resolveTex as unknown as { _texture: unknown; _target: number }
       return { _texture: internal._texture, _target: internal._target }
+    },
+    setTemporalAlpha(value: number): void {
+      temporalAlpha = value
     },
     destroy(): void {
       shell.destroy()
