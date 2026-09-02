@@ -98,6 +98,9 @@ async function main(): Promise<void> {
 
   const viewer = new Viewer('cesium', {
     baseLayer: false, // 不走默认 Bing 影像（需 token 早设）；atmosphere 模式异步 add
+    // credit（Cesium ion logo/Upgrade/Data attribution）进不挂 DOM 的容器——验收 demo
+    // 不显示归责信息。⚠️ 产品化若使用 Cesium ion 服务需按条款在应用中保留 attribution。
+    creditContainer: document.createElement('div'),
     baseLayerPicker: false,
     geocoder: false,
     homeButton: false,
