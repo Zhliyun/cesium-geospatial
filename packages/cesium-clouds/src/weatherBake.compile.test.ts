@@ -26,14 +26,15 @@ describe('weatherBake.frag 编译（spec §5.1/§5.2）', () => {
     expect(ok).toBe(true)
   })
 
-  it('含周期化铁律要素：u_slice 时间维、圆环演化、a 通道恒 1', () => {
+  it('含周期化铁律要素：u_slice 时间维、圆环演化、extra 通道旧图语义', () => {
     const src = glslIndex.weatherBakeFrag
     expect(src).toContain('u_slice')
     expect(src).toContain('Z_CYCLES')
     expect(src).toContain('W_CYCLES')
-    // 第 4 通道恒 1（spec §4.6 死值语义）——断言对齐 shader 实际形态（vec4 构造尾参 1.0，
-    // 同 preflight 对 bakePoint 断言「按实际代码形态修」同一原则）
-    expect(src).toContain('outputColor = vec4(low, mid, high, 1.0)')
+    // 第 4 通道 = extra（对齐旧图 localWeather.frag extra 语义）。spec §4.6「a 恒 1」
+    // 已被 T8 证伪（旧 PNG 资产 A 有真实分布 mean 0.415；旧 shader 尾部 a=1.0 覆盖系后加、
+    // 与资产失同步）——断言随 spec 修订同步（§4.6 勘误待 T9）。
+    expect(src).toContain('outputColor = vec4(low, mid, high, extra)')
     // 复合顺序钉死（spec §5.2）：演化偏移在 warp 之后（pw 已含 p）
     expect(src).toContain('vec3 bakePoint = vec3(pw + ringOffset')
   })
@@ -59,5 +60,17 @@ describe('weatherBake.frag 编译（spec §5.1/§5.2）', () => {
     expect(src).toContain('low = clamp(low - mid, 0.0, 1.0)')
     // 「独立+max」组合不得回归（max 一旦回归，联合覆盖重新撑爆调制链）
     expect(src).not.toContain('mid = max(mid, low)')
+  })
+
+  it('评审修复钉死（fix round 3）：B 去双重放大 + A 恢复旧图 extra 语义', () => {
+    const src = glslIndex.weatherBakeFrag
+    // T8 实证 B 通道双重放大：perlin.glsl 末行已含内部 2.2×（return 2.2 * n_xyzw），
+    // 外层再乘 → 40.7% 像素 >0.9（旧图 2.1%）→ 饱和白雾主源。对齐旧图直采（无外层系数）。
+    expect(src).toContain('high = smoothstep(-0.5, 0.5, high)')
+    expect(src).not.toContain('high * 2.2')
+    // A 通道对齐旧图 extra 逐字（freq 32 / 4 octaves / 相位 (-19.1,33.4,47.2)，
+    // tileableNoise.glsl:86 重载）——「a 恒 1」前提被资产实测推翻（见上用例注释）。
+    expect(src).toContain('getPerlinNoise(bakePoint + vec3(-19.1, 33.4, 47.2), 32.0, 4)')
+    expect(src).not.toContain('outputColor.a = 1.0')
   })
 })

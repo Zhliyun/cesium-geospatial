@@ -10,7 +10,9 @@
 //  - 圆环漂移（辅助低频分量）：ringOffset = R×(cos,sin)(2π·u_slice)。
 //  - 复合顺序钉死：F(p + warp(p) + ringOffset)——warp 作用于未平移 p（反向复合=纯
 //    刚体平移零形变，spec BLOCKER 修订）。
-//  - 第 4 通道恒 1（现状 local_weather.png 死值语义，spec §4.6）。
+//  - 第 4 通道 = extra（对齐旧图 localWeather.frag extra 语义，freq 32/4 octaves——T8 实证
+//    旧 PNG 资产 A 有真实分布 mean 0.415，旧 shader 尾部 outputColor.a=1.0 覆盖系后加、
+//    与资产失同步；spec §4.6「a 恒 1」前提作废，修订待 T9 勘误）。
 precision highp float;
 precision highp int;
 
@@ -106,7 +108,17 @@ void main() {
     vec4(bakePoint.xy * vec2(6.0, 12.0), 0.0, wPhase + 0.3),
     vec4(6.0, 12.0, 1.0, W_CYCLES)
   );
-  high = smoothstep(-0.5, 0.5, high * 2.2); // perlin 输出约 ±0.45（perlin.glsl:210 语义）
+  // 直采不加外层系数——perlin.glsl 末行已含内部 2.2×（return 2.2 * n_xyzw），外层再乘即
+  // 双重放大（T8 实测 40.7% 像素 >0.9 vs 旧图 2.1%，白雾主源；旧图同为直采+smoothstep）。
+  high = smoothstep(-0.5, 0.5, high);
 
-  outputColor = vec4(low, mid, high, 1.0);
+  // Extra/第 4 通道（对齐旧图 localWeather.frag extra 逐字：freq 32.0 / 4 octaves /
+  // 相位 (-19.1,33.4,47.2)，getPerlinNoise 重载在 tileableNoise.glsl:86）。
+  // 采样点用 bakePoint（非旧图静态 vec3(vUv,0)）：A 与 low/mid 同域随 atlas 时间维演化，
+  // 防 A 静止成跨切片 ghost overlay；zPhase 经 rep=freq 周期 z 轴无缝环回（Z_CYCLES=4
+  // 整数周期闭合，与本体铁律同款）。
+  float extra = getPerlinNoise(bakePoint + vec3(-19.1, 33.4, 47.2), 32.0, 4);
+  extra = smoothstep(-0.5, 0.5, extra);
+
+  outputColor = vec4(low, mid, high, extra);
 }
