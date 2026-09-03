@@ -218,3 +218,40 @@ dispatch 修复（方案 A：`usePngFallback` 显式 escape × `pngFallback` 纯
 
 - 截图：`apps/demo/verify-artifacts/r2-*.png`（baked/wrap 8km+62km 对照、side 并排×2、phase 系列、wind1000 系列、repeat1、seed1、cov01、noshadow 对照）
 - 脚本：`verify-clouds-distribution.mjs` 新增 `bake` 命令（headed 烘焙耗时，16ms 轮询 `__cloudsStage` 就绪时刻对照）+ smoke atlasMode 推断更新
+
+---
+
+# 终测（dd6ef21 挖除语义 + f0926b0 repeat 联动后，2026-09-03）
+
+## 六项判定一行式
+
+| 项 | 判定 | 核心数据 |
+|---|---|---|
+| 1 B5 白雾消除 | **FAIL（修复未触达主源）** | r3-baked 与 r2-baked **逐斑同雾**（diff 2.3% maxDelta 20=环境噪声级；rows 1.359 vs 1.360）。挖除修复只改 R 通道，雾源在 B/A——见「白雾终局定位」 |
+| 2 B8 预设单调性 | **FAIL（崩坏为全档无差异）** | clear/fair/cloudy cloudFrac **逐位同 0.3020**（meanLum 差<0.02）、overcast 反而最低 0.1139。雾底支配一切预设调制，反序判定已无意义 |
+| 3 seed 疑点 | **实锤真 bug（JS 传递链断）** | 独立 WebGL2 环境（同组装管线、真实 bakeSeedToOffset）：seed 1 vs 1337 产物 **99.6% 去相关**（meanAbs 144、maxDelta 255）——烘焙数学正常；实机 cloudsSeed=1 vs 1337 渲染 diff 仅 0.086% 逐斑同图（r3-seed1 复测维持）→ demo→stage→atlas 的 seed 传递或 u_seedOffset uniform 注入断 |
+| 4 windOffset 疑点 | **无法终判（雾压制维持）** | phase 0 vs 9000 diff 0.13%（与上轮 0.14% 一致）；独立读回证明层间内容真实波动（B 通道层均 0.35-0.60）——演化层差存在但实机不可见 |
+| 5 repeat 联动 | **接线有迹象、无法终判（雾压制）** | cloudsWeatherRepeat=20 vs 100 diff 1.48%、rows 1.385 vs 1.359（上轮 repeat=1 时 2%/1.368 几乎无感——f0926b0 联动有变化但远小于「云团尺度 5×」应有的画面级差异，雾底不随 uv×repeat 变化稀释了差值） |
+| 6 全套件 | **PASS** | vitest 294/294（19 文件）+ tsc 干净（四轮修复后总状态） |
+
+## 白雾终局定位（独立 WebGL2 读回实锤，雾源=烘焙 B/A 通道）
+
+方法：playwright 裸 WebGL2 + dev server 真实组装管线（`buildStandaloneWeatherBakeShader`，含 unrollLoops/compat 完整变换）独立渲染烘焙 shader → readPixels 逐通道直方图，对照 `local_weather.png`（escape 旧图，同一采样链下有清晰云结构）：
+
+| 通道 | 旧 png mean / hiFrac(>0.9) | 烘焙 mean / hiFrac | 结论 |
+|---|---|---|---|
+| R=L0 low | 0.278 / 1.2% | 0.208 / 0% | 挖除修复生效、分布健康（更低更稀疏） |
+| G=L1 mid | 0.160 / 0.4% | 0.094 / 0.1% | 健康 |
+| **B=L2 high** | **0.500 / 2.1%** | **0.598 / 40.7%** | **雾源①：smoothstep(-0.5,0.5,perlin×2.2) 输出近半像素饱和 → 卷云层满格白雾** |
+| **A=L3** | **0.415（真实分布，loFrac 8.6%）** | **1.000 恒定** | **雾源②：烘焙 A 恒 1 → L3 恒满格** |
+
+**排除项（重要）**：白雾≠march/coverage/气候带 bug——同一采样调制链旧图有结构；也≠烘焙整体饱和——R/G 通道分布健康。**64 层内容真实独立**（B 通道层均 0.35↔0.60 波动；slice 0 vs 63 相近=闭合铁律成立）。
+
+**spec §4.6 事实修正**：「localWeather.frag:82 无条件 =1.0 死值」的判断**对 png 资产不成立**——资产 A 通道 mean 0.415 有真实分布。烘焙 `outputColor=vec4(low,mid,high,1)`（weatherBake.frag:108）把 L3 变成恒满格层。**A 通道「保持 1 不激活」的设计前提需重审**。
+
+**修复方向（T3 拍板，本验收不自行改）**：①B 通道重标定——gain 2.2 降至 perlin 输出不饱和（旧图 hiFrac 2% 为目标分布）；②A 通道——恢复第 4 层真实内容（worley 或 high 减弱版），勿恒 1。修后重测：B5 白雾、B8 单调性、seed/windOffset/phase/repeat 全部弱响应项（雾底消除后才能真正显形）。
+
+## 产物
+
+- `r3-*.png`：baked/wrap 8km 对照+side、seed1、phase9000、repeat20、四预设
+- 独立读回脚本（tmp，不入库）：bake-readback.mjs（直方图）、seed-verdict.mjs（seed 判定）、png-hist.mjs（旧图对照）
