@@ -54,6 +54,12 @@ export interface CloudsShadowFrameState {
   bsm: Texture3D | undefined
 }
 
+/** 气候带 band 下限缺省值（= 原 clouds.glsl clamp 字面量 0.2——u_climateBandsFloor 缺省零回归）。 */
+export const CLIMATE_BANDS_FLOOR_DEFAULT = 0.2
+/** 气候带 band 下限预设值（spec §5.4 组合语义：天气预设激活时 clamp ≥0.6——「阴天」预设 ×
+ *  副热带谷不退化为近晴空；setWeatherPreset 写 state.climateBandsFloor，清除恢复缺省）。 */
+export const CLIMATE_BANDS_FLOOR_PRESET = 0.6
+
 /**
  * M2 clouds 业务 uniform 默认值（flat，struct 已 const 注入）。
  *
@@ -146,6 +152,8 @@ export interface CloudsParameters {
 
   // ── weather/shape（uniforms.ts + CloudsEffect 默认）──
   coverage: number
+  /** 气候带强度（T6，spec §5.4/§6.1）：u_climateBands——0=关（纯随机分布）、1=默认全带。 */
+  climateBands: number
   localWeatherRepeat: Cartesian2
   localWeatherOffset: Cartesian2
   shapeRepeat: Cartesian3
@@ -300,6 +308,8 @@ export function defaultCloudsParameters(): CloudsParameters {
 
     // weather/shape（uniforms.ts:54 + CloudsEffect.ts:180-186）
     coverage: 0.3,
+    // 气候带强度（T6，spec §5.4）：1=默认全带（ITCZ 峰/副热带谷/风暴带/极地衰减）；0=关
+    climateBands: 1.0,
     localWeatherRepeat: new Cartesian2(100.0, 100.0),
     localWeatherOffset: new Cartesian2(0.0, 0.0),
     shapeRepeat: new Cartesian3(0.0003, 0.0003, 0.0003),

@@ -28,6 +28,7 @@ uniform vec2 u_windOffset;      // 平流偏移，tile 单位 mod 1，加在 uv�
 uniform float u_atlasT;         // 演化相位 tNorm ∈[0,1)，3D 纹理 z 坐标
 uniform float u_itczCenterSin;  // ITCZ 中心纬度正弦（CPU 按 doy 公式算）
 uniform float u_climateBands;   // 气候带强度 0=关 1=默认（spec §6.1）
+uniform float u_climateBandsFloor; // band 下限 clamp（T6 spec §5.4：预设激活 0.6/缺省 0.2，CPU 侧 setWeatherPreset 驱动）
 uniform sampler3D shapeTexture;
 uniform vec3 shapeRepeat;
 uniform vec3 shapeOffset;

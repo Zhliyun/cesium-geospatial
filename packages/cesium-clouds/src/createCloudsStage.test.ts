@@ -40,7 +40,9 @@ vi.mock('cesium', async (importOriginal) => {
       Object.assign(this, opts)
     },
     // Texture mock（M3 T5）：真构造走 ContextLimits.maximumTextureSize（node 无 GL 为 0）——
-    // 同 CloudsPass.test.ts 范式仅 mock WebGL-touching 类（shadow turbulence dummy 用）
+    // 同 CloudsPass.test.ts 范式仅 mock WebGL-touching 类（shadow turbulence dummy 用）。
+    // T6：Texture3D 同款 mock——atlasDisabled 无 raw 的降级 dummy 在 buildImpl 内 new Texture3D
+    //（真实构造走 context._gl，node 无 GL 会炸）。
     Texture: function (this: any, opts: any) {
       this.width = opts.width
       this.height = opts.height
@@ -49,7 +51,49 @@ vi.mock('cesium', async (importOriginal) => {
       this.source = opts.source
       this.destroy = vi.fn()
       textureProbe.instances.push(this)
+    },
+    Texture3D: function (this: any, opts: any) {
+      this.width = opts.width
+      this.height = opts.height
+      this.depth = opts.depth
+      this.pixelFormat = opts.pixelFormat
+      this.pixelDatatype = opts.pixelDatatype
+      this.source = opts.source
+      this.destroy = vi.fn()
     }
+  }
+})
+
+// vi.mock('./WeatherAtlas')：T6 编排验证——createWeatherAtlas 调用参数（烘焙输入/escape
+// fallback 透传）+ plan 消费（preRender 时间轴）+ dispose 生命周期。WeatherAtlas 自身已在
+// WeatherAtlas.test.ts 直测。importOriginal 保留 resolveWeatherAtlasPlan 纯函数（skip 路径
+// 时间轴默认 plan 单源）。
+const weatherAtlasProbe = { calls: [] as any[], instances: [] as any[] }
+vi.mock('./WeatherAtlas', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  return {
+    ...actual,
+    createWeatherAtlas: vi.fn((opts: any) => {
+      weatherAtlasProbe.calls.push(opts)
+      const fallback = opts.pngFallback != null
+      const inst = {
+        // tag 恒定（不带计数）：JSON 装配对拍用例（「quality 缺省：装配传参与显式 high 逐字
+        // 一致」）序列化 state.atlasTexture——实例身份由对象引用区分，无需唯一 tag
+        atlasTexture: { tag: 'atlas' },
+        mode: fallback ? 'pngFallback' : 'baked',
+        plan: {
+          evolutionPeriodS: (opts.evolutionHours ?? 5.3) * 3600,
+          windMps: opts.windMps ?? 8,
+          seed: opts.seed ?? 1337,
+          weatherRepeat: opts.weatherRepeat ?? 100,
+          tileKm: (40075.017 / 4) / (opts.weatherRepeat ?? 100),
+          usePngFallback: fallback
+        },
+        dispose: vi.fn()
+      }
+      weatherAtlasProbe.instances.push(inst)
+      return inst
+    })
   }
 })
 
@@ -1221,5 +1265,297 @@ describe('月光接线（spec r2 §6.5）', () => {
     )
     expect(stateArg.moonIlluminatedFraction).toBeCloseTo(expected, 12)
     handle!.destroy()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T6 WeatherAtlas 集成（spec §4/§6）：Atlas 创建接线（烘焙/escape）/altitudeOffset 派生链
+// （红队 BLOCKER-4）/preRender 时间轴（T1 纯函数 CPU float64 mod）/天气预设热切（spec §5.4
+// band floor 组合语义）/evolutionPhaseS 调试钩子/生命周期（dispose + setQuality 重建重放）
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  computeDayOfYear,
+  computeEvolutionTNorm,
+  computeItczCenterLatDeg,
+  computeWindOffsetTiles
+} from './weatherTime'
+import { WEATHER_PRESETS, type CloudsWeatherPreset } from './createCloudsStage'
+
+// firePreRender 时刻（与上方 firePreRender 同一固定值——断言可离线重算 T1 期望值）
+const PRENDER_TIME = JulianDate.fromIso8601('2026-08-15T13:41:00Z')
+
+// mock weather + 原始 PNG 数据（localWeatherRaw：atlasDisabled escape 的 fallback 包装源）
+function createMockWeatherWithRaw(): any {
+  return {
+    shape: {},
+    shapeDetail: {},
+    localWeatherRaw: { width: 2, height: 2, data: new Uint8Array(2 * 2 * 4) }
+  }
+}
+
+// 默认烘焙 plan 的期望时间轴值（与 WeatherAtlas mock 的 plan 语义一致：无 weatherBake 时缺省）
+const DEFAULT_PLAN = {
+  evolutionPeriodS: 5.3 * 3600,
+  windMps: 8,
+  tileKm: (40075.017 / 4) / 100
+}
+
+function preRenderTSec(): number {
+  return JulianDate.secondsDifference(PRENDER_TIME, JulianDate.fromIso8601('2000-01-01T12:00:00Z'))
+}
+
+describe('T6 WeatherAtlas 集成（spec §6）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    weatherAtlasProbe.calls.length = 0
+    weatherAtlasProbe.instances.length = 0
+  })
+
+  it('默认：烘焙路径 createWeatherAtlas（weatherBake 透传 + pngFallback 兜底源）+ state.atlasTexture 注入', () => {
+    const weather = createMockWeatherWithRaw()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), weather, {
+      clouds: true,
+      weatherBake: { evolutionHours: 2, windMps: 5, seed: 42, weatherRepeat: 50 }
+    })
+    expect(weatherAtlasProbe.calls).toHaveLength(1)
+    const opts = weatherAtlasProbe.calls[0]
+    expect(opts.evolutionHours).toBe(2)
+    expect(opts.windMps).toBe(5)
+    expect(opts.seed).toBe(42)
+    expect(opts.weatherRepeat).toBe(50)
+    // 烘焙异常兜底源 = loadWeatherTextures 原始 decode 数据（brief Step 3）
+    expect(opts.pngFallback).toBe(weather.localWeatherRaw)
+    // state.atlasTexture = atlas 纹理（uniformMap 闭包读）
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    expect(stateArg.atlasTexture).toBe(weatherAtlasProbe.instances[0].atlasTexture)
+    handle!.destroy()
+  })
+
+  it('altitudeOffsetM 经 packLayerUniforms 派生链应用到 params（红队 BLOCKER-4：15 项全链重算）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      altitudeOffsetM: 250
+    })
+    const params = paramsOf(handle!)
+    // 仅低云带 L0/L1 加偏移：minLayerHeights = (750+250, 1000+250, 7500, 0)
+    expect(params.minLayerHeights.x).toBe(1000)
+    expect(params.minLayerHeights.y).toBe(1250)
+    expect(params.minLayerHeights.z).toBe(7500) // L2 高卷云不动
+    expect(params.maxLayerHeights.x).toBe(1650)
+    expect(params.maxLayerHeights.y).toBe(2450)
+    expect(params.maxLayerHeights.z).toBe(8000)
+    // march 入射壳 + BSM 域随动（红队 BLOCKER-4 教训：packed 标量必须同链重算）
+    expect(params.minHeight).toBe(1000) // 750+250
+    expect(params.maxHeight).toBe(8000)
+    expect(params.shadowTopHeight).toBe(2450)
+    expect(params.shadowBottomHeight).toBe(1000)
+    // 层间隙空域 [0,1000] [2450,7500]（packIntervalHeights 重扫）
+    expect(params.minIntervalHeights.y).toBe(2450)
+    expect(params.maxIntervalHeights.y).toBe(7500)
+    // 层成员不随高度变
+    expect(params.shadowLayerMask.x).toBe(1)
+    expect(params.shadowLayerMask.y).toBe(1)
+    expect(params.shadowLayerMask.z).toBe(0)
+    expect(params.shadowLayerMask.w).toBe(0)
+    handle!.destroy()
+  })
+
+  it('altitudeOffsetM clamp 到 [-500, 3000]（spec §6.1）', () => {
+    const scene = createMockScene()
+    const handleUp = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      altitudeOffsetM: 99999
+    })
+    expect(paramsOf(handleUp!)!.minHeight).toBe(3750) // 750+3000
+    handleUp!.destroy()
+    const handleDown = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      altitudeOffsetM: -99999
+    })
+    expect(paramsOf(handleDown!)!.minHeight).toBe(250) // 750-500
+    handleDown!.destroy()
+  })
+
+  it('不传 altitudeOffsetM：params 层 uniforms 保持 defaults 写死值（零回归；写死值是 T2 单测锚）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    expect(paramsOf(handle!).minHeight).toBe(750)
+    expect(paramsOf(handle!).coverage).toBe(0.3)
+    handle!.destroy()
+  })
+
+  it('atlasDisabled=true：不烘焙、走 pngFallback 包装路径（?cloudsAtlas=0 escape，spec §6.1）', () => {
+    const weather = createMockWeatherWithRaw()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), weather, {
+      clouds: true,
+      atlasDisabled: true
+    })
+    expect(weatherAtlasProbe.calls).toHaveLength(1)
+    expect(weatherAtlasProbe.calls[0].pngFallback).toBe(weather.localWeatherRaw)
+    expect(weatherAtlasProbe.calls[0].evolutionHours).toBeUndefined() // 烘焙输入不参与 fallback 路径
+    expect(weatherAtlasProbe.instances[0].mode).toBe('pngFallback')
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    expect(stateArg.atlasTexture).toBe(weatherAtlasProbe.instances[0].atlasTexture)
+    handle!.destroy()
+  })
+
+  it('atlasDisabled=true 且无 raw PNG（decode 失败极端）：warn + 跳过创建，不炸（1×1×1 全白 dummy 降级）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      atlasDisabled: true
+    })
+    expect(weatherAtlasProbe.calls).toHaveLength(0) // 跳过创建
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    // 1×1×1 全白 dummy（满 coverage 连续云墙，同旧 localWeather decode 失败语义）
+    expect(stateArg.atlasTexture).toBeDefined()
+    expect(stateArg.atlasTexture.source.depth).toBe(1)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+    handle!.destroy()
+  })
+
+  it('preRender 覆写 state.atlasT/windOffset/itczCenterSin（scene.time 驱动，T1 纯函数同源自洽）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    expect(stateArg.atlasT).toBe(0) // 首帧前缺省
+    firePreRender(scene)
+    const tSec = preRenderTSec()
+    const atlasT = stateArg.atlasT as number
+    expect(atlasT).toBeGreaterThanOrEqual(0)
+    expect(atlasT).toBeLessThan(1)
+    expect(atlasT).toBeCloseTo(computeEvolutionTNorm(tSec, DEFAULT_PLAN.evolutionPeriodS), 12)
+    expect(stateArg.windOffset).toEqual(
+      computeWindOffsetTiles(tSec, DEFAULT_PLAN.windMps, DEFAULT_PLAN.tileKm)
+    )
+    // ITCZ：doy 从 GregorianDate 取（2026-08-15 → doy 227 = 最北点附近 → sin > 0）
+    const g = JulianDate.toGregorianDate(PRENDER_TIME)
+    const doy = computeDayOfYear(g.month, g.day)
+    expect(doy).toBe(227)
+    expect(stateArg.itczCenterSin).toBeCloseTo(
+      Math.sin((computeItczCenterLatDeg(doy) * Math.PI) / 180),
+      12
+    )
+    handle!.destroy()
+  })
+
+  it('evolutionPhaseS 调试钩子：偏移演化/平流输入（不动太阳）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      evolutionPhaseS: 3600
+    })
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    firePreRender(scene)
+    const tSec = preRenderTSec() + 3600
+    expect(stateArg.atlasT).toBeCloseTo(
+      computeEvolutionTNorm(tSec, DEFAULT_PLAN.evolutionPeriodS), 12
+    )
+    expect(stateArg.windOffset).toEqual(
+      computeWindOffsetTiles(tSec, DEFAULT_PLAN.windMps, DEFAULT_PLAN.tileKm)
+    )
+    // 太阳段不受钩子影响（sunDirection 仍单位向量）
+    expect(Cartesian3.magnitude(stateArg.sunDirection)).toBeCloseTo(1, 6)
+    handle!.destroy()
+  })
+
+  it('setWeatherPreset 映射（spec §6.1）：clear 0.08 / fair 0.2 / cloudy 0.45 / overcast 0.65+收窄', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const cases: Array<[CloudsWeatherPreset, number, number]> = [
+      ['clear', 0.08, 0.6],
+      ['fair', 0.2, 0.6],
+      ['cloudy', 0.45, 0.6],
+      ['overcast', 0.65, 0.36] // filterScale 0.6 收窄 coverageFilterWidths → 连片
+    ]
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    for (const [preset, coverage, widthX] of cases) {
+      handle!.setWeatherPreset(preset)
+      const params = paramsOf(handle!)
+      expect(params.coverage).toBe(coverage)
+      expect(params.coverageFilterWidths.x).toBeCloseTo(widthX, 12)
+      // band floor 组合语义（spec §5.4）：预设激活时下限 clamp ≥0.6
+      expect(stateArg.climateBandsFloor).toBe(0.6)
+    }
+    // WEATHER_PRESETS 表单源（导出值=实现消费值）
+    expect(WEATHER_PRESETS.overcast.coverage).toBe(0.65)
+    expect(WEATHER_PRESETS.overcast.filterScale).toBe(0.6)
+    handle!.destroy()
+  })
+
+  it('overcast×副热带不近晴空（spec §5.4 组合语义）：floor 0.6 与 shader clamp(band, floor, 1.3) 配对', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    handle!.setWeatherPreset('overcast')
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    // GPU 侧语义：shader 以 u_climateBandsFloor 钳 band 下限（compile test 锁定作用点）——
+    // floor=0.6 ⇒ 副热带谷（band 最低 0.55→0.6+）不把阴天预设钳成近晴空；
+    // CPU 侧职责=预设激活时把 floor 提到 0.6、清除后回缺省 0.2（原 shader 字面量）
+    expect(stateArg.climateBandsFloor).toBe(0.6)
+    expect(stateArg.climateBandsFloor).toBeGreaterThanOrEqual(0.6)
+    handle!.setWeatherPreset(undefined)
+    expect(stateArg.climateBandsFloor).toBe(0.2) // 恢复缺省=原 shader 字面量 0.2（零回归）
+    handle!.destroy()
+  })
+
+  it('setWeatherPreset(undefined)：清除预设回创建基线（用户显式 parameters.coverage 保留）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      parameters: { coverage: 0.5 }
+    })
+    handle!.setWeatherPreset('cloudy')
+    expect(paramsOf(handle!).coverage).toBe(0.45)
+    handle!.setWeatherPreset(undefined)
+    expect(paramsOf(handle!).coverage).toBe(0.5) // 用户显式值（非默认 0.3）
+    expect(paramsOf(handle!).coverageFilterWidths.x).toBeCloseTo(0.6, 12) // 基线 widths
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    expect(stateArg.climateBandsFloor).toBe(0.2)
+    handle!.destroy()
+  })
+
+  it('setQuality 换档：预设重放到新 impl（coverage/floor 跨 impl 保持）+ 旧 atlas dispose、新 atlas 创建', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    handle!.setWeatherPreset('overcast')
+    const oldAtlas = weatherAtlasProbe.instances[0]
+    handle!.setQuality('low')
+    // 预设重放（activePreset 跨 impl）：
+    expect(paramsOf(handle!).coverage).toBe(0.65)
+    const stateArg = (createCloudsPass as any).mock.calls.at(-1)![3]
+    expect(stateArg.climateBandsFloor).toBe(0.6)
+    // Atlas 跟随 impl 生命周期：旧 dispose、新创建（v1 无跨 impl 缓存——烘焙输入不变时无谓重烘可接受）
+    expect(oldAtlas.dispose).toHaveBeenCalledTimes(1)
+    expect(weatherAtlasProbe.instances).toHaveLength(2)
+    expect(stateArg.atlasTexture).toBe(weatherAtlasProbe.instances[1].atlasTexture)
+    handle!.destroy()
+    expect(weatherAtlasProbe.instances[1].dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('创建期 weatherPreset：options 预设即刻生效（等价创建后 setWeatherPreset）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      weatherPreset: 'overcast'
+    })
+    expect(paramsOf(handle!)!.coverage).toBe(0.65)
+    expect(paramsOf(handle!)!.coverageFilterWidths.x).toBeCloseTo(0.36, 12)
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    expect(stateArg.climateBandsFloor).toBe(0.6)
+    handle!.destroy()
+  })
+
+  it('destroy：atlas dispose 恰 1 次（幂等）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    handle!.destroy()
+    expect(weatherAtlasProbe.instances[0].dispose).toHaveBeenCalledTimes(1)
+    expect(() => handle!.destroy()).not.toThrow()
+    expect(weatherAtlasProbe.instances[0].dispose).toHaveBeenCalledTimes(1)
   })
 })

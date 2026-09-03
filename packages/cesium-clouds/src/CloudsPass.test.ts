@@ -166,7 +166,7 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
-  it('uniformMap 注入 weather shape/shapeDetail/stbn/localWeather（真 weather 对象）', () => {
+  it('uniformMap 注入 weather shape/shapeDetail/stbn + weatherAtlasTexture（T6：2D localWeatherTexture 绑定退役）', () => {
     vi.clearAllMocks()
     const weather = createMockWeather()
     const pass = createCloudsPass(scene2(), createMockLuts(), weather, state)
@@ -175,8 +175,49 @@ describe('createCloudsPass', () => {
     expect(um.shapeDetailTexture()).toBe(weather.shapeDetail)
     // stbnTexture = weather.stbn 真 3D 蓝噪声资产（非 dummy——白噪声 dummy 显形全屏雪花纹）
     expect(um.stbnTexture()).toBe(weather.stbn)
-    // localWeatherTexture = weather.localWeather 真 2D 资产（满 coverage dummy 显形连续云墙+地平线白线）
-    expect(um.localWeatherTexture()).toBe(weather.localWeather)
+    // T6：shader 改 sampler3D weatherAtlasTexture（T4）——旧 localWeatherTexture 绑定退役
+    expect(um.weatherAtlasTexture).toBeDefined()
+    expect(um.localWeatherTexture).toBeUndefined()
+    // state.atlasTexture 未注入（standalone CloudsPass）→ 1×1×1 全白 dummy（满 coverage 降级）
+    const atlas = um.weatherAtlasTexture()
+    expect(atlas).toBeDefined()
+    expect(atlas.source.depth).toBe(1)
+    pass.destroy()
+  })
+
+  it('T6 weatherAtlas 新五键：weatherAtlasTexture 读 state（注入即反映）+ u_windOffset/u_atlasT/u_itczCenterSin/u_climateBands/u_climateBandsFloor', () => {
+    vi.clearAllMocks()
+    const atlasTex = { id: 'atlas', _texture: { id: 'atlas' }, _target: 0x806f }
+    const st: CloudsFrameState = {
+      ...state,
+      atlasTexture: atlasTex as any,
+      windOffset: new Cartesian2(0.25, 0.75),
+      atlasT: 0.42,
+      itczCenterSin: 0.0872,
+      climateBandsFloor: 0.6
+    }
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), st)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um.weatherAtlasTexture()).toBe(atlasTex)
+    expect(um.u_windOffset()).toBe(st.windOffset)
+    expect(um.u_atlasT()).toBe(0.42)
+    expect(um.u_itczCenterSin()).toBe(0.0872)
+    // 气候带强度读 params（默认 1=全带；0=关走 parameters 覆盖）
+    expect(um.u_climateBands()).toBe(1)
+    // band 下限读 state（预设热切 0.6 / 缺省 0.2）
+    expect(um.u_climateBandsFloor()).toBe(0.6)
+    pass.destroy()
+  })
+
+  it('T6 缺省降级：state 未注入 atlas 字段时 u_windOffset=(0,0)/u_atlasT=0/u_climateBandsFloor=0.2（原 shader 字面量，零回归）', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    const w = um.u_windOffset()
+    expect(w.x).toBe(0)
+    expect(w.y).toBe(0)
+    expect(um.u_atlasT()).toBe(0)
+    expect(um.u_climateBandsFloor()).toBe(0.2)
     pass.destroy()
   })
 
@@ -395,7 +436,8 @@ describe('createCloudsPass', () => {
       'resolution', 'frame', 'stbnTexture', 'bottomRadius', 'worldToECEFMatrix',
       'ecefToWorldMatrix', 'altitudeCorrection', 'sunDirection',
       'scatteringCoefficient', 'absorptionCoefficient', 'minDensity',
-      'minExtinction', 'minTransmittance', 'localWeatherTexture',
+      'minExtinction', 'minTransmittance', 'weatherAtlasTexture',
+      'u_windOffset', 'u_atlasT', 'u_itczCenterSin', 'u_climateBands', 'u_climateBandsFloor',
       'localWeatherRepeat', 'localWeatherOffset', 'coverage', 'shapeTexture',
       'shapeRepeat', 'shapeOffset', 'shapeDetailTexture', 'shapeDetailRepeat',
       'shapeDetailOffset', 'turbulenceTexture', 'turbulenceRepeat',

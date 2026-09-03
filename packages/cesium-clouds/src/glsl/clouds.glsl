@@ -90,7 +90,7 @@ float getClimateBandFactor(const float latSin) {
     - 0.45 * subtropicsDip
     + 0.30 * midlatPeak
     - 0.35 * polarDry;
-  band = clamp(band, 0.2, 1.3); // 上界 1.3 防「实心白环」（spec §5.4）
+  band = clamp(band, u_climateBandsFloor, 1.3); // 上界 1.3 防「实心白环」（spec §5.4）；下限 uniform 化（T6）——预设激活 0.6（「阴天」×副热带谷不退化为近晴空）、缺省 0.2（原字面量，零回归）
   return mix(1.0, band, u_climateBands); // u_climateBands=0 → 恒 1（纯随机分布）
 }
 
@@ -147,9 +147,6 @@ MediaSample sampleMedia(
   out ivec3 sampleCount
 ) {
   vec4 density = weather.density;
-
-  // TODO: Define in physical length.
-  vec3 surfaceNormal = normalize(position);
 
   vec3 turbulence = vec3(0.0);
   #ifdef TURBULENCE

@@ -6,7 +6,8 @@
 // 职责（plan T2）：
 //   1. 创建 3 MRT texture（color/depthVelocity/shadowLength，HalfFloat 优先，UNSIGNED_BYTE 兜底）
 //   2. 创建 dummy texture（shadowBuffer 3D 1×1×3 全 0（M3 真值经 state.shadow 注入）/ depthBuffer
-//      1×1 val=1.0 / localWeatherTexture 1×1 / turbulenceTexture 1×1 / stbnTexture 1×1×1）
+//      1×1 val=1.0 / weatherAtlas 3D 1×1×1 全白（T6，state.atlasTexture 缺省兜底）/
+//      turbulenceTexture 1×1 / stbnTexture 1×1×1）
 //      ——M3/M4/M5/M6 未就绪项 fallback
 //   3. uniformMap 注入 clouds.frag + parameters.glsl 全部 business uniform（atmosphere LUT 共享
 //      AtmosphereStage 的 luts / weather shape+shapeDetail / 每帧闭包 camera/sun / 静态 scatter 参数）
@@ -33,9 +34,8 @@
 //   - depthBuffer（M6 提前接通，2026-08-14）：globeDepth.depthStencilTexture（log-depth 编码，
 //     CloudsMaterial surgery 把 three reverseLogDepth 版 getRayDistanceToScene 换 czm_reverseLogDepthWindow
 //     反演）→ 云被地形截断/遮挡；未就绪时 fallback 1×1 val=1.0 dummy（远截断降级）
-//   - localWeatherTexture：weather.localWeather 真 2D 资产（512² RGBA 4 层 coverage，PNG decode +
-//     generateMipmap；decode 失败时 loadWeatherTextures 返 1×1 全白 fallback——满 coverage 连续云墙
-//     会显形地平线白线）
+//   - weatherAtlasTexture（T6）：state.atlasTexture（WeatherAtlas 3D，buildImpl 注入）——
+//     缺省 fallback 1×1×1 全白 dummy（满 coverage 连续云墙）；旧 2D localWeather 绑定退役
 //   - turbulenceTexture（M2 dummy）：1×1 RGBA（128,128,128,255）→ 中性位移
 //   - stbnTexture：weather.stbn 真 3D 资产（128×128×64 R8 蓝噪声；白噪声 dummy 会显形全屏雪花纹）
 
@@ -63,10 +63,15 @@ import {
 import { buildCloudsMainFragmentShader, type CloudsMainOptions } from './CloudsMaterial'
 import {
   defaultCloudsParameters,
+  CLIMATE_BANDS_FLOOR_DEFAULT,
   type CloudsParameters,
   type CloudsShadowFrameState
 } from './cloudsDefaultParameters'
 import type { WeatherTextures } from './weatherTextures'
+
+// T6 平流偏移缺省（state.windOffset 未注入——standalone CloudsPass / 首帧前——的 fallback；
+// 只读共享实例，uniform 上传只读不写）
+const ZERO_WIND_OFFSET = new Cartesian2(0, 0)
 
 /**
  * 检测 PostProcessStage/RT 可用的最高 HDR 像素数据类型（对齐 core AtmosphereStage.resolvePostHdrDatatype，
@@ -126,6 +131,24 @@ export interface CloudsFrameState {
    * 未就绪（首帧 / 未填）时 uniformMap fallback 全 0 dummy → Beer=1（无自阴影降级）。
    */
   shadow?: CloudsShadowFrameState
+  /**
+   * T6 WeatherAtlas 3D 纹理（buildImpl 创建后注入——烘焙或 pngFallback 同型；atlasDisabled
+   * 无 raw 时为 1×1×1 全白 dummy）。缺省（standalone CloudsPass 未注入）→ CloudsPass 内部
+   * 1×1×1 全白 dummy（满 coverage 连续云墙，同旧 2D localWeather decode 失败语义）。
+   */
+  atlasTexture?: Texture3D
+  /** T6 平流偏移（tile 单位 mod 1，preRender 每帧按 scene.time 覆写——computeWindOffsetTiles）。
+   *  缺省 (0,0)（无平流；float64 mod 已在 CPU 完成，spec §4.1 精度陷阱）。 */
+  windOffset?: Cartesian2
+  /** T6 演化相位 tNorm ∈[0,1)（preRender 每帧覆写——computeEvolutionTNorm，3D atlas z 坐标）。缺省 0。 */
+  atlasT?: number
+  /** T6 ITCZ 中心纬度正弦（preRender 每帧覆写——computeItczCenterLatDeg(doy) 取 sin）。缺省 0。 */
+  itczCenterSin?: number
+  /**
+   * T6 气候带 band 下限（u_climateBandsFloor，shader clamp(band, floor, 1.3)）：天气预设激活
+   * 时 0.6（spec §5.4 组合语义）、清除后回缺省 0.2（= 原 shader 字面量，零回归）。
+   */
+  climateBandsFloor?: number
 }
 
 /** CloudsPass 构造选项。 */
@@ -206,9 +229,16 @@ export function buildSharedCloudsUniforms(
     powderScale: () => params.powderScale,
     powderExponent: () => params.powderExponent,
 
-    // weather/shape（localWeather 真纹理——decode 失败时 loadWeatherTextures 提供 1×1 全白
-    // fallback；turbulence 由调用方传 dummy）
-    localWeatherTexture: () => weather.localWeather,
+    // weather/shape（T6：2D localWeatherTexture → 3D atlas（T4 sampleWeather 改造）。atlas 由
+    // buildImpl 创建注入 state；缺省 undefined 由各端 fallback（CloudsPass 内部 dummy /
+    // buildImpl skip-path dummy）——standalone CloudsPass 未注入时也不炸。时间轴四键（T1 纯
+    // 函数 CPU float64 mod 产物）preRender 每帧覆写，此处闭包逐帧读。
+    weatherAtlasTexture: () => state.atlasTexture,
+    u_windOffset: () => state.windOffset ?? ZERO_WIND_OFFSET,
+    u_atlasT: () => state.atlasT ?? 0,
+    u_itczCenterSin: () => state.itczCenterSin ?? 0,
+    u_climateBands: () => params.climateBands,
+    u_climateBandsFloor: () => state.climateBandsFloor ?? CLIMATE_BANDS_FLOOR_DEFAULT,
     localWeatherRepeat: () => params.localWeatherRepeat,
     localWeatherOffset: () => params.localWeatherOffset,
     coverage: () => params.coverage,
@@ -391,6 +421,23 @@ export function createCloudsPass(
     pixelDatatype: PixelDatatype.UNSIGNED_BYTE
   }) // 中性位移（M2 dummy；procedural turbulence M6 接通）
 
+  // T6 weatherAtlas fallback（standalone CloudsPass / state.atlasTexture 未注入时）：1×1×1
+  // 全白 → sampleWeather 满 coverage（连续云墙，同旧 2D localWeather decode 失败降级语义）。
+  // 正常链路 buildImpl 注入 state.atlasTexture（WeatherAtlas 烘焙/pngFallback 同型 Texture3D），
+  // 此 dummy 仅缺省兜底——采样 sampler3D 未绑定时 GL 行为未定义，必须绑。
+  const dummyWeatherAtlas = new Texture3D({
+    context,
+    source: {
+      width: 1,
+      height: 1,
+      depth: 1,
+      arrayBufferView: new Uint8Array([255, 255, 255, 255])
+    },
+    pixelFormat: PixelFormat.RGBA,
+    pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+    flipY: false
+  })
+
   // STBN 蓝噪声（march per-pixel jitter）：weather.stbn 真 3D 资产（128×128×64 R8，takram 打包）。
   // 白噪声 dummy（CPU Math.random 64×64×4）会让 jitter 显形为全屏雪花纹（实测 2026-08-14）——
   // 蓝噪声误差能量在人眼不敏感高频段，观感平滑。frame=0 静态采样 layer 0（M4 temporal 接通后
@@ -438,6 +485,10 @@ export function createCloudsPass(
 
   const uniformMap: { [name: string]: () => unknown } = {
     ...buildSharedCloudsUniforms(scene, luts, weather, state, params, dummyTurbulence),
+
+    // T6：atlas 纹理带内部 dummy 兜底（覆盖共享段的无兜底绑定——sampler3D 未绑定时 GL 未定义）；
+    // 主 march 专有覆盖，ShadowPass 生成端由 buildImpl 保证 state.atlasTexture 恒已注入
+    weatherAtlasTexture: () => state.atlasTexture ?? dummyWeatherAtlas,
 
     // D7 frame 拆分：march 的 stbn 噪声相位只在 temporal 开时跟随 params.frame 递增
     //（无 resolve 平滑时逐帧换相位 = 回归闪烁；M3 行为 = 恒 0）
@@ -550,6 +601,8 @@ export function createCloudsPass(
       shadowLenTex?.destroy()
       dummyDepthBuffer.destroy()
       dummyTurbulence.destroy()
+      // dummyWeatherAtlas Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用——dummyShadowBuffer 同款）
+      ;(dummyWeatherAtlas as unknown as { destroy: () => void }).destroy()
       // dummyShadowBuffer Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用）。
       // M3 T4 已接真实 BSM（state.shadow.bsm），此 dummy 仅首帧/降级 fallback。
       ;(dummyShadowBuffer as unknown as { destroy: () => void }).destroy()

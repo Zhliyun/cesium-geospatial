@@ -426,7 +426,21 @@ describe('weather 3D atlas：sampleWeather 改造（spec §4）', () => {
     expect(src).toContain('weatherAtlasTexture')
     expect(src).toContain('u_atlasT')
     expect(src).toContain('getClimateBandFactor')
+    // T6 断言补强：乘法作用点锁定（气候带必须乘在 atlas 采样结果上、SHADOW mask 之前）
+    expect(src).toContain('localWeather *= getClimateBandFactor')
+    // 三个新 uniform 名（T6 CPU 侧供值：windOffset 平流/atlasT 演化/itczCenterSin 相位）
+    expect(src).toContain('u_windOffset')
+    expect(src).toContain('u_itczCenterSin')
+    expect(src).toContain('u_climateBands')
     expect(src).not.toContain('localWeatherSpeed') // evolution hack 已删
+  })
+
+  it('T6 band floor 组合语义（spec §5.4）：clamp 下限 uniform 化——预设激活 0.6、缺省 0.2（零回归）', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    // 钳制作用点：band 下限从字面量 0.2 换 u_climateBandsFloor（overcast×副热带不近晴空）
+    expect(src).toContain('clamp(band, u_climateBandsFloor, 1.3)')
+    expect(src).toContain('uniform float u_climateBandsFloor;')
+    expect(src).not.toContain('clamp(band, 0.2, 1.3)')
   })
 
   it('glslang：3D atlas 采样+气候带版完整 shader 真编译', () => {

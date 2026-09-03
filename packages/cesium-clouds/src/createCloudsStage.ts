@@ -65,12 +65,21 @@
 //   - setQuality（spec §7）：统一内部重建（销毁旧 impl → 重 resolve → 重建资源 →
 //     换引用），句柄稳定（公开字段 getter 委托 impl）；per-impl 可复位状态
 //     （matricesFrozen/prevCamera）随重建自然归零
+//
+// T6 云分布集成（spec 2026-09-03 §4/§5.4/§6）：
+//   - buildImpl 创建 WeatherAtlas（烘焙 / pngFallback / atlasDisabled escape）注入
+//     state.atlasTexture；preRender 时间轴（T1 纯函数 CPU float64 mod）覆写 atlasT/
+//     windOffset/itczCenterSin——evolutionPhaseS 调试钩子仅偏移演化/平流不动太阳
+//   - altitudeOffsetM 经 T2 派生链重算 15 项层 packed uniforms（红队 BLOCKER-4 闭环）
+//   - setWeatherPreset 天气预设热切（coverage/filterScale 基线缩放 + climateBandsFloor
+//     0.6 组合语义，spec §5.4）——handle 侧记 activePreset，setQuality 重建后重放
 
 import {
   PostProcessStage,
   PostProcessStageSampleMode,
   Cartesian2,
   Cartesian3,
+  Cartesian4,
   Matrix4,
   Matrix3,
   Simon1994PlanetaryPositions,
@@ -79,6 +88,7 @@ import {
   PixelFormat,
   PixelDatatype,
   Texture,
+  Texture3D,
   type Scene,
   type Context
 } from 'cesium'
@@ -109,11 +119,55 @@ import { CascadedShadowMaps } from './CascadedShadowMaps'
 import { createShadowPass, type ShadowPass } from './ShadowPass'
 import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
 import {
+  CLIMATE_BANDS_FLOOR_DEFAULT,
+  CLIMATE_BANDS_FLOOR_PRESET,
   type CloudsParameters,
   type CloudsShadowFrameState
 } from './cloudsDefaultParameters'
 import { applyQualityPreset, type AppliedCloudsQuality, type CloudsQualityPreset } from './qualityPresets'
 import type { WeatherTextures } from './weatherTextures'
+// 云分布重设计（spec docs/superpowers/specs/2026-09-03-clouds-distribution-redesign-design.md）：
+// T1 时间轴纯函数 / T2 层参数 packed 派生 / T5 WeatherAtlas 烘焙——本文件为运行时集成点（T6）。
+import {
+  computeDayOfYear,
+  computeEvolutionTNorm,
+  computeItczCenterLatDeg,
+  computeWindOffsetTiles
+} from './weatherTime'
+import { applyAltitudeOffset, packLayerUniforms, DEFAULT_CLOUD_LAYERS } from './cloudLayersPacking'
+import { createWeatherAtlas, resolveWeatherAtlasPlan, type WeatherAtlas } from './WeatherAtlas'
+
+// 云图时间轴历元（spec §4.1）：tSec = scene.time 相对此历元的秒差——CPU float64 mod 后才传
+// uniform（JulianDate 绝对秒 ~8.4e8 超出 float32 精度，GPU 侧禁止对原始秒 mod）。
+const WEATHER_EPOCH = JulianDate.fromIso8601('2000-01-01T12:00:00Z')
+
+/** 天气预设档（T6，spec §6.1：晴/少云/多云/阴天一键组合；undefined=清除预设回创建基线）。 */
+export type CloudsWeatherPreset = 'clear' | 'fair' | 'cloudy' | 'overcast'
+
+/**
+ * 预设 → 采样端调制表（spec §6.1 预设初值，验收时拍板微调）：
+ * coverage 直接写 params.coverage；filterScale 缩放基线 coverageFilterWidths（overcast 0.6
+ * 收窄 → remap 过渡更陡 → 连片）。激活时另写 state.climateBandsFloor=0.6（spec §5.4 组合
+ * 语义：预设 × 副热带谷不退化为近晴空），清除恢复缺省 0.2。
+ */
+export const WEATHER_PRESETS: Record<CloudsWeatherPreset, { coverage: number; filterScale: number }> = {
+  clear: { coverage: 0.08, filterScale: 1.0 },
+  fair: { coverage: 0.2, filterScale: 1.0 },
+  cloudy: { coverage: 0.45, filterScale: 1.0 },
+  overcast: { coverage: 0.65, filterScale: 0.6 }
+}
+
+/** 烘焙输入（T6 options.weatherBake；仅这些变化才需重烘——采样时调制走 uniform 热切，spec §4.3）。 */
+export interface CloudsWeatherBakeOptions {
+  /** 演化周期（小时）；缺省 5.3（64 切片 × 5min）。demo ?cloudsEvolutionHours=。 */
+  evolutionHours?: number
+  /** 平流风速 m/s；缺省 8。demo ?cloudsWind=. */
+  windMps?: number
+  /** 烘焙种子；缺省 1337。demo ?cloudsSeed=. */
+  seed?: number
+  /** cube face 上 weather 平铺次数；缺省 100。 */
+  weatherRepeat?: number
+}
 
 /**
  * createCloudsStage 选项（透传 CloudsPassOptions + clouds 开关）。
@@ -194,6 +248,36 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * demo `?cloudsUpscale=1|2|4`。
    */
   upscaleDivisor?: 1 | 2 | 4
+  /**
+   * T6 云高度偏移（米，spec §6.1）：低云带 L0/L1 altitude += clamp(offset, -500, 3000)，
+   * 经 T2 派生链（applyAltitudeOffset → packLayerUniforms）重算全部 15 项层 packed uniforms
+   * （红队 BLOCKER-4 教训：minLayerHeights/minHeight/shadowTop/Bottom/intervalHeights 必须
+   * 同链重算）。**仅显式传时派生**——不传保持 defaults 写死值零回归（也防 clobber 用户
+   * 显式层参数）。demo `?cloudsAltitudeOffset=`。
+   */
+  altitudeOffsetM?: number
+  /**
+   * T6 WeatherAtlas 烘焙输入（spec §4.3）：仅这些变化才需重烘；采样时调制（coverage/密度/
+   * 气候带/预设）走 uniform 热切不动烘焙。缺省走 WeatherAtlas 内置缺省（5.3h/8m/s/1337/100）。
+   */
+  weatherBake?: CloudsWeatherBakeOptions
+  /**
+   * T6 escape 开关（spec §6.1 `?cloudsAtlas=0`）：跳过烘焙、把旧静态 local_weather.png
+   * （weather.localWeatherRaw）包装成 64 层 3D atlas（WeatherAtlas pngFallback 路径，对照/
+   * 逃生两用）。raw 缺失（PNG decode 失败）时退化为 warn + 1×1×1 全白 dummy（连续云墙降级）。
+   */
+  atlasDisabled?: boolean
+  /**
+   * T6 调试钩子（spec §4.1 演化验收解耦）：秒级偏移演化相位与平流输入
+   * （atlasT = f(tSec + phase)、windOffset = g(tSec + phase)），不动太阳/天光——验收时
+   * 快进到指定演化相位。demo `?cloudsEvolutionPhase=`。
+   */
+  evolutionPhaseS?: number
+  /**
+   * T6 创建期天气预设（spec §6.1）：创建后立即应用（等价创建后即刻 setWeatherPreset）；
+   * 运行期热切走 handle.setWeatherPreset。demo `?cloudsWeather=`。
+   */
+  weatherPreset?: CloudsWeatherPreset
 }
 
 /** createCloudsStage 句柄：持 CloudsPass + overlay stage + destroy + setQuality。
@@ -225,6 +309,17 @@ export interface CloudsStageHandle {
    *   （档位 > 用户微调、微调丢失）；本实现用户显式 > 档位，换档保留微调。
    */
   setQuality(next: CloudsQualityPreset): void
+  /**
+   * T6 天气预设热切（spec §6.1）：写当前 impl 的 params.coverage / coverageFilterWidths
+   * （闭包引用改值即生效，nightAmbient 同款）+ state.climateBandsFloor（spec §5.4 组合语义：
+   * 预设激活 0.6，防「阴天」×副热带谷退化为近晴空）。**undefined = 清除预设**：恢复创建时
+   * 基线（用户显式 parameters 优先于默认 0.3/(0.6,0.6,0.5,0.6)）+ floor 0.2。
+   *
+   * - 与参考库 setter 语义同款（spec §5）：直接改值，不重建资源；帧间/帧内均可（纯 CPU 写）。
+   * - **跨 setQuality 保持**：激活中的预设记在 handle 侧，换档重建后自动重放到新 impl。
+   * - destroy 后 no-op + console.warn（对齐 setQuality 宽容风格）。
+   */
+  setWeatherPreset(preset: CloudsWeatherPreset | undefined): void
   /** 释放：摘 preRender listener + impl 完整销毁（CloudsPass/resolvePass/ShadowPass/
    *  turbulence dummy）+ 摘顶层 overlay。幂等。 */
   destroy(): void
@@ -270,6 +365,8 @@ interface CloudsStageImpl {
   readonly shadowPass: ShadowPass | undefined
   readonly shadowState: CloudsShadowFrameState
   readonly params: CloudsParameters
+  /** T6 天气预设热切（写 params/state 闭包引用；undefined=清除回创建基线）。 */
+  setWeatherPreset(preset: CloudsWeatherPreset | undefined): void
   onPreRender(time: JulianDate): void
   destroy(): void
 }
@@ -316,13 +413,67 @@ function buildCloudsStageImpl(
   //（BSM 结构 cascadeCount/mapSize）；applied 由调用方传入（勿在本函数重复 resolve）。
   const params: CloudsParameters = applied.params
 
+  // ── T6 altitudeOffset 派生链（spec §6.1，红队 BLOCKER-4 闭环）──
+  // 仅显式传时派生：applyAltitudeOffset（L0/L1 加 clamp 偏移）→ packLayerUniforms 重算全部
+  // 15 项层 packed uniforms。不传保持 defaults 写死值（零回归 + 防 clobber 用户显式层参数）；
+  // 写死值保留为 T2 单测锚（cloudsDefaultParameters.ts 不改值）。
+  if (options.altitudeOffsetM != null) {
+    Object.assign(
+      params,
+      packLayerUniforms(applyAltitudeOffset(DEFAULT_CLOUD_LAYERS, options.altitudeOffsetM))
+    )
+  }
+
   // ── 每帧可变状态（createCloudsStage 持有；preRender 更新；CloudsPass uniformMap 闭包读引用）──
+  // T6 atlas 字段：atlasTexture 由下方 WeatherAtlas 创建注入（或 skip-path dummy）；
+  // 时间轴三键 preRender 每帧覆写（首帧前缺省——首帧 preRender 先于渲染执行，不外露）。
   const state: CloudsFrameState = {
     sunDirection: new Cartesian3(0, 0, 1),
     moonDirection: new Cartesian3(0, 0, 1),
     moonIlluminatedFraction: 0,
-    altitudeCorrection: new Cartesian3()
+    altitudeCorrection: new Cartesian3(),
+    atlasTexture: undefined,
+    windOffset: new Cartesian2(),
+    atlasT: 0,
+    itczCenterSin: 0,
+    climateBandsFloor: CLIMATE_BANDS_FLOOR_DEFAULT
   }
+
+  // ── T6 WeatherAtlas（spec §4/§6）：烘焙或 PNG 包装；escape = atlasDisabled（?cloudsAtlas=0）──
+  // pngFallback 源 = loadWeatherTextures 留存的原始 PNG decode 数据（烘焙异常兜底 + escape
+  // 静态图包装两用）。v1：Atlas 跟随 impl 生命周期（buildImpl 建 / destroy 毁）——烘焙输入
+  // 不变时 setQuality 换档重烘属无谓开销，可接受；跨 impl 缓存留待后续（spec §4.3 留口）。
+  const weatherPngForFallback = weather.localWeatherRaw
+  let atlas: WeatherAtlas | undefined
+  let atlasFallbackDummy: Texture3D | undefined
+  if (options.atlasDisabled === true) {
+    if (weatherPngForFallback != null) {
+      // escape：旧静态图 64 层平铺包装（不烘焙，T8 对照基线）
+      atlas = createWeatherAtlas({ context, pngFallback: weatherPngForFallback })
+    } else {
+      // 极端：PNG decode 已失败（loadWeatherTextures 无 raw）——无包装源，warn+跳过创建，
+      // 下方 1×1×1 全白 dummy 顶上（满 coverage 连续云墙，同旧 2D decode 失败降级语义）
+      console.warn('[clouds] atlasDisabled 但 weather 无原始 PNG 数据（decode 失败），跳过 Atlas 创建 → 1×1×1 全白 dummy 降级')
+    }
+  } else {
+    atlas = createWeatherAtlas({ context, ...options.weatherBake, pngFallback: weatherPngForFallback })
+  }
+  if (atlas != null) {
+    state.atlasTexture = atlas.atlasTexture
+  } else {
+    atlasFallbackDummy = new Texture3D({
+      context,
+      source: { width: 1, height: 1, depth: 1, arrayBufferView: new Uint8Array([255, 255, 255, 255]) },
+      pixelFormat: PixelFormat.RGBA,
+      pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+      flipY: false
+    })
+    state.atlasTexture = atlasFallbackDummy
+  }
+  // 时间轴 plan：正常路径读 atlas.plan（烘焙输入单源）；skip 路径退默认计划（时间轴纯函数
+  // 仍工作——atlasT/windOffset 照常推进，只是纹理是静态 dummy）
+  const timelinePlan = atlas?.plan ?? resolveWeatherAtlasPlan({})
+
   const sunInertialScratch = new Cartesian3()
   const moonOriginScratch = new Cartesian3()
   const icrfScratch = new Matrix3()
@@ -558,6 +709,17 @@ function buildCloudsStageImpl(
       )
     }
 
+    // ── T6 云图时间轴（spec §4.1）：CPU float64 mod 后传 uniform（T1 纯函数，同机多 Viewer
+    //    clock 同刻 ⇒ 同分布）——evolutionPhaseS 调试钩子仅偏移演化/平流输入，不动太阳 ──
+    const tSec = JulianDate.secondsDifference(time, WEATHER_EPOCH)
+    const evolutionPhase = options.evolutionPhaseS ?? 0
+    state.atlasT = computeEvolutionTNorm(tSec + evolutionPhase, timelinePlan.evolutionPeriodS)
+    state.windOffset = computeWindOffsetTiles(tSec + evolutionPhase, timelinePlan.windMps, timelinePlan.tileKm)
+    const gregorian = JulianDate.toGregorianDate(time)
+    state.itczCenterSin = Math.sin(
+      (computeItczCenterLatDeg(computeDayOfYear(gregorian.month, gregorian.day)) * Math.PI) / 180
+    )
+
     // ── M4 temporal：Bayer jitter + reprojection 矩阵（march ray 重建偏移 + velocity 两分支消费）──
     // 矩阵域 ECEF（worldToECEF=identity）；preRender 时刻 frustum.projectionMatrix 为完整视锥
     //（multi-frustum 分段前，velocity 数学只用投影 xy 系数与 w → 分段无关，plan D5）。
@@ -694,6 +856,28 @@ function buildCloudsStageImpl(
     }
   }
 
+  // ── T6 天气预设热切（spec §6.1 + §5.4 组合语义）──
+  // 基线 = 档位/用户显式合并后的 params 值（本 impl 装配时刻快照）——清除预设恢复它，
+  // 用户显式 parameters.coverage 优先于默认 0.3 的语义由此保留。filterScale 缩放基线
+  // coverageFilterWidths（overcast 0.6 收窄 → 连片）；激活同时抬 state.climateBandsFloor
+  // 至 0.6（shader clamp(band, u_climateBandsFloor, 1.3)——「阴天」×副热带谷不退化近晴空）。
+  const presetBaseline = {
+    coverage: params.coverage,
+    coverageFilterWidths: Cartesian4.clone(params.coverageFilterWidths)
+  }
+  const setWeatherPreset = (preset: CloudsWeatherPreset | undefined): void => {
+    if (preset == null) {
+      params.coverage = presetBaseline.coverage
+      Cartesian4.clone(presetBaseline.coverageFilterWidths, params.coverageFilterWidths)
+      state.climateBandsFloor = CLIMATE_BANDS_FLOOR_DEFAULT
+      return
+    }
+    const p = WEATHER_PRESETS[preset]
+    params.coverage = p.coverage
+    Cartesian4.multiplyByScalar(presetBaseline.coverageFilterWidths, p.filterScale, params.coverageFilterWidths)
+    state.climateBandsFloor = CLIMATE_BANDS_FLOOR_PRESET
+  }
+
   // ── impl 组装（spec §7）：完整销毁清单（handle.destroy 与 setQuality 重建共用）──
   // 不含 preRender listener——顶层持有，换 impl 引用即切换。
   return {
@@ -703,15 +887,21 @@ function buildCloudsStageImpl(
     shadowState,
     cascades,
     params,
+    setWeatherPreset,
     onPreRender,
     destroy(): void {
       // 顺序：先 CloudsPass（消费端，撤 bsm 引用）→ 云 resolve（march 后第二个 VOXELS 实例）→
       // ShadowPass（释放 bsmTexture——T3 concern #4），最后生成端 turbulence dummy。
-      // overlay 不在此清单（v2 spec §6.1：per-handle 资源，由顶层 handle.destroy/setQuality 失败分支摘）
+      // T6：atlas 消费端（march/ShadowPass shader）销毁后再 dispose——atlasFallbackDummy
+      // 仅 skip-path 创建。overlay 不在此清单（v2 spec §6.1：per-handle 资源，由顶层
+      // handle.destroy/setQuality 失败分支摘）
       cloudsPass.destroy()
       resolvePass?.destroy()
       shadowPass?.destroy()
       shadowTurbulenceDummy?.destroy()
+      atlas?.dispose()
+      // Texture3D augment 类型未声明 destroy（WeatherAtlas dispose 内同款 cast 调用）
+      ;(atlasFallbackDummy as unknown as { destroy(): void } | undefined)?.destroy()
     }
   }
 }
@@ -741,6 +931,13 @@ export function createCloudsStage(
   let impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(initialQuality, options))
   let currentQuality: CloudsQualityPreset = initialQuality
   let destroyed = false
+  // T6：激活中的天气预设记在 handle 侧——setQuality 重建 impl（params/state 全新）后重放，
+  // 预设跨换档保持（buildImpl 自身不读 preset，基线=装配时刻 params，重放语义正确）
+  let activePreset: CloudsWeatherPreset | undefined
+  if (options.weatherPreset != null) {
+    impl.setWeatherPreset(options.weatherPreset)
+    activePreset = options.weatherPreset
+  }
 
   // ── 顶层 overlay（spec §6.2 v2）：per-handle 资源，跨 impl 存活（换档只切 uniform 源）。
   //    不自动 add——add 时机移交消费者（demo 走 insertStageBeforeLensFlare；spec §6.3）。──
@@ -814,6 +1011,8 @@ export function createCloudsStage(
       try {
         impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(next, options))
         currentQuality = next
+        // T6：激活中的预设重放到新 impl（跨换档保持；undefined=无预设，新 impl 天然缺省态）
+        if (activePreset != null) impl.setWeatherPreset(activePreset)
       } catch (e) {
         // 原子性（spec §7 v3）+ v2 BLOCKER 修订：顶层 overlay 必须同步摘除——否则残留链上
         // 每帧读已销毁 impl 的悬空 bridge（GL 纹理名已删），静默黑帧/脏画面。
@@ -821,6 +1020,16 @@ export function createCloudsStage(
         removeOverlay()
         throw e
       }
+    },
+    // T6 天气预设热切：委托当前 impl（写 params/state 闭包引用即生效）+ handle 侧记忆
+    // activePreset（setQuality 重建后重放）。destroy 后 no-op + warn（对齐 setQuality 风格）。
+    setWeatherPreset(preset: CloudsWeatherPreset | undefined): void {
+      if (destroyed) {
+        console.warn('[clouds] setWeatherPreset 于 destroy 后调用，no-op')
+        return
+      }
+      impl.setWeatherPreset(preset)
+      activePreset = preset
     },
     destroy(): void {
       if (destroyed) return

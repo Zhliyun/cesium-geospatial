@@ -38,6 +38,8 @@ describe('loadWeatherTextures', () => {
       expect(w.shapeDetail).toBeDefined()
       expect(w.stbn).toBeDefined()
       expect(w.localWeather).toBeDefined() // createImageBitmap 缺失 → decode 抛 → 全白 fallback
+      // T6：decode 失败 → 无原始数据（atlasDisabled escape 无 fallback 源 → warn+跳过创建）
+      expect(w.localWeatherRaw).toBeUndefined()
       expect(fetchMock).toHaveBeenCalledWith('/clouds/shape.bin')
       expect(fetchMock).toHaveBeenCalledWith('/clouds/shape_detail.bin')
       expect(fetchMock).toHaveBeenCalledWith('/clouds/stbn.bin')
@@ -84,6 +86,12 @@ describe('loadWeatherTextures', () => {
     try {
       const w = await loadWeatherTextures({} as never, '/clouds')
       expect(w.localWeather).toBeDefined()
+      // T6：decode 成功带原始 RGBA（atlasDisabled escape 的 WeatherAtlas pngFallback 包装源；
+      // 2D Texture 字段保留零改动——shadow 等其他消费端不受影响）
+      expect(w.localWeatherRaw).toBeDefined()
+      expect(w.localWeatherRaw!.width).toBe(2)
+      expect(w.localWeatherRaw!.height).toBe(2)
+      expect(w.localWeatherRaw!.data).toHaveLength(2 * 2 * 4)
       expect(createImageBitmapMock).toHaveBeenCalled()
       expect(bitmap.close).toHaveBeenCalled()
     } finally {

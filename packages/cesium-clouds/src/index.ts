@@ -41,9 +41,16 @@ export {
 // M2 T3：createCloudsStage 顶层工厂（编排 CloudsPass + overlay → 接 PostProcess 链）
 export {
   createCloudsStage,
+  WEATHER_PRESETS,
   type CloudsStageHandle,
-  type CloudsStageOptions
+  type CloudsStageOptions,
+  type CloudsWeatherPreset,
+  type CloudsWeatherBakeOptions
 } from './createCloudsStage'
+
+// 云分布重设计 T5：WeatherAtlas 烘焙模块（T6 createCloudsStage 运行时消费；独立入口留给
+// 对照实验/多 Viewer 共享计划）
+export * from './WeatherAtlas'
 
 // BSM world 锚定缺省设计值（T6 导出：demo ?cloudsShadowScale 派生用；类缺省同源）
 export { WORLD_RADII_DEFAULT, WORLD_INTERVALS_DEFAULT } from './CascadedShadowMaps'

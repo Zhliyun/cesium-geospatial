@@ -61,6 +61,12 @@ export interface WeatherTextures {
   stbn: Texture3D
   /** local_weather 2D（RGBA Uint8 512²，RGBA 通道 = 4 层 packed coverage；decode 失败时 1×1 全白 fallback）。 */
   localWeather: Texture
+  /**
+   * local_weather.png 原始 decode 数据（T6）：createCloudsStage 的 atlasDisabled escape 用作
+   * WeatherAtlas pngFallback 包装源（旧静态图 64 层平铺，不烘焙）。decode 失败时 undefined
+   * （escape 退化为 warn+跳过创建）。2D Texture 字段保留零改动——shadow 等其他消费端不受影响。
+   */
+  localWeatherRaw?: { width: number; height: number; data: Uint8Array }
 }
 
 const SHAPE_SIZE = 128
@@ -154,8 +160,12 @@ export async function loadWeatherTextures(
   // globeUv 采样方向与 three 版一致）+ generateMipmap（textureLod 显式 LOD 采样需要 mipmap 链，
   // 无 mip 的不完整纹理采样返回黑 → coverage=0 云消失）。decode 失败 fallback 1×1 全白。
   let localWeather: Texture
+  let localWeatherRaw: { width: number; height: number; data: Uint8Array } | undefined
   try {
     const { width, height, data } = await decodePngRgba(weatherPng)
+    // 原始 RGBA 留一份给 T6 atlasDisabled escape（与 Texture 共享同一 buffer——Texture 构造
+    // 仅上传 GPU，JS 侧 buffer 不被接管）
+    localWeatherRaw = { width, height, data }
     localWeather = new Texture({
       context,
       source: { width, height, arrayBufferView: data },
@@ -175,5 +185,5 @@ export async function loadWeatherTextures(
       sampler: LOCAL_WEATHER_SAMPLER
     })
   }
-  return { shape, shapeDetail, stbn, localWeather }
+  return { shape, shapeDetail, stbn, localWeather, localWeatherRaw }
 }
