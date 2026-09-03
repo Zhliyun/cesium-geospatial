@@ -342,8 +342,11 @@ async function runSmoke(opts) {
   await page.screenshot({ path: shotPath })
 
   const wired = consoleLines.some((l) => l.text.includes('[phase3-clouds] 体积云已接线'))
+  // dbdcea8 后 warn 文案不含「WeatherAtlas」字样（兜底=「天气图烘焙失败…」、escape 无材料=
+  // 「usePngFallback 但无…」）——按 [clouds] 前缀收集（排除 [phase3-clouds] 接线 info 需精确
+  // 前缀：'[clouds]' 不匹配 '[phase3-clouds]'（无 '[c' 相邻序列））。
   const atlasWarns = consoleLines.filter(
-    (l) => l.type !== 'pageerror' && l.text.includes('[clouds] WeatherAtlas')
+    (l) => l.type !== 'pageerror' && l.text.startsWith('[clouds]')
   )
   const errors = consoleLines.filter((l) => l.type === 'error' || l.type === 'pageerror')
   const png = loadPng(shotPath)
