@@ -30,6 +30,10 @@ uniform vec2 u_seedOffset;  // WEATHER_BAKE_SEED 派生的固定偏移（确定�
 #define Z_CYCLES 4.0
 #define W_CYCLES 2.0
 #define EVOLVE_RADIUS 0.25
+// 通道错速（spec §4.6.2「高卷云快、低云慢」物理兑现，P2 2026-09-03）：high 通道 w 维
+// 演化速度 ×HIGH_W_SPEED（卷云时间尺度短于低云）。闭合铁律逐通道核算：ΔwPhase 整环
+// = W_CYCLES × HIGH_W_SPEED = 4.0，perlin rep.w = W_CYCLES = 2.0 → 行程 2 个完整周期 ✓。
+#define HIGH_W_SPEED 2.0
 // 域扭曲：整数频率（周期化铁律）、互质防共振；warpAmp 以低云基频 cell 数标定
 #define WARP_F1 3
 #define WARP_F2 5
@@ -76,10 +80,14 @@ float getWorleyFbmV3(const vec3 p, const float freq, const float seed) {
 }
 
 void main() {
+  // 环回折叠（P2）：fract(1.0)=0——u_slice=1 精确等同 0，逐位闭合可严格断言
+  //（否则 sin(2π×1.0) float32 残差 -3.1e-8 经 ringOffset 进入 bakePoint，闭合断言 flaky）。
+  // 生产 u_atlasT ∈[0,1)（computeEvolutionTNorm posMod），fract 恒等，无行为变化。
+  float slice = fract(u_slice);
   vec2 p = vUv;
-  float zPhase = u_slice * Z_CYCLES;
-  float wPhase = u_slice * W_CYCLES;
-  float ringAngle = 6.28318530718 * u_slice;
+  float zPhase = slice * Z_CYCLES;
+  float wPhase = slice * W_CYCLES;
+  float ringAngle = 6.28318530718 * slice;
   vec2 ringOffset = EVOLVE_RADIUS * vec2(cos(ringAngle), sin(ringAngle));
 
   // 周期化域扭曲（perlin 4D，w=wPhase 使扭曲场本身随时间演化——形变局部化）
@@ -103,9 +111,10 @@ void main() {
   low = smoothstep(0.8, 1.4, low);
   low = clamp(low - mid, 0.0, 1.0);
 
-  // High clouds（perlin 4D w 维扫掠，对齐 high 路线 freq vec3(6,12,1)）
+  // High clouds（perlin 4D w 维扫掠，对齐 high 路线 freq vec3(6,12,1)；wPhase×HIGH_W_SPEED
+  // 通道错速——高卷云演化 2× 快于低云，spec §4.6.2 错速承诺兑现）
   float high = perlin(
-    vec4(bakePoint.xy * vec2(6.0, 12.0), 0.0, wPhase + 0.3),
+    vec4(bakePoint.xy * vec2(6.0, 12.0), 0.0, wPhase * HIGH_W_SPEED + 0.3),
     vec4(6.0, 12.0, 1.0, W_CYCLES)
   );
   // 直采不加外层系数——perlin.glsl 末行已含内部 2.2×（return 2.2 * n_xyzw），外层再乘即

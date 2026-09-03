@@ -11,9 +11,12 @@
 //      （修复前 perlin 内 2.2× 外层再乘 → 40.7% 像素 >0.9 白雾主源；旧 PNG 目标分布 ~2%）
 //   2. a 通道（第 4 通道，extra perlin）全层 mean ∈ [0.3, 0.6]——a 通道真实内容锚
 //      （旧 PNG 资产 a mean 0.415；恒 1.0 覆盖/全零回归即超界，spec §4.6 执行期修订）
+//   3. 逐位环回闭合（P2，默认开）：u_slice=0 与 u_slice=1.0 烘焙 buffer diff==0——
+//      演化闭合铁律（spec §5.2）的正宗验收（此前只有 T8 浏览器统计判别）。前提：烘焙
+//      shader 入口 fract(u_slice) 折叠（sin(2π) float32 残差否则致 flaky）。
 //
 // 用法（仓库根，dev server 需已在 :5173）：
-//   node apps/demo/scripts/bake-readback.mjs [--slices 0,8,16,24,32,40,48,56,63]
+//   node apps/demo/scripts/bake-readback.mjs [--slices 0,8,16,24,32,40,48,56,63] [--no-closure]
 //   断言阈值可用 --hi-frac-max / --a-mean-min / --a-mean-max 覆盖（默认见 ASSERT）。
 import { chromium } from 'playwright'
 import { dirname, resolve } from 'node:path'
@@ -29,7 +32,8 @@ function parseArgs(argv) {
     slices: [0, 8, 16, 24, 32, 40, 48, 56, 63],
     hiFracMax: 0.05,
     aMeanMin: 0.3,
-    aMeanMax: 0.6
+    aMeanMax: 0.6,
+    closure: true
   }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -37,6 +41,7 @@ function parseArgs(argv) {
     else if (a === '--hi-frac-max') opts.hiFracMax = Number(argv[++i])
     else if (a === '--a-mean-min') opts.aMeanMin = Number(argv[++i])
     else if (a === '--a-mean-max') opts.aMeanMax = Number(argv[++i])
+    else if (a === '--no-closure') opts.closure = false
   }
   return opts
 }
@@ -69,7 +74,7 @@ void main(){
   }
 }, REPO)
 
-const result = await page.evaluate(async ({ fragSrc, vertSrc, seedOffset, slices }) => {
+const result = await page.evaluate(async ({ fragSrc, vertSrc, seedOffset, slices, closureOn }) => {
   const gl = document.createElement('canvas').getContext('webgl2')
   if (gl == null) return { error: 'no webgl2' }
   const compile = (type, src) => {
@@ -122,8 +127,27 @@ const result = await page.evaluate(async ({ fragSrc, vertSrc, seedOffset, slices
     }
     layers[s] = stats
   }
-  return { seedOffset, layers }
-}, { fragSrc, vertSrc, seedOffset, slices: opts.slices })
+  // 逐位环回闭合检查（P2 回归锚 3）：u_slice=0 vs 1.0——烘焙 shader 入口 fract 折叠后
+  // 数学上逐位同点，严格 diff==0 断言。写在直方图循环后（复用 prog/tex/fbo，layer 0 覆盖无碍）。
+  let closure = undefined
+  if (closureOn) {
+    const uSliceLoc = gl.getUniformLocation(prog, 'u_slice')
+    const readSlice = (sliceVal) => {
+      gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, tex, 0, 0)
+      gl.uniform1f(uSliceLoc, sliceVal)
+      gl.drawArrays(gl.TRIANGLES, 0, 3)
+      const buf = new Uint8Array(256 * 256 * 4)
+      gl.readPixels(0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, buf)
+      return buf
+    }
+    const b0 = readSlice(0)
+    const b1 = readSlice(1)
+    let diff = 0
+    for (let i = 0; i < b0.length; i++) if (b0[i] !== b1[i]) diff++
+    closure = { diffBytes: diff, totalBytes: b0.length, bitwiseEqual: diff === 0 }
+  }
+  return { seedOffset, layers, closure }
+}, { fragSrc, vertSrc, seedOffset, slices: opts.slices, closureOn: opts.closure })
 
 await browser.close()
 
@@ -145,6 +169,12 @@ if (gHiFracMax >= opts.hiFracMax) {
 if (aMeanAvg < opts.aMeanMin || aMeanAvg > opts.aMeanMax) {
   failures.push(`a.mean 全层均值 ${aMeanAvg} ∉ [${opts.aMeanMin}, ${opts.aMeanMax}]（extra perlin 内容锚破——恒 1 覆盖或全零回归）`)
 }
+if (result.closure != null && !result.closure.bitwiseEqual) {
+  failures.push(
+    `环回闭合破：u_slice=0 vs 1.0 diff ${result.closure.diffBytes}/${result.closure.totalBytes} 字节` +
+    `（演化闭合铁律 spec §5.2——Z/W_CYCLES 整数行程或 fract 折叠回归）`
+  )
+}
 
 console.log(JSON.stringify({
   seedOffset: result.seedOffset,
@@ -154,7 +184,8 @@ console.log(JSON.stringify({
     gHiFracMax,
     gHiFracLimit: opts.hiFracMax,
     aMeanAvg,
-    aMeanRange: [opts.aMeanMin, opts.aMeanMax]
+    aMeanRange: [opts.aMeanMin, opts.aMeanMax],
+    closure: result.closure
   },
   failures,
   verdict: failures.length === 0 ? 'PASS' : 'FAIL'
