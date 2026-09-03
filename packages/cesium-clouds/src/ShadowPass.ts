@@ -157,8 +157,10 @@ interface CesiumContext extends Context {
  *
  * execute 前显式置 undefined 使状态机 no-op、draw 落在裸绑定的 BSM fbo（语义同 Context.endFrame
  * 的重置；私有字段直写，与本文件 _gl/_texture 等深路径访问同一先例）。
+ *
+ * WeatherAtlas 逐层烘焙（T5）同款裸 FBO + drawPass.execute 路径——同源导入复用，防两处漂移。
  */
-function syncCesiumFramebufferTracker(context: Context): void {
+export function syncCesiumFramebufferTracker(context: Context): void {
   ;(context as { _currentFramebuffer?: unknown })._currentFramebuffer = undefined
 }
 
