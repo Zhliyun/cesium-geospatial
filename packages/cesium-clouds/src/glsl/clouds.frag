@@ -523,6 +523,12 @@ vec4 marchClouds(
 
   float maxRayDistance = rayNearFar.y - rayNearFar.x;
   float stepSize = minStepSize + (perspectiveStepScale - 1.0) * rayNearFar.x;
+  // 【太空俯视步长 clamp（2026-09-03）】透视步长公式在相机远离云甲时崩溃：near≫段长
+  // （太空 16136km → near≈16128km → stepSize≈161km），云甲段 1 步跨完 →
+  // exp(-extinction·stepSize) 归零 alpha 全饱和（全白球）+ 甲顶单样本天气场欠采样
+  // 摩尔环带。clamp 到段长/8 保 ≥8 步采样；minStepSize 地板使近地验收域（公式值
+  // < 段长/8）与贴甲底薄段（地板域）行为与旧版逐位一致，startJitter 守卫语义自洽。
+  stepSize = min(stepSize, max(maxRayDistance * 0.125, minStepSize));
   // I don't understand why spatial aliasing remains unless doubling the jitter.
   // 【2026-09-03 穿云黑块修复（761m 贴甲底旋转视角）】起点 jitter 仅在段长足够（≥8 步）时
   // 启用：贴云甲底（minHeight）掠射视角的 march 段可短至十余米（≈2-3 步），±2 步起点抖动

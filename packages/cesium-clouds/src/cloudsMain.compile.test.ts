@@ -543,3 +543,25 @@ describe('穿云黑块修复 II：march 起点 jitter 段长守卫', () => {
     compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'startJitter guard')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-03 太空俯视云层异常修复】march 初始步长段长 clamp——
+// stepSize = minStepSize + (perspectiveStepScale-1)·rayNearFar.x 在相机远离云甲
+// （太空 16136km，near≈16128km）时 ≈161km/步，7.25km 云甲段 1 步跨完：
+// ① exp(-extinction·stepSize) 指数归零 → 全盘 alpha 饱和=1（全白球）；
+// ② 甲顶单样本高频天气场欠采样 → 摩尔纹 = 同心环带（视线撞击参数等值线）。
+// 修法=clamp 到 maxRayDistance/8（minStepSize 地板）：近地验收域公式值恒 < 段长/8
+// 不触发零回归；贴甲底薄段（段长<400m）地板接管行为与旧版一致，startJitter 守卫
+// （<8 步薄段归零）语义自洽（clamp 后段长/8 步长恰使守卫只在地板域触发）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('太空俯视云层异常修复：march 初始步长段长 clamp', () => {
+  it('clamp 在场：stepSize 封顶 maxRayDistance/8 且保留 minStepSize 地板', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    expect(src).toContain('float stepSize = minStepSize + (perspectiveStepScale - 1.0) * rayNearFar.x;')
+    expect(src).toContain('stepSize = min(stepSize, max(maxRayDistance * 0.125, minStepSize));')
+  })
+
+  it('glslang：含 clamp 完整 shader 真编译', () => {
+    compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'step size clamp')
+  })
+})
