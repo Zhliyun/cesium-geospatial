@@ -302,3 +302,21 @@ dispatch 修复（方案 A：`usePngFallback` 显式 escape × `pngFallback` 纯
 ## 产物
 
 `r4-*.png`（sanity/b5 对+side/四预设/seed1/evolve 三连/phase 0-1800-9000-19070/repeat20/三纬度）在 `apps/demo/verify-artifacts/`。
+
+---
+
+## T9 补测：演化 z 闭合端到端（B3 数据基础修正，2026-09-03）
+
+**目的**：B3 的 56.9% 跳变混叠了「wind 平流位差」与「演化 z 回绕」两分量，无法归因。本组用 `cloudsWind=0` 剥离平流（烘焙输入组参数，wind=0 → `windOffset ≡ 0`），纯演化环回三阶判别：
+
+| 对照 | 语义 | fracChanged(tol=8) | meanAbs | maxDelta |
+|---|---|---|---|---|
+| phase 0 vs 10 | 环内 +10s 正常步长 | **5.53%** | 1.17 | 84 |
+| phase 0 vs 19070 | 跨回绕点 −10s 步长（环周期 19080s） | **5.07%** | 1.09 | 86 |
+| 比值 | 19070/10 | **0.92** | — | — |
+
+**判定 PASS**：跨回绕步长与环内步长同量级（0.92×）→ 19070 的演化位差恰等价环末 −10s 步长，**演化 z 维回绕连续、闭合铁律成立**；T8 B3 的 56.9% 坐实**全部来自 wind 位差**（152.6km=1.523 tile 非整数），烘焙侧 Z_CYCLES 闭合无恙。「B3 整场循环语义」的用户拍板项收窄为纯 wind 不回绕问题（一行修法 `windMps×evolutionHours ≡ tileKm` 维持原判）。
+
+**读数口径注记**：~5% 的步长残差非不闭合证据——phase 差 10s = 3D atlas z 采样位差 10/298 ≈3.4% 切片间距，相邻切片 LINEAR cross-fade（内容去相关）下高对比边缘像素超 tol 属预期；且各实例 temporal/jitter 收敛态差异混入。判别看「跨回绕 vs 环内」比值（结构不变性），不看绝对零。
+
+方法：`node apps/demo/scripts/verify-clouds-distribution.mjs closure`（三 URL 各自新开 headed 实例，成对同批；四重门=mode=atmosphere 显式 + tilesLoaded=true + renderAlive=true + 同批，全部满足；三组一致仅 1 条非致命 404 资源报错）。产物 `p9-closure-phase{0,10,19070}.png` 在 `apps/demo/verify-artifacts/`。

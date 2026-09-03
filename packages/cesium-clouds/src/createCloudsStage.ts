@@ -294,6 +294,13 @@ export interface CloudsStageHandle {
   /** CascadedShadowMaps 实例（级联 split/frusta/bbox 中间量调试用）。 */
   readonly cascades: CascadedShadowMaps
   /**
+   * T9 调试：WeatherAtlas 当前模式（T8 遗留——此前无运行时探针，console 推断不可靠）。
+   * 'baked'=GPU 烘焙 3D atlas / 'pngFallback'=escape（?cloudsAtlas=0）或烘焙失败降级的
+   * 静态 PNG 包装 / 'dummy'=PNG decode 失败的 1×1×1 全白降级 / undefined=无 atlas 也无
+   * dummy 的异常态。跟随当前 impl（setQuality 换档后指向新 atlas）。
+   */
+  readonly weatherAtlasMode: 'baked' | 'pngFallback' | 'dummy' | undefined
+  /**
    * 运行时换质量档位（spec §7 统一内部重建：销毁旧 impl → 以「创建时用户显式 options +
    * 新 quality」重新 resolve（用户显式参数保留，§5 合并规则）→ 重建全部资源 → 换 impl 引用）。
    *
@@ -365,6 +372,10 @@ interface CloudsStageImpl {
   readonly shadowPass: ShadowPass | undefined
   readonly shadowState: CloudsShadowFrameState
   readonly params: CloudsParameters
+  /** T9 调试：WeatherAtlas 句柄（mode getter 消费；undefined = atlas 跳过创建的 dummy 路径）。 */
+  readonly atlas: WeatherAtlas | undefined
+  /** T9 调试：atlas 跳过创建时的 1×1×1 全白 dummy（atlas 非 undefined 时恒 undefined）。 */
+  readonly atlasFallbackDummy: Texture3D | undefined
   /** T6 天气预设热切（写 params/state 闭包引用；undefined=清除回创建基线）。 */
   setWeatherPreset(preset: CloudsWeatherPreset | undefined): void
   onPreRender(time: JulianDate): void
@@ -907,6 +918,8 @@ function buildCloudsStageImpl(
       shadowState,
       cascades,
       params,
+      atlas,
+      atlasFallbackDummy,
       setWeatherPreset,
       onPreRender,
       destroy(): void {
@@ -1026,6 +1039,10 @@ export function createCloudsStage(
     // CascadedShadowMaps 实例（frusta/bbox 中间量调试用）
     get cascades() {
       return impl.cascades
+    },
+    // T9 调试：atlas 模式探针（T8 遗留——冒烟脚本此前只能靠 console warn 推断）
+    get weatherAtlasMode() {
+      return impl.atlas?.mode ?? (impl.atlasFallbackDummy != null ? 'dummy' : undefined)
     },
     setQuality(next: CloudsQualityPreset): void {
       if (destroyed) {

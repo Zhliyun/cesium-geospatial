@@ -293,6 +293,46 @@ async function cmdEvolve(opts) {
   console.log(JSON.stringify({ paths, tilesLoaded: meta.tilesLoaded, consoleErrors: meta.errors }))
 }
 
+// closure：T9 D1 演化 z 闭合端到端（B3 数据基础修正）——cloudsWind=0 剥离平流位差后，
+// 三阶判别：phase 0（基准）/ 10（环内 +10s 正常步长）/ 19070（环末-10s = 跨回绕点步长）。
+// T8 B3 实测（wind 开）fracChanged 56.9% 系 wind 不回绕位差主导（19070s×8m/s=1.523 tile
+// 非整数），非演化 z 维不闭合；wind=0 后 0vs19070 残差若与 0vs10 同量级 → 19070 位差
+// 恰等价 -10s 步长 → 回绕连续、闭合成立；显著大于 → z 维不闭合（Z_CYCLES 铁律破）另行排查。
+// 注意残差非零是预期内的：phase 差 10s → 3D atlas z 采样位差 10/298 ≈3.4% 切片间距，
+// 相邻切片 LINEAR cross-fade（内容去相关）下少数高对比边缘像素超 tol——看量级判别不看绝对 0。
+async function cmdClosure(opts) {
+  mkdirSync(opts.out, { recursive: true })
+  const base = `${COMMON}&cloudsWind=0`
+  const stages = [
+    ['phase0', `${base}&cloudsEvolutionPhase=0`],
+    ['phase10', `${base}&cloudsEvolutionPhase=10`],
+    ['phase19070', `${base}&cloudsEvolutionPhase=19070`]
+  ]
+  const paths = []
+  const metas = []
+  for (const [tag, query] of stages) {
+    let shotDone = false
+    const meta = await withPage(opts, query, async (page) => {
+      const path = join(opts.out, `p9-closure-${tag}.png`)
+      await page.screenshot({ path })
+      paths.push(path)
+      shotDone = true
+      console.log(`[shot] ${path}`)
+    })
+    metas.push({ tag, shotDone, tilesLoaded: meta.tilesLoaded, renderAlive: meta.renderAlive, consoleErrors: meta.errors })
+  }
+  const pngs = paths.map((p) => loadPng(p))
+  const step10 = diffStats(pngs[0], pngs[1], opts.tol) // 环内 +10s 步长
+  const wrap19070 = diffStats(pngs[0], pngs[2], opts.tol) // 跨回绕 -10s 步长
+  // 判别：跨回绕步长 ≯ 环内步长 3× → 回绕连续（闭合成立）；否则 z 维不闭合疑。
+  const ratio = step10.fracChanged > 0 ? wrap19070.fracChanged / step10.fracChanged : Infinity
+  const verdict =
+    wrap19070.fracChanged < 0.01 || ratio < 3
+      ? 'PASS（跨回绕步长≈环内步长，演化 z 闭合成立）'
+      : `FAIL（跨回绕/环内步长比 ${ratio.toFixed(1)}×，z 维不闭合疑）`
+  out({ stages: metas, paths, step10, wrap19070, ratio: +ratio.toFixed(2), verdict })
+}
+
 // fps：headed 10s rAF 采样（Cesium 自身 rAF 驱动渲染，回调节奏=渲染节奏）
 async function cmdFps(opts, query) {
   const meta = await withPage(opts, query, async (page) => {
@@ -491,6 +531,8 @@ if (cmd === 'smoke') {
 } else if (cmd === 'evolve') {
   mkdirSync(opts.out, { recursive: true })
   await cmdEvolve(opts)
+} else if (cmd === 'closure') {
+  await cmdClosure(opts)
 } else if (cmd === 'fps') {
   await cmdFps(opts, opts._[1])
 } else if (cmd === 'diff') {
@@ -511,7 +553,7 @@ if (cmd === 'smoke') {
   cmdSide(opts._[1], opts._[2], opts._[3])
 } else {
   console.error(
-    '用法: smoke | bake | shot <name> <query> | triple <prefix> <query> | evolve | fps <query> | diff a b [--rows] [--tol N] | rows shot | coverage shot [--sky-ratio 0.35] [--band y0,y1] | suncheck a b | side a b out'
+    '用法: smoke | bake | shot <name> <query> | triple <prefix> <query> | evolve | closure | fps <query> | diff a b [--rows] [--tol N] | rows shot | coverage shot [--sky-ratio 0.35] [--band y0,y1] | suncheck a b | side a b out'
   )
   process.exitCode = 1
 }

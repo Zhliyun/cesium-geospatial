@@ -1449,6 +1449,32 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
     handle!.destroy()
   })
 
+  it('weatherAtlasMode 调试 getter：透传当前 impl 的 atlas 模式（T8 遗留运行时探针，三态覆盖）', () => {
+    // baked：正常烘焙路径（mock createWeatherAtlas 分派语义：pngFallback 兜底源缺省 → baked）
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    expect(handle!.weatherAtlasMode).toBe('baked')
+    handle!.destroy()
+    // pngFallback：escape 包装路径（?cloudsAtlas=0）
+    const scene2 = createMockScene()
+    const handle2 = createCloudsStage(scene2, createMockLuts(), createMockWeatherWithRaw(), {
+      clouds: true,
+      atlasDisabled: true
+    })
+    expect(handle2!.weatherAtlasMode).toBe('pngFallback')
+    handle2!.destroy()
+    // dummy：escape 且无 raw PNG（decode 失败极端）→ 1×1×1 全白降级
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const scene3 = createMockScene()
+    const handle3 = createCloudsStage(scene3, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      atlasDisabled: true
+    })
+    expect(handle3!.weatherAtlasMode).toBe('dummy')
+    warn.mockRestore()
+    handle3!.destroy()
+  })
+
   it('preRender 覆写 state.atlasT/windOffset/itczCenterSin（scene.time 驱动，T1 纯函数同源自洽）', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
