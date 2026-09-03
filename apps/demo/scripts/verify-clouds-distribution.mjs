@@ -228,13 +228,27 @@ async function withPage(opts, query, fn) {
     console.warn(`[shot] tilesLoaded 超时（${url}）`)
   }
   await page.waitForTimeout(opts.settleMs)
+  // 第四轮铁律（5b7a382 前死帧伪像）：rAF 必须在推进——SkyStage 编译炸曾致 render loop
+  // 停摆，截图沦为准静态死帧（相同参数逐位同图=死画布而非确定性）。无效样本显式标记。
+  let renderAlive = false
+  try {
+    renderAlive = await page.evaluate(async () => {
+      const t0 = await new Promise((r) => requestAnimationFrame((t) => r(t)))
+      await new Promise((r) => setTimeout(r, 200))
+      const t1 = await new Promise((r) => requestAnimationFrame((t) => r(t)))
+      return t1 > t0
+    })
+  } catch {
+    renderAlive = false
+  }
+  if (!renderAlive) console.warn(`[alive] 渲染循环未推进（死帧伪像风险）: ${url}`)
   const errors = consoleLines.filter((l) => l.type === 'error' || l.type === 'pageerror')
   try {
     await fn(page)
   } finally {
     await browser.close()
   }
-  return { url, tilesLoaded, errors }
+  return { url, tilesLoaded, errors, renderAlive }
 }
 
 // shot：<name> 单实例单帧
@@ -246,7 +260,7 @@ async function cmdShot(opts, name, query) {
     shotDone = true
     console.log(`[shot] ${path}`)
   })
-  console.log(JSON.stringify({ name, shotDone, tilesLoaded: meta.tilesLoaded, consoleErrors: meta.errors }))
+  console.log(JSON.stringify({ name, shotDone, tilesLoaded: meta.tilesLoaded, renderAlive: meta.renderAlive, consoleErrors: meta.errors }))
 }
 
 // triple：同实例 3 帧（间隔 2s）——确定性对照组
