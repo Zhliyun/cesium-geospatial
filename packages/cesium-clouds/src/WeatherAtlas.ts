@@ -150,8 +150,8 @@ export function resolveWeatherAtlasPlan(options: {
  *
  * 约束（评审交接注记）：产物须避开烘焙域整频网格点（freq∈{8,16,32,64,128} 的 1/freq
  * 格点，偏移落格点上会使 p+offset 与未偏移域逐位对齐、种子失效）与整数平移（z 向整数
- * 平移对整频域不可见）。sin hash 实测（V8）：seed=1337 → (0.4758, 0.8408)，x*16=7.613、
- * y*16=13.453 均非整——单测钉死。
+ * 平移对整频域不可见）。sin hash 实测（V8）：seed=1337 → (0.4758, 0.8408)，x*128=60.91、
+ * y*128=107.62 均非整（1/128 格点覆盖 freq≤128 全部格点）——单测钉死。
  */
 export function bakeSeedToOffset(seed: number): Cartesian2 {
   const frac = (n: number): number => {
@@ -281,74 +281,95 @@ function bakeAtlas(context: Context, plan: WeatherAtlasPlan): WeatherAtlas {
   const rawTex = (atlasTexture as unknown as { _texture: WebGLTexture })._texture
   const fbo = gl.createFramebuffer()
 
-  // draw pass：一次构造、64 层复用（同 ShaderProgram 缓存，u_slice 闭包切值——
-  // ShadowPass u_cascadeIndex 同款 mutable-uniform 模式）。
-  let slice = 0
-  const seedOffset = bakeSeedToOffset(plan.seed)
-  const drawPass = new FullscreenPass(ctx, {
-    fragmentShaderSource: bridgeBakeShaderForDrawPass(buildStandaloneWeatherBakeShader()),
-    uniformMap: {
-      u_slice: () => slice,
-      u_seedOffset: () => seedOffset
-    },
-    renderState: RenderState.fromCache({
-      viewport: new BoundingRectangle(0, 0, ATLAS_SIZE, ATLAS_SIZE),
-      depthTest: { enabled: false },
-      depthMask: false
-    })
-  })
+  // 异常路径资源回收：ShaderProgram 编译是 lazy 的（FullscreenPass 首次 execute 才真正
+  // 编译 GLSL）——编译失败在烘焙循环内 throw，此时 WeatherAtlas 对象未返回、dispose
+  // 不可达 → fbo+atlasTexture（256²×64×4 ≈ 16MB GPU）泄漏，无 fallback 时调用方重试
+  // 逐次 +16MB。atlasTexture 构造自身无此窗口（无 source 路径 debug 检查全在
+  // createTexture 之前，Texture3D.js:109-199 vs :216——createTexture 后无 throw 点）。
+  let drawPass: FullscreenPass | undefined
+  const releaseGpuResources = (): void => {
+    drawPass?.destroy()
+    gl.deleteFramebuffer(fbo)
+    ;(atlasTexture as unknown as { destroy(): void }).destroy()
+  }
 
-  let fboComplete = true
-  // save 外部 FBO 绑定——finally 恢复（烘焙可能在任意帧时点执行）
-  const prevFbo = gl.getParameter(GL_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null
-  gl.bindFramebuffer(GL_FRAMEBUFFER, fbo)
   try {
-    for (let i = 0; i < ATLAS_SLICES; i++) {
-      // 每次 attach 前防御重绑（drawPass.execute 可能重置绑定——文件头防御 2）
-      gl.bindFramebuffer(GL_FRAMEBUFFER, fbo)
-      gl.framebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rawTex, 0, i)
-      // 完整性只在 i===0 查一次（64 层同 texture 同格式——ShadowPass:346 同判定）
-      if (i === 0 && gl.checkFramebufferStatus(GL_FRAMEBUFFER) !== GL_FRAMEBUFFER_COMPLETE) {
-        console.warn('[clouds] WeatherAtlas FBO 不完整，跳过烘焙（atlas 全 0 → 无云降级）')
-        fboComplete = false
-        break
+    // draw pass：一次构造、64 层复用（同 ShaderProgram 缓存，u_slice 闭包切值——
+    // ShadowPass u_cascadeIndex 同款 mutable-uniform 模式）。
+    let slice = 0
+    const seedOffset = bakeSeedToOffset(plan.seed)
+    drawPass = new FullscreenPass(ctx, {
+      fragmentShaderSource: bridgeBakeShaderForDrawPass(buildStandaloneWeatherBakeShader()),
+      uniformMap: {
+        u_slice: () => slice,
+        u_seedOffset: () => seedOffset
+      },
+      renderState: RenderState.fromCache({
+        viewport: new BoundingRectangle(0, 0, ATLAS_SIZE, ATLAS_SIZE),
+        depthTest: { enabled: false },
+        depthMask: false
+      })
+    })
+
+    let fboComplete = true
+    // save 外部 FBO 绑定——finally 恢复（烘焙可能在任意帧时点执行）
+    const prevFbo = gl.getParameter(GL_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null
+    gl.bindFramebuffer(GL_FRAMEBUFFER, fbo)
+    try {
+      for (let i = 0; i < ATLAS_SLICES; i++) {
+        // 每次 attach 前防御重绑（drawPass.execute 可能重置绑定——文件头防御 2）
+        gl.bindFramebuffer(GL_FRAMEBUFFER, fbo)
+        gl.framebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rawTex, 0, i)
+        // 完整性只在 i===0 查一次（64 层同 texture 同格式——ShadowPass:346 同判定）
+        if (
+          i === 0 &&
+          gl.checkFramebufferStatus(GL_FRAMEBUFFER) !== GL_FRAMEBUFFER_COMPLETE
+        ) {
+          console.warn('[clouds] WeatherAtlas FBO 不完整，跳过烘焙（atlas 全 0 → 无云降级）')
+          fboComplete = false
+          break
+        }
+        slice = i / ATLAS_SLICES // 先切 uniform 再 draw（闭包读本层值）
+        syncCesiumFramebufferTracker(ctx) // 文件头防御 4
+        drawPass.execute(ctx)
       }
-      slice = i / ATLAS_SLICES // 先切 uniform 再 draw（闭包读本层值）
-      syncCesiumFramebufferTracker(ctx) // 文件头防御 4
-      drawPass.execute(ctx)
+    } finally {
+      gl.bindFramebuffer(GL_FRAMEBUFFER, prevFbo)
+      gl.viewport(0, 0, ctx.drawingBufferWidth, ctx.drawingBufferHeight)
     }
-  } finally {
-    gl.bindFramebuffer(GL_FRAMEBUFFER, prevFbo)
-    gl.viewport(0, 0, ctx.drawingBufferWidth, ctx.drawingBufferHeight)
-  }
 
-  if (fboComplete) {
-    // mip 链（降级链第一级）：FBO 已解绑。generateMipmap 前清残留 error 位——
-    // attach/draw 期间的旧错误否则会被误记到 mip 头上（误降级 LINEAR，行为安全但 warn 误导）。
-    drainGlErrors(gl)
-    atlasTexture.generateMipmap()
-    if (gl.getError() === GL_NO_ERROR) {
-      atlasTexture.sampler = mipSampler()
-    } else {
-      // 中间档：保持 lod0 LINEAR——textureLod 对非 mipmap filter 纹理 clamp lod0
-      //（WebGL2 规范），远端像素少 mip 平滑（噪点略增），功能无损。
-      console.warn('[clouds] WeatherAtlas generateMipmap 失败，sampler 保持 LINEAR（lod0）')
+    if (fboComplete) {
+      // mip 链（降级链第一级）：FBO 已解绑。generateMipmap 前清残留 error 位——
+      // attach/draw 期间的旧错误否则会被误记到 mip 头上（误降级 LINEAR，行为安全但 warn 误导）。
+      drainGlErrors(gl)
+      atlasTexture.generateMipmap()
+      if (gl.getError() === GL_NO_ERROR) {
+        atlasTexture.sampler = mipSampler()
+      } else {
+        // 中间档：保持 lod0 LINEAR——textureLod 对非 mipmap filter 纹理 clamp lod0
+        //（WebGL2 规范），远端像素少 mip 平滑（噪点略增），功能无损。
+        console.warn('[clouds] WeatherAtlas generateMipmap 失败，sampler 保持 LINEAR（lod0）')
+      }
     }
-  }
 
-  let destroyed = false
-  return {
-    atlasTexture,
-    mode: 'baked',
-    plan,
-    dispose(): void {
-      if (destroyed) return
-      destroyed = true
-      drawPass.destroy()
-      gl.deleteFramebuffer(fbo)
-      // Texture3D augment 类型未声明 destroy（ShadowPass:406 同款 cast 调用）
-      ;(atlasTexture as unknown as { destroy(): void }).destroy()
+    let destroyed = false
+    return {
+      atlasTexture,
+      mode: 'baked',
+      plan,
+      dispose(): void {
+        if (destroyed) return
+        destroyed = true
+        drawPass?.destroy()
+        gl.deleteFramebuffer(fbo)
+        // Texture3D augment 类型未声明 destroy（ShadowPass:406 同款 cast 调用）
+        ;(atlasTexture as unknown as { destroy(): void }).destroy()
+      }
     }
+  } catch (e) {
+    // WeatherAtlas 对象不可达——资源在此回收（内层 finally 已先恢复 FBO 绑定/viewport）
+    releaseGpuResources()
+    throw e
   }
 }
 

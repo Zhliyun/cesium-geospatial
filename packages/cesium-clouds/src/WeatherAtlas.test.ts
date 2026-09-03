@@ -69,11 +69,13 @@ describe('bakeSeedToOffset（u_seedOffset 确定性，spec §4.5）', () => {
 
   it('默认 seed 1337 避开频率网格点与整数平移（评审交接注记）', () => {
     const o = bakeSeedToOffset(1337)
-    // 烘焙域 Worley 整频 freq∈{8,16,32,64,128}：x*freq∈ℤ ⇒ x*16∈ℤ（高频网格点
-    // 是 1/16 的倍数）——断言 x*16∉ℤ 即覆盖全部整频网格点。偏移落在网格点上会使
-    // p+seedOffset 与未偏移域逐位对齐（偏移失效、种子不可分辨）。
-    expect((o.x * 16) % 1).not.toBe(0)
-    expect((o.y * 16) % 1).not.toBe(0)
+    // 烘焙域 Worley 整频 freq∈{8,16,32,64,128}：格点为 1/freq——1/8=16/128、1/16=8/128、
+    // 1/32=4/128、1/64=2/128、1/128=1/128，全部是 1/128 的整数倍 ⇒ x*128∉ℤ 一条断言
+    // 覆盖 freq≤128 全部格点（×16 探不到 1/32、1/64、1/128 的奇数格点，如 x=1/32 时
+    // x*16=0.5 非整）。偏移落在格点上会使 p+seedOffset 与未偏移域逐位对齐（偏移失效、
+    // 种子不可分辨）。
+    expect((o.x * 128) % 1).not.toBe(0)
+    expect((o.y * 128) % 1).not.toBe(0)
     // 非整数：排除 bakePoint.z 的整数平移（z 向整数平移对整频域不可见）
     expect(o.x % 1).not.toBe(0)
     expect(o.y % 1).not.toBe(0)
@@ -82,8 +84,8 @@ describe('bakeSeedToOffset（u_seedOffset 确定性，spec §4.5）', () => {
   it('多 seed 抽查均避开网格点（覆盖用户可传任意 seed 的鲁棒性）', () => {
     for (const seed of [1338, 1, 42, 99991]) {
       const o = bakeSeedToOffset(seed)
-      expect((o.x * 16) % 1).not.toBe(0)
-      expect((o.y * 16) % 1).not.toBe(0)
+      expect((o.x * 128) % 1).not.toBe(0)
+      expect((o.y * 128) % 1).not.toBe(0)
     }
   })
 })
