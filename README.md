@@ -7,8 +7,8 @@
 - **物理大气**（Bruneton 模型，预计算 LUT）：天空散射、大气透视、昼夜/晨昏过渡、太空视角大气边缘辉光（limb glow）
 - **方向性月光 + 物理月盘**：月光作为第四光照项进云照明（方向/强度随月相），月盘 Oren-Nayar + IAU 月固系月面纹理（月海/环形山与真实天文一致，潮汐锁定），月相从太阳-月几何自动涌现
 - **动态曝光**：按相机当地太阳高度角自动切换昼/夜曝光，晨昏带平滑过渡
-- **镜头光晕**（LensFlare）：太阳入镜时 ghost/halo/bloom，image-based，物理感光
-- **体积云**（raymarch）：3D 噪声形状 + 天气图覆盖，级联 **BSM 自阴影**（世界锚定固定网格），云间 **god rays** 光柱
+- **镜头光晕**（LensFlare）：太阳入镜时 ghost/halo/bloom，image-based，物理感光；云遮挡联动（太阳被云挡时 halo/ghost 按云覆盖率衰减）
+- **体积云**（raymarch）：3D 噪声形状 + 全球天气图覆盖——纬度气候带分布（ITCZ/副热带晴空带/温带气旋带）+ 时间切片演化（云图随时间聚散形变，高卷云演化快于低云）+ 风场平流（云团整体漂移、云内纹理同步流动），级联 **BSM 自阴影**（世界锚定固定网格），云间 **god rays** 光柱
 - **HDR 管线**：HalfFloat 中间缓冲 + ACES filmic tonemap + display dithering
 
 ## 快速开始
@@ -24,7 +24,7 @@ echo 'VITE_ION_TOKEN=你的token' > apps/demo/.env.local
 pnpm dev          # 启动 demo（= pnpm --filter demo dev）
 ```
 
-浏览器打开 <http://localhost:5173>。默认是 `mode=sky` 对照分支，**看完整效果用 `?mode=atmosphere&clouds=1`**（见下方推荐 URL）。
+浏览器打开 <http://localhost:5173> 即是主体验：`mode=atmosphere` 完整大气 + 体积云默认开启、帧率角标默认关闭（2026-09-03 拍板）。回归对照用 `?mode=sky`（Phase 0 天空）/ `?mode=depth`（深度调试），关云 `?clouds=0`，帧率角标 `?fps=1`。
 
 > 渲染异常排查提示：多次热更新后如出现画面异常（云位置偏移、颜色错乱等），先清 vite 缓存再判断——`pkill -f vite && rm -rf apps/demo/node_modules/.vite && pnpm dev`。
 
@@ -35,6 +35,8 @@ pnpm dev          # 启动 demo（= pnpm --filter demo dev）
 ```
 http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera=-80.6057,64.5197,7852,68.8,-17.8
 ```
+
+> URL 中 `mode=atmosphere&clouds=1` 为显式写法，与当前默认行为一致（冗余无害，保留以兼容旧环境）。
 
 在此之上追加参数的常用场景：
 
@@ -73,13 +75,13 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 
 | 参数 | 说明 |
 |---|---|
-| `mode` | `atmosphere`（完整大气+云主分支）/ `sky`（Phase 0 天空对照）/ `depth`（深度调试）。默认 `sky` |
-| `clouds=1` | 开启体积云（仅 atmosphere 模式生效） |
+| `mode` | `atmosphere`（完整大气+云主分支，**默认**）/ `sky`（Phase 0 天空对照）/ `depth`（深度调试） |
+| `clouds` | 体积云开关，**默认开**（`clouds=0` 关闭；仅 atmosphere 模式生效） |
 | `time` | ISO8601 时间，决定太阳方向（昼夜、太阳高度角）。例：`2026-08-28T17:30:00Z` |
 | `play=1&speed=N` | 时钟走动（默认冻结 = Cesium 现状语义，太阳也不动；speed 默认 60）。时钟开关，作用于全部 mode；确定性验收用 `?time=` 钉死不受影响 |
 | `camera` | 初始视角 `lon,lat,height,heading,pitch`（角度制；heading/pitch 可省略，默认 0/-90） |
 | `ionToken` | URL 传 Cesium ion token（优先级低于 `.env.local` 的 `VITE_ION_TOKEN`） |
-| `fps=0` | 关闭右上角帧率/帧时显示（默认开） |
+| `fps=1` | 开启右上角帧率/帧时显示（**默认关**） |
 
 ### 大气调节
 
@@ -152,7 +154,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `?cloudsEvolutionHours=` | 云图演化环周期（小时，默认 5.3） |
 | `?cloudsWind=` | 平流风速 m/s（默认 8） |
 | `?cloudsSeed=` | 烘焙种子（默认 1337） |
-| `?cloudsWeatherRepeat=` | 云图平铺（默认 100） |
+| `?cloudsWeatherRepeat=` | 云图经向平铺瓦数（默认 400，纬向自动取半，瓦近物理方形 ≈100km；face 缝根治后为经纬等距圆柱域，400 与旧 face 域瓦尺寸观感连续。经度割缝靠偶数整周期闭合） |
 | `?cloudsEvolutionPhase=` | 演化相位偏移秒（调试，不动太阳） |
 | `?cloudsAtlas=0` | 逃生门：旧静态云图 |
 
@@ -198,7 +200,7 @@ add 时机由消费者编排，否则云不可见：
 
 ```bash
 pnpm dev                 # 启动 demo
-pnpm test                # 全部 workspace 测试
+pnpm test                # 全部 workspace 测试（含 GLSL 编译测试，依赖 glslangValidator：brew install glslang）
 pnpm build               # 构建全部包
 
 # 单包测试 / 单文件 / 按用例名过滤
