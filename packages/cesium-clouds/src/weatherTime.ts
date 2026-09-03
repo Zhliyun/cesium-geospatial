@@ -51,7 +51,7 @@ export function computeDayOfYear(month: number, day: number): number {
 
 /**
  * ITCZ 中心纬度（度，spec §5.4）：年均 ~5°N（海陆不对称北偏），不对称漂移
- * 北移 ~12°/南移 ~3°；最北 8 月上旬（doy≈227）、最南 2 月（doy≈47）。
+ * 北移 ~12°/南移 ~3°；最北 8 月初（doy=215 精确峰 12.5°N）、最南 2 月初（doy=33 谷 ≈−2.5°S）。
  * 相位锚点由 weatherTime.test.ts 断言（spec §8）。
  */
 export function computeItczCenterLatDeg(dayOfYear: number): number {

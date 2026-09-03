@@ -100,7 +100,7 @@ windOffset = windVec × tSec（mod 1，tile 单位）           // 平流，加�
 
 ### 4.6 其余决策
 
-1. RGBA 4 通道语义保持 low/mid/high；**第 4 通道（a）现状为死值**（`localWeather.frag:82` 无条件 `=1.0`）——新烘焙保持 a=1 不激活，避免计划外观感变化。
+1. RGBA 4 通道语义保持 low/mid/high；~~第 4 通道（a）现状为死值（`localWeather.frag:82` 无条件 `=1.0`）——新烘焙保持 a=1 不激活~~——**执行期修订（T8 实测证伪）**：旧 PNG 资产 a 通道有真实分布（mean 0.415）——「死值」系源码 `outputColor.a=1.0` 后加覆盖与资产失同步的假象，非资产本义。烘焙 a 通道已恢复 extra perlin 真实内容（0b335ab：freq32/oct4/相位(-19.1,33.4,47.2) 旧图逐字，采样点用 bakePoint 随时间维同域演化）。
 2. 4 通道时间演化策略放**烘焙侧**（各通道错相/错速：高卷云快、低云慢，物理合理；采样端单次 rgba fetch 不变——采样侧按通道分风需 4 次 fetch，违反硬约束，明确排除）。
 3. 删除 `evolution` hack（`localWeatherOffset` 模长当风速）；`localWeatherOffset` 保留为调试偏移。
 4. `sampleWeather` 签名增加 `position` 参数（纬度气候带用）——三个调用点（clouds.frag 主 march/次 raymarch、shadow.frag BSM）position 均在作用域内，机械改动；BSM 云影自动获得气候带（`shadow.frag` position 与主 march 同为密切球系世界坐标，已验证）。
@@ -148,7 +148,8 @@ Perlin warp/extra：w = wPhase_i
 band(latSin, tSec) = ITCZ峰 + 副热带谷 + 中纬峰 + 极地衰减，总 clamp [0.2, 1.3]
   ITCZ：中心 latC = 5° + 7.5°·cos(2π(doy−215)/365.25)   // 年均 ~5°N（海陆不对称北偏），
         // 8 月上旬最北 ≈12.5°N、2 月 ≈−2.5°S（不对称漂移：北移 ~12°、南移 ~3°）
-        // 相位锚点：doy=227 → latC≈max、doy=47 → latC≈min（单测断言）
+        // 相位锚点（勘误 r3）：doy=215 → latC=12.5（精确峰）、doy=33 → latC≈−2.5（谷）；
+        //（原锚点 doy=227/47 与公式矛盾——doy=227 时 latC≈12.34 非峰值；单测断言走 215/33）
         // 半宽 ±10°（sin 值 0.174）
   副热带高压（谷）：|latSin| ≈ 0.42-0.50（25-30°）
   中纬度风暴带（峰）：|latSin| ≈ 0.707-0.866（45-60°）    // r2 修正 r1 笔误 0.66-0.77
@@ -207,7 +208,7 @@ band(latSin, tSec) = ITCZ峰 + 副热带谷 + 中纬峰 + 极地衰减，总 cla
 1. **BSM 云影自动跟随**：`sampleWeather` 加 position 参数后 shadow.frag 同链生效（已验证 position 同系）；**`?cloudsShadowTemporal=1` 时注意**——BSM resolve temporalAlpha=0.01（滞后 ~100 帧 ≈1.7s），云影以 8 m/s 拖尾 ~13m，默认关闭无碍，开启时 α 需与演化速率联动（验收检查项）。
 2. **temporal 兼容（定量）**：tNorm 每帧增量 ~8.7e-7、平流每帧 ~3.3e-7 uv——远低于可见阈值，resolve mix(clip(history), current, 0.1) 滞后 ~10 帧无 ghosting；静止冻结只冻 frame 相位（jitter），march 每帧照跑演化内容正常流入。
 3. **质量档正交**：烘焙纹理 22.4MB（含 mip）固定开销全档共用；render-to-3D 已由 BSM 证实，**3D generateMipmap 需冒烟验证**（BSM 无 mip 先例，不能作证据，§8）。
-4. **性能口径（r2 修正）**：weather fetch 2D→3D 为 **8→16 texel/fetch 翻倍**（原「<5%」无依据），且主 march（≤500 步）+ 次 raymarch（每受照样本 2+2+3 步）+ BSM 生成端（512²×3 级联×50 步，运动帧全量）三处都吃。**「未实测，以门禁为准」**——门禁场景必须含：运动中（激活 BSM re-march）、low/ultra 两端档、Apple M 集成显卡（带宽敏感 UMA）；ultra 结果单独如实记录（memory 先例：曾独跌两组）。
+4. **性能口径（r2 修正）**：weather fetch 2D→3D 为 **8→16 texel/fetch 翻倍**（原「<5%」无依据），且主 march（≤500 步）+ 次 raymarch（每受照样本 2+2+3 步）+ BSM 生成端（512²×3 级联×50 步，运动帧全量）三处都吃。**「未实测，以门禁为准」**——门禁场景必须含：运动中（激活 BSM re-march）、low/ultra 两端档、Apple M 集成显卡（带宽敏感 UMA）；ultra 结果单独如实记录（memory 先例：曾独跌两组）。**执行备注（T8 终测口径，T9 记录）**：low/ultra 端档未跑全，终测帧率读数系 headless 软渲染口径——headed 真机（含 M 集成显卡）留合并后补验。
 5. **mipLevel 重标定**：纹理 512²→256² 后同 mipLevel 清晰度/混叠整体偏移一档——`getMipLevel`/`mipLevelScale`/BSM 固定 mip 表（`shadow.frag:183` {0,0.5,1,2}）迁移后复核，§8 验收项。
 6. **cube-sphere face 接缝**：现状已存在，本设计不改变采样域，不恶化、不在范围修复。
 
@@ -215,7 +216,7 @@ band(latSin, tSec) = ITCZ峰 + 副热带谷 + 中纬峰 + 极地衰减，总 cla
 
 | 层 | 验什么 | 方法 |
 |----|--------|------|
-| 单测 | 烘焙 shader 编译；packed 派生（含 minHeight/maxHeight）；预设档映射；气候带包络值域+ITCZ 相位锚点（doy=227 max / doy=47 min） | vitest |
+| 单测 | 烘焙 shader 编译；packed 派生（含 minHeight/maxHeight）；预设档映射；气候带包络值域+ITCZ 相位锚点（doy=215 峰 / doy=33 谷，勘误 r3） | vitest |
 | 烘焙确定性 | 同输入两次烘焙输出 buffer 哈希一致 | node/头less GL |
 | 烘焙正确性 | 瓦边界连续性（读回首尾行/列像素 diff≈0）；相邻切片差分去平移残差非平凡（互相关，防纯平移退化）；mip 生成 getError()==NO_ERROR | 读回断言 |
 | SwiftShader 冒烟 | 烘焙路径 GL 无错（不验画面——headless 云画面不可信） | headless 跑一次 |

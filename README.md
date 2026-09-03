@@ -76,6 +76,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `mode` | `atmosphere`（完整大气+云主分支）/ `sky`（Phase 0 天空对照）/ `depth`（深度调试）。默认 `sky` |
 | `clouds=1` | 开启体积云（仅 atmosphere 模式生效） |
 | `time` | ISO8601 时间，决定太阳方向（昼夜、太阳高度角）。例：`2026-08-28T17:30:00Z` |
+| `play=1&speed=N` | 时钟走动（默认冻结 = Cesium 现状语义，太阳也不动；speed 默认 60）。时钟开关，作用于全部 mode；确定性验收用 `?time=` 钉死不受影响 |
 | `camera` | 初始视角 `lon,lat,height,heading,pitch`（角度制；heading/pitch 可省略，默认 0/-90） |
 | `ionToken` | URL 传 Cesium ion token（优先级低于 `.env.local` 的 `VITE_ION_TOKEN`） |
 | `fps=0` | 关闭右上角帧率/帧时显示（默认开） |
@@ -154,7 +155,6 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `?cloudsWeatherRepeat=` | 云图平铺（默认 100） |
 | `?cloudsEvolutionPhase=` | 演化相位偏移秒（调试，不动太阳） |
 | `?cloudsAtlas=0` | 逃生门：旧静态云图 |
-| `?play=1&speed=N` | 时钟走动（默认冻结；speed 默认 60） |
 
 #### 体积云 stage API（库消费者必读）
 

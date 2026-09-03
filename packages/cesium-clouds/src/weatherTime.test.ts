@@ -42,7 +42,7 @@ describe('weatherTime 时间轴纯函数（spec §4.1/§5.4）', () => {
   it('windOffset：tile 单位、mod 1、方向对角', () => {
     // tileKm=100.075（repeat=100），speed=8 → 1s 位移 = 8/100075 tile
     const o = computeWindOffsetTiles(100075, 8, 100.075)
-    expect(o.x).toBeCloseTo(0, 12) // 恰好 1 tile，mod 1 → 0
+    expect(o.x).toBeCloseTo(0, 12) // 恰好 8 tiles，mod 1 → 0
     // 负时间 mod 1 后仍在 [0,1)
     const o2 = computeWindOffsetTiles(-1000, 8, 100.075)
     expect(o2.x).toBeGreaterThanOrEqual(0)
@@ -59,8 +59,8 @@ describe('weatherTime 时间轴纯函数（spec §4.1/§5.4）', () => {
   it('computeDayOfYear：月日累加表（平年）', () => {
     expect(computeDayOfYear(1, 1)).toBe(1)
     expect(computeDayOfYear(2, 1)).toBe(32)
-    expect(computeDayOfYear(8, 15)).toBe(227) // ITCZ 最北锚点
-    expect(computeDayOfYear(2, 16)).toBe(47) // ITCZ 最南锚点
+    expect(computeDayOfYear(8, 15)).toBe(227) // 累加表用例（锚点语义见 doy=215/33 用例）
+    expect(computeDayOfYear(2, 16)).toBe(47) // 累加表用例（锚点语义见 doy=215/33 用例）
     expect(computeDayOfYear(12, 31)).toBe(365)
   })
 
