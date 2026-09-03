@@ -103,8 +103,13 @@ export interface WeatherAtlasOptions {
   seed?: number
   /** 平铺次数；缺省 100。 */
   weatherRepeat?: number
-  /** 提供即走 PNG fallback（不烘焙）；同时是烘焙异常的兜底。 */
+  /** 烘焙失败的兜底材料（RGBA8 原始 PNG decode 数据）。提供【不】触发直接分派——
+   * 旧语义「提供即 fallback」使 T6 无条件传参时 bakeAtlas 死代码（T8 CRITICAL 实证：
+   * demo 恒旧静态图 64 层包装）。spec §4.4「烘焙异常时才降级」。 */
   pngFallback?: WeatherPngFallback | undefined
+  /** 显式 escape 开关：跳过烘焙直接用 pngFallback 包装（T6 atlasDisabled / ?cloudsAtlas=0
+   * 对照基线路径）。与 pngFallback 参数双语义分离（T8 CRITICAL 修复）。 */
+  usePngFallback?: boolean
 }
 
 /** WeatherAtlas 句柄（T6 preRender 消费 plan 时间轴/atlasTexture 直传采样端 uniform）。 */
@@ -122,6 +127,8 @@ export interface WeatherAtlas {
 /**
  * 选项 → 烘焙计划（纯逻辑）。缺省值单源：常量在 weatherTime.ts，此处只补
  * evolutionHours 的 5.3h 字面量（WEATHER_EVOLUTION_PERIOD_S 同值派生）。
+ * usePngFallback 只由显式开关派生——pngFallback 参数是兜底材料而非分派开关
+ * （T8 CRITICAL 修复）。
  */
 export function resolveWeatherAtlasPlan(options: {
   evolutionHours?: number
@@ -129,6 +136,7 @@ export function resolveWeatherAtlasPlan(options: {
   seed?: number
   weatherRepeat?: number
   pngFallback?: WeatherPngFallback | undefined
+  usePngFallback?: boolean
 }): WeatherAtlasPlan {
   const weatherRepeat = options.weatherRepeat ?? 100
   return {
@@ -140,7 +148,7 @@ export function resolveWeatherAtlasPlan(options: {
     seed: options.seed ?? WEATHER_BAKE_SEED,
     weatherRepeat,
     tileKm: CUBE_FACE_WIDTH_KM / weatherRepeat,
-    usePngFallback: options.pngFallback != null
+    usePngFallback: options.usePngFallback === true
   }
 }
 
@@ -237,22 +245,49 @@ function linearSampler(): Sampler {
 }
 
 /**
- * 创建 WeatherAtlas（T6 入口）。
- * 分派：pngFallback 提供即 fallback（T8 对照开关）；否则 GPU 烘焙；烘焙异常且有
- * fallback 兜底（三级降级链末端——spec §4.3：mip 失败降 LINEAR 是中间档，在本函数
- * 内部，不落到这里）。
+ * 分派依赖注入口（测试接缝，ShadowPass createDrawPass 注入同款模式）——node 单测
+ * 锁定分派双语义（pngFallback 兜底 vs usePngFallback 显式 escape），不触真 GL。
  */
-export function createWeatherAtlas(options: WeatherAtlasOptions): WeatherAtlas {
+export interface WeatherAtlasDispatchDeps {
+  bake: (context: Context, plan: WeatherAtlasPlan) => WeatherAtlas
+  createFallback: (
+    context: Context,
+    png: WeatherPngFallback,
+    plan: WeatherAtlasPlan
+  ) => WeatherAtlas
+}
+
+const defaultDispatchDeps: WeatherAtlasDispatchDeps = {
+  bake: bakeAtlas,
+  createFallback: createPngFallbackAtlas
+}
+
+/**
+ * 创建 WeatherAtlas（T6 入口）。
+ *
+ * 分派双语义（T8 CRITICAL 修复，spec §4.4「烘焙异常时才降级」）：
+ *   - `usePngFallback: true` = 显式 escape（?cloudsAtlas=0 对照基线）→ 直接 PNG 包装，不烘焙；
+ *   - `pngFallback` 参数 = 烘焙失败兜底材料（不短路分派——旧语义使 T6 无条件传参时
+ *     bakeAtlas 死代码、demo 恒旧静态图）。
+ */
+export function createWeatherAtlas(
+  options: WeatherAtlasOptions,
+  deps: WeatherAtlasDispatchDeps = defaultDispatchDeps
+): WeatherAtlas {
   const plan = resolveWeatherAtlasPlan(options)
   if (plan.usePngFallback && options.pngFallback != null) {
-    return createPngFallbackAtlas(options.context, options.pngFallback, plan)
+    return deps.createFallback(options.context, options.pngFallback, plan)
+  }
+  if (plan.usePngFallback) {
+    // escape 开了但无材料（PNG decode 失败）——烘焙是唯一能产生内容的路径
+    console.warn('[clouds] usePngFallback 但无 pngFallback 数据，回退烘焙路径')
   }
   try {
-    return bakeAtlas(options.context, plan)
+    return deps.bake(options.context, plan)
   } catch (e) {
     if (options.pngFallback != null) {
-      console.warn('[clouds] WeatherAtlas 烘焙异常，降级 PNG fallback:', e)
-      return createPngFallbackAtlas(options.context, options.pngFallback, plan)
+      console.warn('[clouds] 天气图烘焙失败，降级静态 PNG fallback', e)
+      return deps.createFallback(options.context, options.pngFallback, plan)
     }
     throw e
   }

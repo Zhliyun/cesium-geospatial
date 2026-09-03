@@ -6,8 +6,12 @@ import {
   ATLAS_SIZE,
   ATLAS_SLICES,
   bakeSeedToOffset,
+  createWeatherAtlas,
   resolveWeatherAtlasPlan,
-  tilePngLayers
+  tilePngLayers,
+  type WeatherAtlas,
+  type WeatherAtlasDispatchDeps,
+  type WeatherPngFallback
 } from './WeatherAtlas'
 
 describe('WeatherAtlas 计划解析（spec §4/§6.2）', () => {
@@ -25,11 +29,18 @@ describe('WeatherAtlas 计划解析（spec §4/§6.2）', () => {
     expect(plan.usePngFallback).toBe(false)
   })
 
-  it('pngFallback 提供时 usePngFallback=true', () => {
+  it('pngFallback 仅兜底材料——不触发分派开关（T8 CRITICAL 回归锁定）', () => {
     const plan = resolveWeatherAtlasPlan({
       pngFallback: { width: 1, height: 1, data: new Uint8Array(4) }
     })
-    expect(plan.usePngFallback).toBe(true)
+    // 旧语义 usePngFallback=true 使 T6 无条件传参时 bakeAtlas 死代码（demo 恒旧静态图）；
+    // 新语义（spec §4.4「烘焙异常时才降级」）：pngFallback=兜底材料，分派开关只有 usePngFallback。
+    expect(plan.usePngFallback).toBe(false)
+  })
+
+  it('usePngFallback 显式 escape 开关透传', () => {
+    expect(resolveWeatherAtlasPlan({ usePngFallback: true }).usePngFallback).toBe(true)
+    expect(resolveWeatherAtlasPlan({}).usePngFallback).toBe(false)
   })
 
   it('tileKm = CUBE_FACE_WIDTH_KM / repeat', () => {
@@ -117,5 +128,87 @@ describe('tilePngLayers（PNG fallback 平铺纯逻辑）', () => {
     expect(() =>
       tilePngLayers({ width: 2, height: 2, data: new Uint8Array(3) }, 64)
     ).toThrow()
+  })
+})
+
+describe('createWeatherAtlas 分派双语义（T8 CRITICAL 修复回归锁定）', () => {
+  // 注入层 stub（ShadowPass createDrawPass 注入同款模式）——分派逻辑 node 可测，
+  // 真实现（bakeAtlas/createPngFallbackAtlas）不触碰 fakeContext。
+  const PNG: WeatherPngFallback = { width: 1, height: 1, data: new Uint8Array(4) }
+  const fakeContext = {} as never
+  const fakeAtlas = (mode: WeatherAtlas['mode']): WeatherAtlas => ({
+    atlasTexture: {} as never,
+    mode,
+    plan: resolveWeatherAtlasPlan({}),
+    dispose: () => {}
+  })
+
+  it('pngFallback 提供不再短路分派：先尝试烘焙，成功 → baked', () => {
+    let bakeCalls = 0
+    const atlas = createWeatherAtlas(
+      { context: fakeContext, pngFallback: PNG },
+      {
+        bake: () => {
+          bakeCalls++
+          return fakeAtlas('baked')
+        },
+        createFallback: () => {
+          throw new Error('烘焙成功不应走兜底')
+        }
+      }
+    )
+    // 旧 bug 分派下 bakeCalls=0（pngFallback 短路 → 恒 fallback）——本断言即死代码探测器
+    expect(bakeCalls).toBe(1)
+    expect(atlas.mode).toBe('baked')
+  })
+
+  it('烘焙失败 → pngFallback 兜底（spec §4.4「烘焙异常时才降级」）', () => {
+    const atlas = createWeatherAtlas(
+      { context: fakeContext, pngFallback: PNG },
+      {
+        bake: () => {
+          throw new Error('GLSL 编译失败')
+        },
+        createFallback: (_ctx, png) => {
+          expect(png).toBe(PNG)
+          return fakeAtlas('pngFallback')
+        }
+      }
+    )
+    expect(atlas.mode).toBe('pngFallback')
+  })
+
+  it('烘焙失败且无 pngFallback → rethrow 原异常', () => {
+    expect(() =>
+      createWeatherAtlas(
+        { context: fakeContext },
+        {
+          bake: () => {
+            throw new Error('烘焙原异常')
+          },
+          createFallback: () => {
+            throw new Error('无兜底材料不应走 fallback')
+          }
+        } satisfies WeatherAtlasDispatchDeps
+      )
+    ).toThrow('烘焙原异常')
+  })
+
+  it('usePngFallback 显式 escape（?cloudsAtlas=0）：跳过烘焙直接包装', () => {
+    let fallbackCalls = 0
+    const atlas = createWeatherAtlas(
+      { context: fakeContext, usePngFallback: true, pngFallback: PNG },
+      {
+        bake: () => {
+          throw new Error('escape 路径不应烘焙')
+        },
+        createFallback: () => {
+          fallbackCalls++
+          return fakeAtlas('pngFallback')
+        }
+      }
+    )
+    expect(fallbackCalls).toBe(1)
+    expect(atlas.mode).toBe('pngFallback')
   })
 })

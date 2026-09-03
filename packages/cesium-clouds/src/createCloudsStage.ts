@@ -448,8 +448,13 @@ function buildCloudsStageImpl(
   let atlasFallbackDummy: Texture3D | undefined
   if (options.atlasDisabled === true) {
     if (weatherPngForFallback != null) {
-      // escape：旧静态图 64 层平铺包装（不烘焙，T8 对照基线）
-      atlas = createWeatherAtlas({ context, pngFallback: weatherPngForFallback })
+      // escape：旧静态图 64 层平铺包装（不烘焙，T8 对照基线）。usePngFallback=显式
+      // escape 开关（T8 CRITICAL 分派语义修复）——pngFallback 参数已降级为纯兜底材料。
+      atlas = createWeatherAtlas({
+        context,
+        usePngFallback: true,
+        pngFallback: weatherPngForFallback
+      })
     } else {
       // 极端：PNG decode 已失败（loadWeatherTextures 无 raw）——无包装源，warn+跳过创建，
       // 下方 1×1×1 全白 dummy 顶上（满 coverage 连续云墙，同旧 2D decode 失败降级语义）
