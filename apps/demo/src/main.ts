@@ -140,13 +140,11 @@ async function main(): Promise<void> {
     viewer.clock.currentTime = JulianDate.fromIso8601(time)
   }
 
-  // ?play=1 → 时钟走动（默认冻结=Cesium 现状语义，演化/平流演示经此开关）：
-  // shouldAnimate + multiplier=?speed=（默认 60）。云分布重设计（spec §4.1）的演化/平流
-  // 由 scene.time 驱动；确定性验收用 ?time= 钉死不受 ?play 影响（shouldAnimate 不改 currentTime 初值）。
-  if (getString('play') === '1') {
-    viewer.clock.shouldAnimate = true
-    viewer.clock.multiplier = getNumber('speed') ?? 60
-  }
+  // 时间默认流动、正常速度（2026-09-03 拍板：shouldAnimate=true + multiplier=1——太阳/云演化/
+  // 平流按真实流速持续变化）；?play=0 冻结（确定性验收锚：?time= 钉初值 + ?play=0），?speed=N 调倍率。
+  // 云分布重设计（spec §4.1）的演化/平流由 scene.time 驱动；shouldAnimate 不改 currentTime 初值。
+  viewer.clock.shouldAnimate = getString('play') !== '0'
+  viewer.clock.multiplier = getNumber('speed') ?? 1
 
   // URL camera：lon,lat,height,heading,pitch（角度制，人类可读）；heading/pitch 可省略
   const cameraStr = getString('camera')

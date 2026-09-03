@@ -36,16 +36,17 @@ const W = 1280
 const H = 720
 
 // ---- 公共 URL 段（README 惯例：mode=atmosphere 是 clouds=1 前提；time 钉死太阳；
+//      play=0 冻结时钟——demo 默认时间流动（2026-09-03 拍板），像素确定性用例须显式冻结；
 //      fps=0 关 FPS 角标防污染像素 diff——帧率用例单独用 fps=1）----
 // camera=90E,50N：2026-09-03T06:00Z 时 local noon；lat50=中纬多云带。纬度扫描诊断实证
 // 气候带分布正确生效：lat28 副热带谷近无云、lat0 ITCZ 密云、lat50 最饱和——主对照选多云带
 //（初版选 lat32 副热带谷内，画面近无云，曾误判「云不渲染」）。
 export const COMMON =
-  'mode=atmosphere&fps=0&time=2026-09-03T06%3A00%3A00Z&clouds=1&camera=90%2C50%2C8000%2C0%2C-8'
+  'mode=atmosphere&fps=0&play=0&time=2026-09-03T06%3A00%3A00Z&clouds=1&camera=90%2C50%2C8000%2C0%2C-8'
 // 冒烟默认：lat0 ITCZ + 俯角 -30（云甲充满画面、蓝隙可辨——阈值法 coverage 有意义。
 // 平掠视角地平线亮霾带会被亮度阈值误判为云：首跑 lat32 平掠图 cloudFrac 0.27 系霾带假阳性）
 export const SMOKE_QUERY =
-  'mode=atmosphere&fps=0&time=2026-09-03T06%3A00%3A00Z&clouds=1&camera=90%2C0%2C8000%2C0%2C-30'
+  'mode=atmosphere&fps=0&play=0&time=2026-09-03T06%3A00%3A00Z&clouds=1&camera=90%2C0%2C8000%2C0%2C-30'
 
 // ---- CLI ----
 function parseArgs(argv) {
@@ -279,7 +280,8 @@ async function cmdTriple(opts, prefix, query) {
 
 // evolve：B1 默认态演化——play=1 speed=60（1 wall-s = 1 sim-min），Δ0/+5/+30 sim-min 三连拍
 async function cmdEvolve(opts) {
-  const query = `${COMMON}&play=1&speed=60`
+  // COMMON 带 play=0（确定性锚）——演化用例替换为 play=1（重复键会被 URLSearchParams 取首值吞掉）
+  const query = `${COMMON.replace('play=0', 'play=1')}&speed=60`
   const paths = []
   const meta = await withPage(opts, query, async (page) => {
     for (const [tag, waitMs] of [['t0', 0], ['t5m', 5000], ['t30m', 25000]]) {

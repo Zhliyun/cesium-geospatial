@@ -81,7 +81,7 @@ phase2a 方向：把末端内联 ACES 拆为「atmosphere stage 输出线性 HDR
 `apps/demo/src/main.ts` 解析（`?mode=` 切分支；2026-09-03 拍板默认值=主体验裸 URL 即可）：
 - `mode=atmosphere|sky|depth`（**默认 atmosphere** = B 路径主分支；sky/depth 为回归对照）
 - `clouds` **默认开启**（atmosphere 模式自动建云；`clouds=0` 关闭）；`fps` **默认关闭**（`fps=1` 开右上角帧率角标）
-- `time=ISO8601`（太阳方向）、`camera=lon,lat,height,heading,pitch`（角度制）
+- `play` **默认开、正常流速**（`play=0` 冻结；`speed=N` 调倍率）；`time=ISO8601`（钉初值）、`camera=lon,lat,height,heading,pitch`（角度制）——**确定性验收须 `?time=` + `?play=0` 成对**（时间默认流动后单 `?time=` 不再冻结）
 - `debug=N`（u_debugMode：1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——**排查 artifact 的主手段**
 - `exposureDay`/`exposureNight`/`groundDim`/`tileCache`/`lighting=0`/`atmo=0`（诊断基线，跳过大气后处理）
 - 相机停稳后地址栏 `#camera=...` 自动更新为当前视角，复制即可精确复现问题视角。
