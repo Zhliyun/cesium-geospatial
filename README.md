@@ -146,7 +146,7 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 |---|---|
 | `?cloudsCoverage=` | 云密度 0-1（默认 0.3） |
 | `?cloudsAltitudeOffset=` | 低云带升降（米，clamp -500..+3000，默认 0） |
-| `?cloudsWeather=` | 天气预设 clear\|fair\|cloudy\|overcast |
+| `?cloudsWeather=` | 天气预设 clear\|fair\|cloudy\|overcast（与 `?cloudsCoverage=` 同传时显式密度优先，预设让位） |
 | `?cloudsClimateBands=` | 纬度气候带强度（0=关，默认 1） |
 | `?cloudsEvolutionHours=` | 云图演化环周期（小时，默认 5.3） |
 | `?cloudsWind=` | 平流风速 m/s（默认 8） |

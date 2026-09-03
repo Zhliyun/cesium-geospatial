@@ -580,8 +580,12 @@ async function main(): Promise<void> {
           ...(cloudsQuality != null ? { quality: cloudsQuality } : {}),
           ...(cloudsUpscale != null ? { upscaleDivisor: cloudsUpscale } : {}),
           // ── 云分布重设计（spec §6）URL 全集 ──
-          // 天气预设创建期注入（白名单守卫已解析；运行期热切走 handle.setWeatherPreset，demo 暂无 UI）
-          ...(cloudsWeatherPreset != null ? { weatherPreset: cloudsWeatherPreset } : {}),
+          // 天气预设创建期注入（白名单守卫已解析；运行期热切走 handle.setWeatherPreset，demo 暂无 UI）。
+          // spec §6.1「显式标量优先于预设」：URL 显式给 ?cloudsCoverage= 时跳过预设
+          //（用户细调覆盖快捷方式，preset 的组合分量一并让位）——库内 setWeatherPreset
+          // 是整档覆盖（presetBaseline 快照恢复路径），编排层守卫保证优先序。
+          ...(cloudsWeatherPreset != null && getNumber('cloudsCoverage') == null
+            ? { weatherPreset: cloudsWeatherPreset } : {}),
           // 低云带升降（米）：库内 clamp -500..+3000，仅低云带 L0/L1 生效（高卷云不动）
           ...(getNumber('cloudsAltitudeOffset') != null
             ? { altitudeOffsetM: getNumber('cloudsAltitudeOffset')! } : {}),
@@ -634,8 +638,8 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null
             ? {
                 parameters: {
-                  // 云密度覆盖（云分布重设计 spec §6：默认 0.3；注意 weatherPreset 激活时
-                  // 会覆盖此基线——preset 优先语义，库内 presetBaseline 快照保留恢复路径）
+                  // 云密度覆盖（云分布重设计 spec §6：默认 0.3）；与 ?cloudsWeather= 同传时
+                  // 显式优先——上方 weatherPreset 展开已让位（spec §6.1 显式标量优先于预设）
                   ...(getNumber('cloudsCoverage') != null
                     ? { coverage: getNumber('cloudsCoverage')! }
                     : {}),
