@@ -137,3 +137,28 @@ describe('夜间云内移动黑块修复：getClosestFragment 远平面守卫', 
     )
   })
 })
+
+// 【2026-09-03 coverage=1 云甲内盐粒崩坏修复：getClosestFragment 深度同质性守卫】
+// 甲内水平视角（camera=...,1770,...,-6.1 + coverage=1 稳定复现）下 depthVelocity.r 在
+// 「近云数米 ↔ 甲顶球远端数百 km」间逐像素跳变（合法几何值，非远平面哨兵）——9b523d2
+// 的 1e8 守卫不覆盖。3×3 全局最近深度让远端 texel 借到近云 texel 的 velocity（反向错借
+// 同样存在）→ history 大距离错位重投影；coverage=1 全屏皆云 a≈1 → |Δa| rejection 永不
+// 触发 → γ=2 AABB 拦不住 rgb 域错位 → mix 90% 错位 history = 满屏盐粒（temporal=0 直通
+// 同一 march buffer 平滑、upscale=4 分支正常——层锁定 TAA 分支；静止后 0.9^n 慢冲刷=
+// 用户体感「无法恢复」）。
+// 修=邻居 depth 与中心 depth 比值超 2× 不参与 min 竞争（深度同质才可借）；无同质邻居
+// 退回自身 velocity。泛化 1e8 守卫到「合法但悬殊」域，closest 边缘语义保留。
+describe('coverage=1 云甲内盐粒修复：getClosestFragment 深度同质性守卫', () => {
+  it('同质守卫在场：邻居/中心深度比 >2 跳过，无同质邻居退自身', () => {
+    const src = buildCloudsResolveFragmentShader(OPTS)
+    expect(src).toContain('getClosestFragmentDepthHomogeneityGuard')
+    expect(src).toContain('neighbor.r <= centerDepth * 2.0 && centerDepth * 2.0 <= neighbor.r')
+  })
+
+  it('glslang：同质守卫在场真编译（TAA 分支）', () => {
+    compileOrFail(
+      buildStandaloneCloudsResolveShaderForValidation({ temporalUpscale: false }),
+      'depth homogeneity guard'
+    )
+  })
+})

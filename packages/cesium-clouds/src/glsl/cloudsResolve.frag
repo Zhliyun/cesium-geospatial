@@ -75,12 +75,24 @@ vec4 getClosestFragment(const ivec2 coord) {
   if (centerDepthVelocity.r >= 1e8) {
     return centerDepthVelocity;
   }
-  vec4 result = vec4(1e7, 0.0, 0.0, 0.0);
+  // 【2026-09-03 coverage=1 云甲内盐粒修复：getClosestFragmentDepthHomogeneityGuard】
+  // 甲内水平视角下 depthVelocity.r 在「近云数米 ↔ 甲顶球远端数百 km」间逐像素跳变
+  // （合法几何值，非远平面哨兵——上述 1e8 守卫不覆盖）。全局最近深度让远端 texel 借到
+  // 近云 velocity（反向错借同样存在）→ history 大距离错位；coverage=1 全屏 a≈1 →
+  // |Δa| rejection 永不触发 → 满屏盐粒（temporal=0 直通同一 march buffer 平滑、
+  // upscale=4 分支低分聚合深度平滑——层锁定全分 TAA 借用）。修=邻居与中心深度比
+  // 超 2×（更深或更浅）视为跨层 texel 不参与 min 竞争；无同质邻居退回自身 velocity。
+  // closest 边缘语义保留（同质域内仍取最近）。
+  float centerDepth = centerDepthVelocity.r;
+  vec4 result = centerDepthVelocity; // 缺省=自身（无同质邻居时退自身自洽重投影）
   vec4 neighbor;
   #pragma unroll_loop_start
   for (int i = 0; i < 9; ++i) {
     neighbor = texelFetchOffset(depthVelocityBuffer, coord, 0, neighborOffsets[i]);
-    if (neighbor.r < result.r) {
+    // 深度悬殊（>2× 或 <0.5×）= 跨层 texel，velocity 不可借。同质条件并入 min 竞争
+    //（unroll 展开后无循环上下文，不能用 continue——glslang 'continue statement
+    // only allowed in loops'）。
+    if (neighbor.r <= centerDepth * 2.0 && centerDepth * 2.0 <= neighbor.r && neighbor.r < result.r) {
       result = neighbor;
     }
   }

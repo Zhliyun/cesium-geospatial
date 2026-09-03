@@ -565,3 +565,26 @@ describe('太空俯视云层异常修复：march 初始步长段长 clamp', () =
     compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'step size clamp')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-03 coverage=1 云甲内盐粒修复：甲内分支段长截断】getRayNearFar 甲下分支有
+// `nearFar.y = min(nearFar.y, maxRayDistance)` 截断，甲内分支没有（three 上游固有遗漏）：
+// 甲内近水平视线（camera=...,1770,...,-6.1 + coverage=1 稳定复现）与甲顶球远端求交段长
+// 可达数百 km（几何弦长 ~560km）→ ①march 步长预算爆炸（透视步长中后段数十 km 跨天气瓦
+// → 密度采样跳变）；②frontDepth/depthVelocity 场含合法但极端值 → TAA 3×3 最近深度跨界
+// 借 velocity → history 大距离错位 → coverage=1（全屏 a≈1）下 rejection 失效 → 盐粒。
+// 修=甲内分支同款截断，段长 ≤ maxRayDistance（200km，与甲下分支同语义）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('coverage=1 云甲内盐粒修复：甲内分支段长截断', () => {
+  it('截断在场：甲内分支 nearFar.y 同受 maxRayDistance 约束', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    // 注释锚与截断行须连续出现（甲下分支已有同款截断行——单行断言会误绿）
+    expect(src).toContain(
+      '// 【getRayNearFarInsideLayerMaxDistanceGuard】\n    nearFar.y = min(nearFar.y, maxRayDistance);'
+    )
+  })
+
+  it('glslang：含甲内截断完整 shader 真编译', () => {
+    compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'inside-layer max distance guard')
+  })
+})

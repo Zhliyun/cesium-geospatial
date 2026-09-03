@@ -867,6 +867,14 @@ vec2 getRayNearFar(const IntersectionResult intersections) {
     } else {
       nearFar = vec2(cameraNear, intersections.second.z);
     }
+    // 【2026-09-03 coverage=1 云甲内盐粒修复】甲下分支有 maxRayDistance 截断、甲内分支
+    // 没有（three 上游固有遗漏）：甲内近水平视线与甲顶球远端求交段长可达数百 km（几何
+    // 弦长 ~560km）→ march 步长预算爆炸（中后段数十 km/步跨天气瓦）+ frontDepth/
+    // depthVelocity 场极端值 → resolve 3×3 最近深度跨界借 velocity → history 错位，
+    // coverage=1 下 rejection 失效成满屏盐粒。同款截断（200km，超远云被消光/大气淹没，
+    // 能见度语义下视觉无贡献）。
+    // 【getRayNearFarInsideLayerMaxDistanceGuard】
+    nearFar.y = min(nearFar.y, maxRayDistance);
   } else {
     // View above the clouds
     nearFar = vec2(intersections.first.z, intersections.second.z);
