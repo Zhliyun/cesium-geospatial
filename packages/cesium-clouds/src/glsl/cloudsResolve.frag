@@ -63,6 +63,18 @@ const ivec4[4] bayerIndices = ivec4[4](
 const int bayerIndices2[4] = int[4](0, 2, 3, 1);
 #endif // UPSCALE_DIVISOR == 2
 
+// 【2026-09-04 coverage=1 云甲内运动全黑修复：getHistoryNanGuard】history 采样含 NaN 时
+// 以 current 替换。GLSL mix 为 IEEE 融合乘加——NaN·(1-α) 任意 α 均传播，NaN 一旦写入
+// history 即 ping-pong 永久自持（δa rejection 的比较恒 false 拦不住、α=1 直混也无法
+// 消除、刷新才清）。运动中大视差（近云深度 texel 数米位移→百 texel 级重投影）易采到
+// 坏值区，故在采样后立即消毒。
+vec4 sanitizeHistory(const vec4 sampled, const vec4 current) {
+  if (any(isnan(sampled))) {
+    return current;
+  }
+  return sampled;
+}
+
 vec4 getClosestFragment(const ivec2 coord) {
   // 【2026-09-03 夜间云内移动黑块修复：getClosestFragmentNoCloudGuard】云甲内视角下
   // depthVelocity.r 在「有云 texel（云距）/无云 texel（cameraFar≈1e10）」间逐像素跳变。
@@ -136,7 +148,7 @@ void temporalUpscale(
   // upsampling. This increases ghosting, of course, but it's hard to notice on
   // clouds.
   // vec4 historyColor = textureCatmullRom(colorHistoryBuffer, prevUv);
-  vec4 historyColor = texture(colorHistoryBuffer, prevUv);
+  vec4 historyColor = sanitizeHistory(texture(colorHistoryBuffer, prevUv), currentColor); // getHistoryNanGuard
   // 【2026-09-02 云地平线黑块修复（disocclusion rejection）】四组俯冲 A/B 定位黑块源=
   // resolve history 混合（temporal=0 / α=1 / γ=0.5 / α=0.5 全零黑块，默认参数必现）。
   // 云海地平线深度不连续处：低分 march 读 depth 带 temporalJitter，相位轮换使部分帧被
@@ -164,6 +176,10 @@ void temporalUpscale(
   // ——Bayer 轮换分量指数衰减(α=0.1 → 16 相位残留 0.9^16≈18%),fresh 直出帧保持
   // 超采样语义不变。
   outputColor = mix(clippedColor, currentColor, temporalAlpha);
+  // 【outputColorSanityGuard】NaN 兜底：任何上游残留 NaN（含 mix 的 IEEE 传播）直出 current。
+  if (any(isnan(outputColor.rgb))) {
+    outputColor = currentColor;
+  }
 
   #ifdef SHADOW_LENGTH
   // Sampling the shadow length history using scene depth doesn't make much
@@ -200,7 +216,7 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
     return; // Rejection
   }
 
-  vec4 historyColor = texture(colorHistoryBuffer, prevUv);
+  vec4 historyColor = sanitizeHistory(texture(colorHistoryBuffer, prevUv), currentColor); // getHistoryNanGuard
   // 【2026-09-03 穿云黑块修复】disocclusion rejection——312573d 只加在 temporalUpscale 分支
   // （N=4 时代默认档），1ce0d93 默认档切 N=1 走本分支后补丁丢失：穿云 velocity 跨层错位 →
   // history 采到无效 texel（黑）→ γ=2 宽 AABB 剪不住 → mix 90% 黑 history 固化扩散（傍晚
@@ -214,6 +230,10 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   }
   vec4 clippedColor = varianceClipping(colorBuffer, coord, currentColor, historyColor);
   outputColor = mix(clippedColor, currentColor, temporalAlpha);
+  // 【outputColorSanityGuard】NaN 兜底：任何上游残留 NaN（含 mix 的 IEEE 传播）直出 current。
+  if (any(isnan(outputColor.rgb))) {
+    outputColor = currentColor;
+  }
 
   #ifdef SHADOW_LENGTH
   vec4 historyShadowLength = vec4(texture(shadowLengthHistoryBuffer, prevUv).rgb, 1.0);

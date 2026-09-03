@@ -162,3 +162,30 @@ describe('coverage=1 云甲内盐粒修复：getClosestFragment 深度同质性�
     )
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-04 coverage=1 云甲内运动全黑修复：history NaN 消毒】probeMove 确定性复现
+// （3m/帧 100% 全黑、0.1m/帧 正常、静止间歇）+ α=1 仍黑 ⇒ 黑非 history 累积而与 history
+// 采样直接相关。机制：运动中大视差（近云 10m 深度 texel 3m 位移→视差 ~190texel）使
+// history 采样采到坏值（NaN）→ GLSL mix 为 IEEE 融合乘加，NaN·(1-α) 任意 α 均传播 →
+// NaN 经 ping-pong 永久自持（δa rejection 的 NaN 比较恒 false 拦不住、静止也不恢复）。
+// 修=两分支 historyColor 读取后 NaN→currentColor 兜底 + 输出 NaN 兜底直出 current。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('coverage=1 运动全黑修复：history NaN 消毒', () => {
+  it('NaN 兜底在场：history 读取后消毒 + 输出兜底', () => {
+    const src = buildCloudsResolveFragmentShader(OPTS)
+    expect(src).toContain('getHistoryNanGuard')
+    expect(src).toContain('outputColorSanityGuard')
+  })
+
+  it('glslang：NaN 兜底在场真编译（TAA 分支）', () => {
+    compileOrFail(
+      buildStandaloneCloudsResolveShaderForValidation({ temporalUpscale: false }),
+      'history nan guard'
+    )
+    compileOrFail(
+      buildStandaloneCloudsResolveShaderForValidation({ temporalUpscale: true, upscaleDivisor: 4 }),
+      'history nan guard upscale'
+    )
+  })
+})
