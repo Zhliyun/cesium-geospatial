@@ -155,6 +155,7 @@ vi.mock('./CloudsResolvePass', () => ({
 }))
 
 import { createCloudsStage, type CloudsStageOptions } from './createCloudsStage'
+import { computeCloudsHeightFade } from './createCloudsStage'
 import { createCloudsPass } from './CloudsPass'
 import { createShadowPass } from './ShadowPass'
 import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
@@ -277,9 +278,9 @@ describe('createCloudsStage', () => {
     })
     expect(handle!.overlayStage.fragmentShader).toContain('colorTexture')
     expect(handle!.overlayStage.fragmentShader).toContain('u_cloudsBuffer')
-    // 线性域式在场（spec §4.1）
-    expect(handle!.overlayStage.fragmentShader).toContain('scene.rgb * (1.0 - cloud.a)')
-    expect(handle!.overlayStage.fragmentShader).toContain('cloud.rgb * u_cloudsExposure')
+    // 线性域式在场（spec §4.1；2026-09-03 高空渐隐：rgb/a 同乘 u_heightFade——fade=1 时与原式等价）
+    expect(handle!.overlayStage.fragmentShader).toContain('scene.rgb * (1.0 - cloud.a * u_heightFade)')
+    expect(handle!.overlayStage.fragmentShader).toContain('cloud.rgb * (u_cloudsExposure * u_heightFade)')
     // display 域三件套不在场：ACESFilmic 函数 / unpremultiply / gamma
     expect(handle!.overlayStage.fragmentShader).not.toContain('cloudsOverlay_ACESFilmic')
     expect(handle!.overlayStage.fragmentShader).not.toContain('1.0 / 2.2')
@@ -1652,5 +1653,37 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
     expect(texture3dProbe.instances).toHaveLength(1) // 1×1×1 全白 dummy 已建
     // 泄漏防护：异常路径上 dummy 仍被 destroy
     expect(texture3dProbe.instances[0].destroy).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-03 高空云层渐隐】相机远离云甲（太空 16136km=demo 默认开场高度）时 march
+// 采样域外的伪影不可根治且视觉贡献趋零——overlay 输出按相机地心高度渐隐：
+// <50km 全显（近地/航空体验域零影响）→ 300km 全隐（太空干净蓝球）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('高空云层渐隐：computeCloudsHeightFade', () => {
+  it('阈值内全显（1）：近地与航空域', () => {
+    expect(computeCloudsHeightFade(0, 5e4, 3e5)).toBe(1)
+    expect(computeCloudsHeightFade(761, 5e4, 3e5)).toBe(1)
+    expect(computeCloudsHeightFade(1e4, 5e4, 3e5)).toBe(1)
+    expect(computeCloudsHeightFade(5e4, 5e4, 3e5)).toBe(1)
+  })
+  it('区间单调递减（smoothstep 中点=0.5）', () => {
+    expect(computeCloudsHeightFade(1.75e5, 5e4, 3e5)).toBeCloseTo(0.5, 5)
+    const quarter = computeCloudsHeightFade(1.125e5, 5e4, 3e5)
+    const half = computeCloudsHeightFade(1.75e5, 5e4, 3e5)
+    const threeQuarter = computeCloudsHeightFade(2.375e5, 5e4, 3e5)
+    expect(quarter).toBeGreaterThan(half)
+    expect(half).toBeGreaterThan(threeQuarter)
+    expect(threeQuarter).toBeGreaterThan(0)
+  })
+  it('≥end 全隐（0）：demo 开场 16136km', () => {
+    expect(computeCloudsHeightFade(3e5, 5e4, 3e5)).toBe(0)
+    expect(computeCloudsHeightFade(16135846, 5e4, 3e5)).toBe(0)
+  })
+  it('disabled 语义：heightFade=false 走 uniform 恒 1（由接线保证；纯函数只管数值）', () => {
+    // start≥end 的病态区间防御：返回 1（不隐）
+    expect(computeCloudsHeightFade(1e6, 3e5, 3e5)).toBe(1)
+    expect(computeCloudsHeightFade(1e6, 5e5, 3e5)).toBe(1)
   })
 })

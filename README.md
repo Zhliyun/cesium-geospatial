@@ -126,6 +126,7 @@ http://localhost:5173/?time=2026-08-28T17:30:00Z&camera=-80.6057,64.5197,7852,68
 | `cloudsNightAmbient` | 0.03 | 夜间环境底光：太阳沉没后云照明地板（0 = 关闭回退纯黑夜间云）。2026-09-02 过亮重标（原 0.12 标定漏算 ACES+gamma 暗部放大+月光叠加未整体验收，深夜云带亮度达夜空底光 30 倍）；?cloudsNightAmbient=0.12 可回旧行为 |
 | `cloudsTint` | 0.88,1,1 | 夜间云色调乘子（线性 RGB，乘底光+月光；沿革冷蓝 1.32→弱蓝 1.15→中性偏暖定稿） |
 | `cloudsTwilightBoost` | 6 | 暮光天光补偿倍率：太阳 [+2°,-1.5°] 窗内云天光项 1→boost（黄昏云过黑修复——crude 天光+overlay 不乘动态曝光欠亮 ~3×；实测云/天空显示比 32%→80%；1=关；白天零回归） |
+| `cloudsFade=0` | 开 | 高空云层渐隐开关：相机高度 >50km 起云渐隐、>300km 全隐（太空俯视视角云 march 域外伪影不可根治且视觉贡献趋零，隐去后为干净蓝色地球；`0` 关闭看全量云盘）。近地/航空体验域（<50km）零影响 |
 | `cloudsShadow=0` | 开 | 关 BSM 自阴影（对比云体积感） |
 | `cloudsShadowAnchor=frustum` | world | 回退视锥锚定 BSM（AB 对照基线；默认 world 世界锚定固定网格，抗移动闪动） |
 | `cloudsShadowScale=N` | 1 | world 锚定 radii × N（诊断用，N=5 → {80,168,480}km 膨胀层） |

@@ -196,6 +196,17 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   overlayDebug?: number
   /**
+   * 高空云层渐隐开关（**默认 true**，2026-09-03 用户拍板方向）：相机地心高度超过
+   * heightFadeStart 后云 overlay 渐隐、heightFadeEnd 全隐——太空俯视（demo 默认开场
+   * 16136km）下 march 采样域外伪影不可根治且视觉贡献趋零，隐去后为干净蓝色地球。
+   * demo `?cloudsFade=0` 关闭（逃生门，看全量云盘）。
+   */
+  heightFade?: boolean
+  /** 渐隐起始高度（米，缺省 5e4=50km）：以下全显。 */
+  heightFadeStart?: number
+  /** 渐隐终止高度（米，缺省 3e5=300km）：以上全隐。 */
+  heightFadeEnd?: number
+  /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
    * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
@@ -353,6 +364,10 @@ uniform sampler2D u_cloudsBuffer;
 uniform float u_cloudsExposure;
 // 【2026-09-03 穿云黑块探针】0=正常合成；1=直显 cloudsBuffer.a；2=直显 cloudsBuffer.rgb（线性原值）。
 uniform float u_overlayDebug;
+// 【2026-09-03 高空云层渐隐】相机高度渐隐系数（1=全显 0=全隐；JS 每帧算好传入）。
+// 只作用于正常合成路径（debug 直显看原始数据）；premultiplied 域 rgb/a 同乘——
+// 0 时 final=scene.rgb 逐位透传。
+uniform float u_heightFade;
 in vec2 v_textureCoordinates;
 
 void main() {
@@ -367,8 +382,8 @@ void main() {
     return;
   }
   // 线性域 premultiplied over（spec D5）：E·premultiplied ≡ premultiplied(E·straight)。
-  // ACES + gamma 由链尾 tonemap 统一。
-  vec3 final = scene.rgb * (1.0 - cloud.a) + cloud.rgb * u_cloudsExposure;
+  // ACES + gamma 由链尾 tonemap 统一。u_heightFade 同乘 rgb 与 a（渐隐=整体变透明）。
+  vec3 final = scene.rgb * (1.0 - cloud.a * u_heightFade) + cloud.rgb * (u_cloudsExposure * u_heightFade);
   out_FragColor = vec4(final, scene.a);
 }
 `
@@ -377,6 +392,30 @@ void main() {
 // 2026-08-29 V2 视觉验收定稿：用户在 e3/e6/e10/e15 四档目验后拍板 12（黄昏逆光视角云体积感/
 // 亮度平衡；注意 E 与 lf thresholdLevel=3.0 强耦合——E 调高亮云会参与 flare 能量提取）。
 const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 12
+
+// ── 高空云层渐隐（2026-09-03）───────────────────────────────────────────────
+// 太空俯视（demo 默认开场 16136km）下 march 采样域外的伪影（云形 mip 糊化/颗粒/TAA 残迹）
+// 不可根治且视觉贡献趋零——overlay 输出按相机地心高度渐隐：<50km 全显（近地/航空体验域
+// 零影响）→ ≥300km 全隐（干净蓝色地球）。fade 只作用于 overlay 合成（每帧独立，不污染
+// TAA history）；premultiplied 域 rgb/a 同乘——fade=0 逐位透传场景。
+/** 渐隐起始高度（米）：以下全显。 */
+export const CLOUDS_HEIGHT_FADE_START_DEFAULT = 5e4
+/** 渐隐终止高度（米）：以上全隐。 */
+export const CLOUDS_HEIGHT_FADE_END_DEFAULT = 3e5
+
+/**
+ * 相机地心高度 → 云 overlay 合成系数（1=全显，0=全隐）。
+ * smoothstep 反向；start≥end 病态区间防御性返回 1（不隐）。
+ */
+export function computeCloudsHeightFade(
+  heightMeters: number,
+  start: number = CLOUDS_HEIGHT_FADE_START_DEFAULT,
+  end: number = CLOUDS_HEIGHT_FADE_END_DEFAULT
+): number {
+  if (start >= end) return 1
+  const t = Math.min(1, Math.max(0, (heightMeters - start) / (end - start)))
+  return 1 - t * t * (3 - 2 * t)
+}
 
 /** 模块内 impl（spec §6.1 v2）：一次装配的全部资源 + 每帧逻辑 + 完整销毁。
  *  overlay 已移出 impl（per-handle 资源，spec §6.2）——impl 销毁清单不含 overlay。 */
@@ -1029,7 +1068,18 @@ export function createCloudsStage(
       // 云曝光（线性域缩放，spec §4.3；URL ?cloudsExposure=N 可调）
       u_cloudsExposure: options.cloudsOverlayExposure ?? CLOUDS_OVERLAY_EXPOSURE_DEFAULT,
       // 【2026-09-03 穿云黑块探针】overlay 数值直显（0=正常；URL ?cloudsOverlayDebug=1 显 a / 2 显 rgb）
-      u_overlayDebug: options.overlayDebug ?? 0
+      u_overlayDebug: options.overlayDebug ?? 0,
+      // 【2026-09-03 高空云层渐隐】每帧按相机地心高度算系数（uniformMap 闭包每帧求值）；
+      // heightFade=false（demo ?cloudsFade=0）恒 1。
+      u_heightFade: () => {
+        if (options.heightFade === false) return 1
+        const carto = scene.camera.positionCartographic
+        return computeCloudsHeightFade(
+          carto.height,
+          options.heightFadeStart ?? CLOUDS_HEIGHT_FADE_START_DEFAULT,
+          options.heightFadeEnd ?? CLOUDS_HEIGHT_FADE_END_DEFAULT
+        )
+      }
     },
     sampleMode: PostProcessStageSampleMode.NEAREST,
     pixelFormat: PixelFormat.RGBA,
