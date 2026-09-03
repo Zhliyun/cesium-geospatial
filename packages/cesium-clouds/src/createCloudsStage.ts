@@ -470,439 +470,449 @@ function buildCloudsStageImpl(
     })
     state.atlasTexture = atlasFallbackDummy
   }
-  // 时间轴 plan：正常路径读 atlas.plan（烘焙输入单源）；skip 路径退默认计划（时间轴纯函数
-  // 仍工作——atlasT/windOffset 照常推进，只是纹理是静态 dummy）
-  const timelinePlan = atlas?.plan ?? resolveWeatherAtlasPlan({})
+  // ── stage 层外圈异常防泄漏（T6 评审遗留①，T8 顺手修）：atlas 创建后主体中段抛错
+  //（CloudsPass/ShadowPass/resolvePass 构造等）时已建 atlas(~16MB GPU)/fallback dummy 会悬挂
+  //——catch 内先释放再 rethrow（烘焙内层防护在 WeatherAtlas bakeAtlas，此处管 impl 装配段）。
+  try {
+    // 时间轴 plan：正常路径读 atlas.plan（烘焙输入单源）；skip 路径退默认计划（时间轴纯函数
+    // 仍工作——atlasT/windOffset 照常推进，只是纹理是静态 dummy）
+    const timelinePlan = atlas?.plan ?? resolveWeatherAtlasPlan({})
 
-  const sunInertialScratch = new Cartesian3()
-  const moonOriginScratch = new Cartesian3()
-  const icrfScratch = new Matrix3()
-  const normalScratch = new Cartesian3()
-  // world 分支量化太阳 scratch（spec §3.1.8：仅矩阵输入量化，逐帧覆写复用）
-  const qSunScratch = new Cartesian3()
+    const sunInertialScratch = new Cartesian3()
+    const moonOriginScratch = new Cartesian3()
+    const icrfScratch = new Matrix3()
+    const normalScratch = new Cartesian3()
+    // world 分支量化太阳 scratch（spec §3.1.8：仅矩阵输入量化，逐帧覆写复用）
+    const qSunScratch = new Cartesian3()
 
-  // ── M3 BSM：cascade 矩阵 + shadowState + 生成 pass ──
-  // T4 质量档位：cascadeCount/mapSize 单源 applied.shadow（= 档位 shadow.cascadeCount/
-  // mapSize，spec §4 单一来源规则；define 侧经 applied.main.shadowCascadeCount 投影同值）
-  const cascadeCount = applied.shadow.cascadeCount // = shader #define SHADOW_CASCADE_COUNT = CASCADE_COUNT
-  const mapSize = applied.shadow.mapSize // high=512（three 默认）；low/medium=256、ultra=1024
-  // BSM 有效距离上限（2026-08-28 远端深色斑）：最远 cascade texel ≈ 2·(far段宽)/512；
-  // far=2e5 时 texel ~1km → frontDepth 精度崩 → 远端云过暗斑块。60km 时最远 texel ~200m。
-  // T4 far 不变式（spec §6 v2）后仅 frustum 分支消费——world 分支 shadowState.far 单源
-  // cascades.far（= worldIntervals[cascadeCount]），SHADOW_FAR_LIMIT 不再独立参与。
-  const SHADOW_FAR_LIMIT = 6e4
-  // BSM 锚定模式（T4，spec v3）：缺省 world；frustum = AB 对照基线（bit 级现行为）。
-  // 构造期一次定死（cascades 分支选择）——运行期不切换。
-  const worldAnchor = (options.shadowAnchor ?? 'world') === 'world'
-  // world 分支：anchor 之外全走类内缺省设计值（worldRadii {16,33.6,96}km、worldIntervals
-  // {0,10,21,60}km——Global Constraints：设计值单源于类缺省，编排不重复传；
-  // options.worldRadii 显式传时覆盖（E1' 归因实验 radii×N），intervals 不开口）
-  const cascades = new CascadedShadowMaps({
-    cascadeCount,
-    mapSize,
-    ...(worldAnchor ? { anchor: 'world' as const } : {}),
-    ...(worldAnchor && options.worldRadii != null ? { worldRadii: options.worldRadii } : {})
-  })
+    // ── M3 BSM：cascade 矩阵 + shadowState + 生成 pass ──
+    // T4 质量档位：cascadeCount/mapSize 单源 applied.shadow（= 档位 shadow.cascadeCount/
+    // mapSize，spec §4 单一来源规则；define 侧经 applied.main.shadowCascadeCount 投影同值）
+    const cascadeCount = applied.shadow.cascadeCount // = shader #define SHADOW_CASCADE_COUNT = CASCADE_COUNT
+    const mapSize = applied.shadow.mapSize // high=512（three 默认）；low/medium=256、ultra=1024
+    // BSM 有效距离上限（2026-08-28 远端深色斑）：最远 cascade texel ≈ 2·(far段宽)/512；
+    // far=2e5 时 texel ~1km → frontDepth 精度崩 → 远端云过暗斑块。60km 时最远 texel ~200m。
+    // T4 far 不变式（spec §6 v2）后仅 frustum 分支消费——world 分支 shadowState.far 单源
+    // cascades.far（= worldIntervals[cascadeCount]），SHADOW_FAR_LIMIT 不再独立参与。
+    const SHADOW_FAR_LIMIT = 6e4
+    // BSM 锚定模式（T4，spec v3）：缺省 world；frustum = AB 对照基线（bit 级现行为）。
+    // 构造期一次定死（cascades 分支选择）——运行期不切换。
+    const worldAnchor = (options.shadowAnchor ?? 'world') === 'world'
+    // world 分支：anchor 之外全走类内缺省设计值（worldRadii {16,33.6,96}km、worldIntervals
+    // {0,10,21,60}km——Global Constraints：设计值单源于类缺省，编排不重复传；
+    // options.worldRadii 显式传时覆盖（E1' 归因实验 radii×N），intervals 不开口）
+    const cascades = new CascadedShadowMaps({
+      cascadeCount,
+      mapSize,
+      ...(worldAnchor ? { anchor: 'world' as const } : {}),
+      ...(worldAnchor && options.worldRadii != null ? { worldRadii: options.worldRadii } : {})
+    })
 
-  // shadowState 数组用新分配实例（勿复用 params.shadowMatrices/shadowIntervals 默认数组：
-  // 默认 shadowMatrices 元素是 Object.freeze 的全局 Matrix4.IDENTITY——Matrix4.clone 逐项
-  // 覆写会抛 TypeError（ESM 严格模式写冻结对象），且即使可写也会污染全局 identity 常量）。
-  // CloudsPass uniformMap 闭包读 state.shadow 引用，preRender 逐帧覆写即可。
-  // T4：长度按 cascadeCount 生成（原固定 3 元素——low 档 2 级联时须 2，spec §6）。
-  const shadowMatrices = Array.from({ length: cascadeCount }, () => new Matrix4())
-  const shadowIntervals = Array.from({ length: cascadeCount }, () => new Cartesian2())
-  const shadowState: CloudsShadowFrameState = {
-    matrices: shadowMatrices,
-    intervals: shadowIntervals,
-    cameraNear: 0,
-    far: 0, // preRender 首帧填（T4 不变式：world=cascades.far；frustum=min(frustum.far, maxRayDistance, SHADOW_FAR_LIMIT)）
-    texelSize: new Cartesian2(1 / mapSize, 1 / mapSize),
-    bsm: undefined
-  }
-
-  // ── CloudsPass（custom Primitive pass=VOXELS + MRT + 全 business uniform）──
-  // M4 T6：temporal 时 temporalUpscale=true（march 1/4 分 + velocity 写 att1）
-  // T4 质量档位：编译开关走 resolved（spec §5 覆盖序——applied.main 已合并用户显式，
-  // 此处整体覆盖 ...options 展开的原始键）。shadowCascadeCount 顶层必传（Ruling 1：
-  // define 单源投影——漏传则 low 档主 march define 恒 3）。
-  const cloudsPass = createCloudsPass(scene, luts, weather, state, {
-    ...options,
-    shapeDetail: applied.main.shapeDetail,
-    turbulence: applied.main.turbulence,
-    accurateSunSkyLight: applied.main.accurateSunSkyLight,
-    lightShafts: applied.main.lightShafts,
-    shadowCascadeCount: applied.main.shadowCascadeCount,
-    parameters: params,
-    temporalUpscale: temporal,
-    // 涂抹修复 T1（2026-09-02）：applied.upscaleDivisor 已按「用户显式 > 档位 > 4」合并——
-    // 防止 options.upscaleDivisor 原键（若有）漏档位合并，这里显式覆盖为 applied 值
-    upscaleDivisor: applied.upscaleDivisor
-  })
-
-  // ── ShadowPass 生成端（options.shadowPass=false 跳过——诊断基线 Beer=1）──
-  const enableShadow = options.shadowPass !== false
-  // 生成端 turbulence dummy（与 CloudsPass 同款 1×1 中性灰 (128,128,128)——sampleMedia
-  // TURBULENCE 分支采样；两端各自持有便于独立 destroy）
-  const shadowTurbulenceDummy = enableShadow
-    ? new Texture({
-        context,
-        source: {
-          width: 1,
-          height: 1,
-          arrayBufferView: new Uint8Array([128, 128, 128, 255])
-        },
-        pixelFormat: PixelFormat.RGBA,
-        pixelDatatype: PixelDatatype.UNSIGNED_BYTE
-      })
-    : undefined
-
-  // BSM 专属 inverseShadowMatrices[CASCADE_COUNT]（shadow.frag cascade() z=-1 反投影太阳侧
-  // 起点）：preRender 逐帧覆写的 mutable 数组，uniform 闭包持引用。
-  const inverseMatrices = shadowMatrices.map(() => new Matrix4())
-
-  // shadow uniformMap = 共享段（与主 march 同源闭包）+ BSM 专属（反投影矩阵 + shadowMarch 档
-  // 平铺——Cesium uniformMap 不支持 struct；同名 maxIterationCount 等与主 march 档不同值，
-  // 故 march 档不进共享段、各端自绑）。u_cascadeIndex 由 ShadowPass 内部注入（勿重复绑）。
-  // D7 frame 拆分：BSM 生成端的 stbn jitter 相位只在 shadowTemporal 开时递增（关 = M3 恒 0）。
-  const shadowUniformMap: { [name: string]: () => unknown } = {
-    ...buildSharedCloudsUniforms(scene, luts, weather, state, params, shadowTurbulenceDummy!),
-    frame: () => (shadowTemporal ? params.frame : 0),
-    inverseShadowMatrices: () => inverseMatrices,
-    // shadowMarch 档（qualityPresets.ts defaults.shadow：50/100/1000/1e-5/1e-5/1e-4/2）
-    maxIterationCount: () => params.shadowMarch.maxIterationCount,
-    minStepSize: () => params.shadowMarch.minStepSize,
-    maxStepSize: () => params.shadowMarch.maxStepSize,
-    minDensity: () => params.shadowMarch.minDensity,
-    minExtinction: () => params.shadowMarch.minExtinction,
-    minTransmittance: () => params.shadowMarch.minTransmittance,
-    opticalDepthTailScale: () => params.shadowMarch.opticalDepthTailScale
-  }
-
-  const shadowPass: ShadowPass | undefined = enableShadow
-    ? createShadowPass({
-        context,
-        cascadeCount,
-        mapSize,
-        // RGBA16F 作 FBO color attachment 需 colorBufferHalfFloat——resolveCloudsHdrDatatype
-        // 检测恰好覆盖（HALF_FLOAT→FLOAT→UNSIGNED_BYTE 兜底）；FBO 不完整时 render 内部
-        // warn+跳过（消费端保全 0 Beer=1 降级，不炸）
-        pixelDatatype: resolveCloudsHdrDatatype(scene),
-        uniformMap: shadowUniformMap,
-        // 编译分支与主 march 同步（BSM 与主 march 的云密度必须同分布——shapeDetail/turbulence
-        // 单端关闭会造成阴影与云形错位）。T4 起读 resolved（applied.main，spec §6 点名的
-        // options.shapeDetail ?? true 错位点——low 档 shapeDetail=false 未传时旧写法给
-        // 生成端 true）。历史坑（M3 终审修复）保留备忘：本字面量曾无条件建键 + 透传
-        // undefined，ShadowMaterial 的 {...DEFAULTS, ...options} 被「显式 undefined 键」
-        // 覆盖默认 true（spread 按键存在性覆盖）→ 生成端不 define 而主 march define；
-        // applied 值恒布尔（applyQualityPreset 已 ?? 档位），坑天然不复发。
-        // cascadeCount 不入 shaderOptions——单源走顶层 options.cascadeCount（ShadowPass
-        // 内部透传 define，Task 3）。
-        shaderOptions: {
-          shapeDetail: applied.main.shapeDetail,
-          turbulence: applied.main.turbulence
-        },
-        // M4：BSM temporal（velocity 层 + resolve ping-pong + prevMatrices 编排）
-        temporalPass: shadowTemporal
-      })
-    : undefined
-
-  if (enableShadow) {
-    state.shadow = shadowState
-    // 创建即全 0（ShadowPass allocZeroedTexels）→ 首帧 render 前采样 Beer=1，与 dummy
-    // 同降级语义（T4 concern：可直接赋值，不必等首次 render）
-    shadowState.bsm = shadowPass?.bsmTexture
-  }
-
-  // ── M4 云 resolve Pass（temporal 时；primitive add 在 march 之后——D1 执行顺序契约：
-  //    同 pass=VOXELS 内 PrimitiveCollection 数组序 → update 顺序 → commandList 序）──
-  const resolvePass: CloudsResolvePass | undefined = temporal
-    ? createCloudsResolvePass({
-        context,
-        width: context.drawingBufferWidth,
-        height: context.drawingBufferHeight,
-        pixelDatatype: resolveCloudsHdrDatatype(scene),
-        colorBuffer: cloudsPass.colorTexture,
-        depthVelocityBuffer: cloudsPass.depthVelocityTexture,
-        frame: () => params.frame,
-        varianceGamma: params.temporalVarianceGamma,
-        temporalAlpha: params.temporalAlpha,
-        temporalDisocclusion: params.temporalDisocclusion,
-        upscaleDivisor: applied.upscaleDivisor
-      })
-    : undefined
-  if (resolvePass != null) {
-    ;(scene.primitives as unknown as { add: (p: unknown) => void }).add(resolvePass.primitive)
-  }
-
-  // ── preRender：每帧更新 sunDirection（Simon1994 + ICRF→Fixed）+ altitudeCorrection（密切球）──
-  // 仿 AtmosphereStage.ts:568-604。state 更新后 CloudsPass uniformMap 闭包自动反映（同引用）。
-  // M4 temporal 状态：上帧相机快照（velocity reprojection 用；首帧 undefined → fallback 当前
-  // 矩阵，velocity=0——three previousProjectionMatrix ?? camera.projectionMatrix 同款）。
-  // T4（spec §7 v2）：本函数不挂 listener——每帧逻辑为 impl.onPreRender，由顶层
-  // createCloudsStage 的零直捕 listener 调用；prevCamera/matricesFrozen 是 per-impl 状态
-  //（换 impl 自然归零——freeze 语义从新 impl 重新起算）。
-  let prevCamera: TemporalCameraSnapshot | undefined
-  // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
-  let prevCameraPos: Cartesian3 | undefined
-  // 运动自适应 α（T2，2026-09-02）：上帧 look 方向（旋转分量）+ 当前 α 状态（lerp 平滑）
-  let prevDirWC: Cartesian3 | undefined
-  let motionAlphaCurrent: number | undefined
-  // 诊断冻结状态（?cloudsShadowFreeze=1）：首帧 update 过后置 true
-  let matricesFrozen = false
-  const onPreRender = (time: JulianDate): void => {
-    const camera = scene.camera
-
-    // ── M4 temporal：swap 最前（D2：swap 后 history=上帧输出、resolve=待写）+ frame 递增
-    //    （D7：单端全关时不递增；march/BSM 生成端的 frame uniform 已按各端开关拆分绑定）──
-    // 【静止冻结 2026-09-02】相机静止时 frame 不递增——Bayer jitter/STBN 相位恒定 →
-    // march currentColor 恒定 → resolve 的 variance clip 收敛 → 输出逐位稳定。
-    // 动机：Bayer 16 相位超采样轮换在高对比云区显示层持续抖动（连拍 20-40% 像素逐帧
-    // 变化，readPixels 实证 march velocity 正确、抖动源=轮换采样本身；EMA 混合对 16 帧
-    // 周期输入稳态无衰减）。运动时恢复轮换（ legitimate 变化掩盖轮换 + temporal 重建
-    // 收益主要在运动中）。判定：positionWC 与上帧差 < 0.01m（远小于 1px 的世界投影）。
-    resolvePass?.swapBuffers()
-    if (temporal || shadowTemporal) {
-      if (prevCameraPos != null && Cartesian3.distance(camera.positionWC, prevCameraPos) < 0.01) {
-        // 静止：frame 不递增（jitter/STBN 相位冻结）
-      } else {
-        params.frame++
-      }
-      // prevCameraPos 在下方 temporal 分支 prevCamera 快照处一并更新（同一 if 内）
+    // shadowState 数组用新分配实例（勿复用 params.shadowMatrices/shadowIntervals 默认数组：
+    // 默认 shadowMatrices 元素是 Object.freeze 的全局 Matrix4.IDENTITY——Matrix4.clone 逐项
+    // 覆写会抛 TypeError（ESM 严格模式写冻结对象），且即使可写也会污染全局 identity 常量）。
+    // CloudsPass uniformMap 闭包读 state.shadow 引用，preRender 逐帧覆写即可。
+    // T4：长度按 cascadeCount 生成（原固定 3 元素——low 档 2 级联时须 2，spec §6）。
+    const shadowMatrices = Array.from({ length: cascadeCount }, () => new Matrix4())
+    const shadowIntervals = Array.from({ length: cascadeCount }, () => new Cartesian2())
+    const shadowState: CloudsShadowFrameState = {
+      matrices: shadowMatrices,
+      intervals: shadowIntervals,
+      cameraNear: 0,
+      far: 0, // preRender 首帧填（T4 不变式：world=cascades.far；frustum=min(frustum.far, maxRayDistance, SHADOW_FAR_LIMIT)）
+      texelSize: new Cartesian2(1 / mapSize, 1 / mapSize),
+      bsm: undefined
     }
 
-    // 密切球再中心化（相机侧；shader 内 camera/scenePos 都用全量 altitudeCorrection）。
-    // bottomRadius = ATMOSPHERE_BOTTOM_RADIUS_M（云层 minHeight=750m ≪ atmosphere bottom，密切球 recenter
-    // 在 atmosphere bottom 足够覆盖云层范围）。
-    getAltitudeCorrectionOffset(
-      camera.positionWC,
-      ATMOSPHERE_BOTTOM_RADIUS_M,
-      ellipsoid,
-      state.altitudeCorrection
-    )
+    // ── CloudsPass（custom Primitive pass=VOXELS + MRT + 全 business uniform）──
+    // M4 T6：temporal 时 temporalUpscale=true（march 1/4 分 + velocity 写 att1）
+    // T4 质量档位：编译开关走 resolved（spec §5 覆盖序——applied.main 已合并用户显式，
+    // 此处整体覆盖 ...options 展开的原始键）。shadowCascadeCount 顶层必传（Ruling 1：
+    // define 单源投影——漏传则 low 档主 march define 恒 3）。
+    const cloudsPass = createCloudsPass(scene, luts, weather, state, {
+      ...options,
+      shapeDetail: applied.main.shapeDetail,
+      turbulence: applied.main.turbulence,
+      accurateSunSkyLight: applied.main.accurateSunSkyLight,
+      lightShafts: applied.main.lightShafts,
+      shadowCascadeCount: applied.main.shadowCascadeCount,
+      parameters: params,
+      temporalUpscale: temporal,
+      // 涂抹修复 T1（2026-09-02）：applied.upscaleDivisor 已按「用户显式 > 档位 > 4」合并——
+      // 防止 options.upscaleDivisor 原键（若有）漏档位合并，这里显式覆盖为 applied 值
+      upscaleDivisor: applied.upscaleDivisor
+    })
 
-    // 太阳方向：inertial 系位置 → central-body-fixed → ECEF，单位化。
-    // 【ICRF 竞态修复 2026-08-16】与 AtmosphereStage 同款切换
-    // computeIcrfToFixedMatrix → computeIcrfToCentralBodyFixedMatrix（XYS 懒加载竞态 +
-    // 网络依赖 → GMST fallback 恒有值；详见 AtmosphereStage.ts 同位注释）。
-    const sunInertial = Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(
-      time,
-      sunInertialScratch
-    )
-    const icrfToFixed = Transforms.computeIcrfToCentralBodyFixedMatrix(time, icrfScratch)
-    if (icrfToFixed != null && sunInertial != null) {
-      const sunFixed = Matrix3.multiplyByVector(icrfToFixed, sunInertial, sunInertial)
-      const sunMag = Cartesian3.magnitude(sunFixed)
-      if (Number.isFinite(sunMag) && sunMag > 1e-15) {
-        Cartesian3.normalize(sunFixed, state.sunDirection)
-      }
-
-      // 月方向（方向 C，spec §6.5）：origin = camera.positionWC + altitudeCorrection（米）——
-      // 与 atmosphere 侧同式同源（spec r2 N2：显式公式，弃「密切球心」二义措辞）。icrfToFixed
-      // 复用上方太阳段（同帧共享）。
-      Cartesian3.add(camera.positionWC, state.altitudeCorrection, moonOriginScratch)
-      computeMoonDirectionECEF(time, icrfToFixed, moonOriginScratch, state.moonDirection)
-      // 月相因子：state 两方向 dot 求 elongation（Lambert 球积分；不独立调 core 独立版——
-      // 每帧省 Simon1994×2+ICRF×1，spec §4.1 注）
-      state.moonIlluminatedFraction = computeMoonIlluminatedFractionFromDirections(
-        state.sunDirection,
-        state.moonDirection
-      )
-    }
-
-    // ── T6 云图时间轴（spec §4.1）：CPU float64 mod 后传 uniform（T1 纯函数，同机多 Viewer
-    //    clock 同刻 ⇒ 同分布）——evolutionPhaseS 调试钩子仅偏移演化/平流输入，不动太阳 ──
-    const tSec = JulianDate.secondsDifference(time, WEATHER_EPOCH)
-    const evolutionPhase = options.evolutionPhaseS ?? 0
-    state.atlasT = computeEvolutionTNorm(tSec + evolutionPhase, timelinePlan.evolutionPeriodS)
-    state.windOffset = computeWindOffsetTiles(tSec + evolutionPhase, timelinePlan.windMps, timelinePlan.tileKm)
-    const gregorian = JulianDate.toGregorianDate(time)
-    state.itczCenterSin = Math.sin(
-      (computeItczCenterLatDeg(computeDayOfYear(gregorian.month, gregorian.day)) * Math.PI) / 180
-    )
-
-    // ── M4 temporal：Bayer jitter + reprojection 矩阵（march ray 重建偏移 + velocity 两分支消费）──
-    // 矩阵域 ECEF（worldToECEF=identity）；preRender 时刻 frustum.projectionMatrix 为完整视锥
-    //（multi-frustum 分段前，velocity 数学只用投影 xy 系数与 w → 分段无关，plan D5）。
-    // 写入 params 的既有 Matrix4 实例（clone 覆写不换引用——uniformMap 闭包持引用）。
-    if (temporal) {
-      computeTemporalJitter(
-        params.frame,
-        cloudsPass.marchWidth,
-        cloudsPass.marchHeight,
-        params.temporalJitter
-      )
-      const viewMatrix = camera.viewMatrix
-      const projectionMatrix = (camera.frustum as unknown as { projectionMatrix: Matrix4 })
-        .projectionMatrix
-      buildReprojectionMatrices(prevCamera, viewMatrix, projectionMatrix, camera.inverseViewMatrix, params.temporalJitter, {
-        reprojectionMatrix: params.reprojectionMatrix,
-        viewReprojectionMatrix: params.viewReprojectionMatrix
-      })
-      // 帧末存本帧快照（clone——Cesium camera 矩阵是 live 引用，必须拷贝）
-      prevCamera = {
-        viewMatrix: Matrix4.clone(viewMatrix, new Matrix4()),
-        projectionMatrix: Matrix4.clone(projectionMatrix, new Matrix4())
-      }
-      // ── T2 运动自适应 α（2026-09-02 涂抹+抖动修复）：此刻 prevCameraPos 仍是上帧
-      // 位置（下方才更新）——运动标量 = 平移距离 + 方向角变化 × 等效半径（旋转
-      // positionWC 不动但画面全动，必须计入）。运动中超阈值时 α 从 temporalAlpha
-      // （静止收敛值）平滑升至 motionAlpha——history 重投影错位/拖影的权重下降
-      // （快速抖动换细颗粒噪声）；停止后 lerp 回 base 收敛。首帧参考 undefined →
-      // motion=0 → α 从 base 起步（history 尚未建立，base 慢收敛更稳）。
-      const transM =
-        prevCameraPos != null ? Cartesian3.distance(camera.positionWC, prevCameraPos) : 0
-      let dirAngle = 0
-      if (prevDirWC != null) {
-        const d = Cartesian3.dot(prevDirWC, camera.directionWC)
-        dirAngle = Math.acos(Math.min(1, Math.max(-1, d)))
-      }
-      motionAlphaCurrent = computeMotionAlpha(
-        transM + dirAngle * MOTION_EQUIV_RADIUS_M,
-        params.temporalAlpha,
-        params.motionAlpha,
-        motionAlphaCurrent ?? params.temporalAlpha
-      )
-      resolvePass?.setTemporalAlpha(motionAlphaCurrent)
-
-      // 静止冻结判定（2026-09-02）：存上帧相机位置 + T2 上帧 look 方向（块末统一更新）
-      prevCameraPos = Cartesian3.clone(camera.positionWC, prevCameraPos ?? new Cartesian3())
-      prevDirWC = Cartesian3.clone(camera.directionWC, prevDirWC ?? new Cartesian3())
-    }
-
-    // ── M3 BSM：级联矩阵更新 + 生成（sunDirection 更新后，本帧矩阵与光照一致）──
-    // preRender 时刻 camera.frustum.near/far 是完整视锥值（multi-frustum 分段前）——
-    // cascade 归一化域与 u_shadowCameraNear 同帧同源（T4 concern #1）。
-    if (shadowPass != null) {
-      // T4 world 分支（spec v3 §3.1）：矩阵输入太阳量化（0.05° 网格——跑钟时矩阵只在
-      // 格点跳变，静止相机+慢太阳下矩阵稳定）；march 与消费端 state.sunDirection 保持
-      // 精确（§3.1.8）。frustum 分支原引用直传（bit 级现行为）。
-      const sunForMatrices = worldAnchor
-        ? quantizeSunDirection(state.sunDirection, SUN_QUANT_STEP, qSunScratch)
-        : state.sunDirection
-      // 虚拟光源距离（仅 frustum 分支：three CloudsEffect.ts:387 语义 lerp(1e6, 1e3, zenith)）。
-      // distance 大（晨昏 zenith=0 → 1e6 上限）是安全的：BSM 两端均不消费 clip.z——生成端
-      // cascade() 的 march 起点经 getRayNearFar 与云层球壳解析求交（inverseShadowMatrices
-      // 的 z=-1 反投影只取 xy），消费端 getShadowUv 只取 clip.xy（正交投影 xy 与 z 解耦）。
-      // CascadedShadowMaps 的「distance 过大会超出 ortho 盒深、勿传大值」警告（T1）仅针对
-      // 未来引入 clip.z 剔除/依赖的场景，当前管线不受约束。world 分支不传（z 盒解析式定
-      // near/far，不消费 distance——spec §3.2）。
-      let distance: number | undefined
-      if (!worldAnchor) {
-        const normal = ellipsoid.geodeticSurfaceNormal(camera.positionWC, normalScratch)
-        const zenith = Math.max(0, Cartesian3.dot(state.sunDirection, normal))
-        distance = 1e6 + (1e3 - 1e6) * zenith
-      }
-      // BSM far/near（spec §3.1.5 + T4 far 不变式 spec §6 v2）——world 分支 shadowState.far ≡
-      // cascades.far（= worldIntervals[cascadeCount]，updateWorld 内部单源；cascadeCount=2 即
-      // 21km）。原 world 分支 far = min(maxRayDistance, SHADOW_FAR_LIMIT)=60km 与 3 级联
-      // intervals 末段 60km 相等纯属设计值巧合——两处归一化域分叉（生成端 updateWorld 按
-      // intervals[cascadeCount] 归一化、消费端 getFadedCascadeIndex 按 shadowState.far 归一化）
-      // 会导致级联选择整体错位，故废除 SHADOW_FAR_LIMIT 的独立参与（far 赋值与 cascades.far
-      // 同源）；update 传的 farFrustum 在 world 分支被 updateWorld 忽略。far 仍不随视锥
-      //（multi-frustum 缩放时不变）、cameraNear 固定 0（u_shadowCameraNear 源头注入 0）。
-      // frustum 分支 bit 级现行为：完整视锥 far 与 maxRayDistance 取小（决策 D6——云 march
-      // 不超 maxRayDistance）；2026-08-28 远端深色斑修复再与 SHADOW_FAR_LIMIT 取小——
-      // maxRayDistance=200km 时最远 cascade 的 texel 达 ~1km，frontDepth 精度崩 → 远端云
-      // 自阴影过暗斑块（屏幕锚定、随相机前进）。收缩到 60km 后三层 split 重排（最远 texel
-      // ~200m），远端云走 uv 越界 fallback（光深 0=无自阴影）——低太阳角远端云的自阴影
-      // 视觉贡献本就弱。
-      const farFrustum = Math.min(camera.frustum.far, params.maxRayDistance, SHADOW_FAR_LIMIT)
-      const near = worldAnchor ? 0 : camera.frustum.near
-      // ── 静止跳过（T5，spec §3.2）与诊断冻结（?cloudsShadowFreeze=1）正交组合 ──
-      // - freeze 激活（开且首帧已过）：update/矩阵覆写整段跳过（T4 行为），render 照常
-      //   每帧——freeze 语义是「冻结矩阵重 march」（噪声分解实验：冻结网格上逐帧差 =
-      //   非矩阵噪声地板），跳 render 会破坏该语义。
-      // - 非 freeze：update 照跑，返回 changed（world = 语义键比较；frustum 恒 true）。
-      //   changed=false（矩阵静止帧）→ 矩阵覆写 + setCurrentMatrices + render 全跳——
-      //   BSM 纹理内容只依赖矩阵/云场/量化太阳格点，静止帧重 march 必产出相同内容，
-      //   跳过即白赚（m7 不变量：跳过帧 shadowMatrices、ShadowPass 内 current/prev
-      //   matrices 与 temporal history 三者冻结不变——render 内部的 prev←本帧登记也
-      //   不发生，静止期结束后首帧 velocity 用冻结 prev，矩阵连续 → 无假速度）。
-      // - shadowTemporal 开时不跳 render：BSM resolve 时序累积依赖逐帧 jitter 相位
-      //   （frame 递增）——「重 march 相同内容」前提被 jitter 破坏，跳帧=累积停更。
-      const freezeActive = options.shadowFreeze === true && matricesFrozen
-      let changed = false
-      if (!freezeActive) {
-        changed = cascades.update(
-          {
-            inverseViewMatrix: camera.inverseViewMatrix,
-            projectionMatrix: (camera.frustum as unknown as { projectionMatrix: Matrix4 })
-              .projectionMatrix,
-            near,
-            far: farFrustum
+    // ── ShadowPass 生成端（options.shadowPass=false 跳过——诊断基线 Beer=1）──
+    const enableShadow = options.shadowPass !== false
+    // 生成端 turbulence dummy（与 CloudsPass 同款 1×1 中性灰 (128,128,128)——sampleMedia
+    // TURBULENCE 分支采样；两端各自持有便于独立 destroy）
+    const shadowTurbulenceDummy = enableShadow
+      ? new Texture({
+          context,
+          source: {
+            width: 1,
+            height: 1,
+            arrayBufferView: new Uint8Array([128, 128, 128, 255])
           },
-          sunForMatrices,
-          distance
-        )
-        if (changed) {
-          for (let i = 0; i < cascadeCount; i++) {
-            Matrix4.clone(cascades.cascades[i].matrix, shadowMatrices[i])
-            Matrix4.clone(cascades.cascades[i].inverseMatrix, inverseMatrices[i])
-            shadowIntervals[i].x = cascades.cascades[i].interval.x
-            shadowIntervals[i].y = cascades.cascades[i].interval.y
-          }
-          // M4：本帧矩阵先登记（render 内部 velocity 用 prevMatrices=上帧、末尾 prev ← 本帧）
-          shadowPass.setCurrentMatrices(shadowMatrices)
-          shadowState.cameraNear = near
-          // T4 far 不变式（spec §6）：world 单源 cascades.far；frustum 分支 = farFrustum
-          shadowState.far = worldAnchor ? cascades.far : farFrustum
-          shadowState.bsm = shadowPass.bsmTexture
+          pixelFormat: PixelFormat.RGBA,
+          pixelDatatype: PixelDatatype.UNSIGNED_BYTE
+        })
+      : undefined
+
+    // BSM 专属 inverseShadowMatrices[CASCADE_COUNT]（shadow.frag cascade() z=-1 反投影太阳侧
+    // 起点）：preRender 逐帧覆写的 mutable 数组，uniform 闭包持引用。
+    const inverseMatrices = shadowMatrices.map(() => new Matrix4())
+
+    // shadow uniformMap = 共享段（与主 march 同源闭包）+ BSM 专属（反投影矩阵 + shadowMarch 档
+    // 平铺——Cesium uniformMap 不支持 struct；同名 maxIterationCount 等与主 march 档不同值，
+    // 故 march 档不进共享段、各端自绑）。u_cascadeIndex 由 ShadowPass 内部注入（勿重复绑）。
+    // D7 frame 拆分：BSM 生成端的 stbn jitter 相位只在 shadowTemporal 开时递增（关 = M3 恒 0）。
+    const shadowUniformMap: { [name: string]: () => unknown } = {
+      ...buildSharedCloudsUniforms(scene, luts, weather, state, params, shadowTurbulenceDummy!),
+      frame: () => (shadowTemporal ? params.frame : 0),
+      inverseShadowMatrices: () => inverseMatrices,
+      // shadowMarch 档（qualityPresets.ts defaults.shadow：50/100/1000/1e-5/1e-5/1e-4/2）
+      maxIterationCount: () => params.shadowMarch.maxIterationCount,
+      minStepSize: () => params.shadowMarch.minStepSize,
+      maxStepSize: () => params.shadowMarch.maxStepSize,
+      minDensity: () => params.shadowMarch.minDensity,
+      minExtinction: () => params.shadowMarch.minExtinction,
+      minTransmittance: () => params.shadowMarch.minTransmittance,
+      opticalDepthTailScale: () => params.shadowMarch.opticalDepthTailScale
+    }
+
+    const shadowPass: ShadowPass | undefined = enableShadow
+      ? createShadowPass({
+          context,
+          cascadeCount,
+          mapSize,
+          // RGBA16F 作 FBO color attachment 需 colorBufferHalfFloat——resolveCloudsHdrDatatype
+          // 检测恰好覆盖（HALF_FLOAT→FLOAT→UNSIGNED_BYTE 兜底）；FBO 不完整时 render 内部
+          // warn+跳过（消费端保全 0 Beer=1 降级，不炸）
+          pixelDatatype: resolveCloudsHdrDatatype(scene),
+          uniformMap: shadowUniformMap,
+          // 编译分支与主 march 同步（BSM 与主 march 的云密度必须同分布——shapeDetail/turbulence
+          // 单端关闭会造成阴影与云形错位）。T4 起读 resolved（applied.main，spec §6 点名的
+          // options.shapeDetail ?? true 错位点——low 档 shapeDetail=false 未传时旧写法给
+          // 生成端 true）。历史坑（M3 终审修复）保留备忘：本字面量曾无条件建键 + 透传
+          // undefined，ShadowMaterial 的 {...DEFAULTS, ...options} 被「显式 undefined 键」
+          // 覆盖默认 true（spread 按键存在性覆盖）→ 生成端不 define 而主 march define；
+          // applied 值恒布尔（applyQualityPreset 已 ?? 档位），坑天然不复发。
+          // cascadeCount 不入 shaderOptions——单源走顶层 options.cascadeCount（ShadowPass
+          // 内部透传 define，Task 3）。
+          shaderOptions: {
+            shapeDetail: applied.main.shapeDetail,
+            turbulence: applied.main.turbulence
+          },
+          // M4：BSM temporal（velocity 层 + resolve ping-pong + prevMatrices 编排）
+          temporalPass: shadowTemporal
+        })
+      : undefined
+
+    if (enableShadow) {
+      state.shadow = shadowState
+      // 创建即全 0（ShadowPass allocZeroedTexels）→ 首帧 render 前采样 Beer=1，与 dummy
+      // 同降级语义（T4 concern：可直接赋值，不必等首次 render）
+      shadowState.bsm = shadowPass?.bsmTexture
+    }
+
+    // ── M4 云 resolve Pass（temporal 时；primitive add 在 march 之后——D1 执行顺序契约：
+    //    同 pass=VOXELS 内 PrimitiveCollection 数组序 → update 顺序 → commandList 序）──
+    const resolvePass: CloudsResolvePass | undefined = temporal
+      ? createCloudsResolvePass({
+          context,
+          width: context.drawingBufferWidth,
+          height: context.drawingBufferHeight,
+          pixelDatatype: resolveCloudsHdrDatatype(scene),
+          colorBuffer: cloudsPass.colorTexture,
+          depthVelocityBuffer: cloudsPass.depthVelocityTexture,
+          frame: () => params.frame,
+          varianceGamma: params.temporalVarianceGamma,
+          temporalAlpha: params.temporalAlpha,
+          temporalDisocclusion: params.temporalDisocclusion,
+          upscaleDivisor: applied.upscaleDivisor
+        })
+      : undefined
+    if (resolvePass != null) {
+      ;(scene.primitives as unknown as { add: (p: unknown) => void }).add(resolvePass.primitive)
+    }
+
+    // ── preRender：每帧更新 sunDirection（Simon1994 + ICRF→Fixed）+ altitudeCorrection（密切球）──
+    // 仿 AtmosphereStage.ts:568-604。state 更新后 CloudsPass uniformMap 闭包自动反映（同引用）。
+    // M4 temporal 状态：上帧相机快照（velocity reprojection 用；首帧 undefined → fallback 当前
+    // 矩阵，velocity=0——three previousProjectionMatrix ?? camera.projectionMatrix 同款）。
+    // T4（spec §7 v2）：本函数不挂 listener——每帧逻辑为 impl.onPreRender，由顶层
+    // createCloudsStage 的零直捕 listener 调用；prevCamera/matricesFrozen 是 per-impl 状态
+    //（换 impl 自然归零——freeze 语义从新 impl 重新起算）。
+    let prevCamera: TemporalCameraSnapshot | undefined
+    // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
+    let prevCameraPos: Cartesian3 | undefined
+    // 运动自适应 α（T2，2026-09-02）：上帧 look 方向（旋转分量）+ 当前 α 状态（lerp 平滑）
+    let prevDirWC: Cartesian3 | undefined
+    let motionAlphaCurrent: number | undefined
+    // 诊断冻结状态（?cloudsShadowFreeze=1）：首帧 update 过后置 true
+    let matricesFrozen = false
+    const onPreRender = (time: JulianDate): void => {
+      const camera = scene.camera
+
+      // ── M4 temporal：swap 最前（D2：swap 后 history=上帧输出、resolve=待写）+ frame 递增
+      //    （D7：单端全关时不递增；march/BSM 生成端的 frame uniform 已按各端开关拆分绑定）──
+      // 【静止冻结 2026-09-02】相机静止时 frame 不递增——Bayer jitter/STBN 相位恒定 →
+      // march currentColor 恒定 → resolve 的 variance clip 收敛 → 输出逐位稳定。
+      // 动机：Bayer 16 相位超采样轮换在高对比云区显示层持续抖动（连拍 20-40% 像素逐帧
+      // 变化，readPixels 实证 march velocity 正确、抖动源=轮换采样本身；EMA 混合对 16 帧
+      // 周期输入稳态无衰减）。运动时恢复轮换（ legitimate 变化掩盖轮换 + temporal 重建
+      // 收益主要在运动中）。判定：positionWC 与上帧差 < 0.01m（远小于 1px 的世界投影）。
+      resolvePass?.swapBuffers()
+      if (temporal || shadowTemporal) {
+        if (prevCameraPos != null && Cartesian3.distance(camera.positionWC, prevCameraPos) < 0.01) {
+          // 静止：frame 不递增（jitter/STBN 相位冻结）
+        } else {
+          params.frame++
         }
-        matricesFrozen = true
+        // prevCameraPos 在下方 temporal 分支 prevCamera 快照处一并更新（同一 if 内）
       }
-      if (freezeActive || changed || shadowTemporal) {
-        shadowPass.render()
+
+      // 密切球再中心化（相机侧；shader 内 camera/scenePos 都用全量 altitudeCorrection）。
+      // bottomRadius = ATMOSPHERE_BOTTOM_RADIUS_M（云层 minHeight=750m ≪ atmosphere bottom，密切球 recenter
+      // 在 atmosphere bottom 足够覆盖云层范围）。
+      getAltitudeCorrectionOffset(
+        camera.positionWC,
+        ATMOSPHERE_BOTTOM_RADIUS_M,
+        ellipsoid,
+        state.altitudeCorrection
+      )
+
+      // 太阳方向：inertial 系位置 → central-body-fixed → ECEF，单位化。
+      // 【ICRF 竞态修复 2026-08-16】与 AtmosphereStage 同款切换
+      // computeIcrfToFixedMatrix → computeIcrfToCentralBodyFixedMatrix（XYS 懒加载竞态 +
+      // 网络依赖 → GMST fallback 恒有值；详见 AtmosphereStage.ts 同位注释）。
+      const sunInertial = Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(
+        time,
+        sunInertialScratch
+      )
+      const icrfToFixed = Transforms.computeIcrfToCentralBodyFixedMatrix(time, icrfScratch)
+      if (icrfToFixed != null && sunInertial != null) {
+        const sunFixed = Matrix3.multiplyByVector(icrfToFixed, sunInertial, sunInertial)
+        const sunMag = Cartesian3.magnitude(sunFixed)
+        if (Number.isFinite(sunMag) && sunMag > 1e-15) {
+          Cartesian3.normalize(sunFixed, state.sunDirection)
+        }
+
+        // 月方向（方向 C，spec §6.5）：origin = camera.positionWC + altitudeCorrection（米）——
+        // 与 atmosphere 侧同式同源（spec r2 N2：显式公式，弃「密切球心」二义措辞）。icrfToFixed
+        // 复用上方太阳段（同帧共享）。
+        Cartesian3.add(camera.positionWC, state.altitudeCorrection, moonOriginScratch)
+        computeMoonDirectionECEF(time, icrfToFixed, moonOriginScratch, state.moonDirection)
+        // 月相因子：state 两方向 dot 求 elongation（Lambert 球积分；不独立调 core 独立版——
+        // 每帧省 Simon1994×2+ICRF×1，spec §4.1 注）
+        state.moonIlluminatedFraction = computeMoonIlluminatedFractionFromDirections(
+          state.sunDirection,
+          state.moonDirection
+        )
+      }
+
+      // ── T6 云图时间轴（spec §4.1）：CPU float64 mod 后传 uniform（T1 纯函数，同机多 Viewer
+      //    clock 同刻 ⇒ 同分布）——evolutionPhaseS 调试钩子仅偏移演化/平流输入，不动太阳 ──
+      const tSec = JulianDate.secondsDifference(time, WEATHER_EPOCH)
+      const evolutionPhase = options.evolutionPhaseS ?? 0
+      state.atlasT = computeEvolutionTNorm(tSec + evolutionPhase, timelinePlan.evolutionPeriodS)
+      state.windOffset = computeWindOffsetTiles(tSec + evolutionPhase, timelinePlan.windMps, timelinePlan.tileKm)
+      const gregorian = JulianDate.toGregorianDate(time)
+      state.itczCenterSin = Math.sin(
+        (computeItczCenterLatDeg(computeDayOfYear(gregorian.month, gregorian.day)) * Math.PI) / 180
+      )
+
+      // ── M4 temporal：Bayer jitter + reprojection 矩阵（march ray 重建偏移 + velocity 两分支消费）──
+      // 矩阵域 ECEF（worldToECEF=identity）；preRender 时刻 frustum.projectionMatrix 为完整视锥
+      //（multi-frustum 分段前，velocity 数学只用投影 xy 系数与 w → 分段无关，plan D5）。
+      // 写入 params 的既有 Matrix4 实例（clone 覆写不换引用——uniformMap 闭包持引用）。
+      if (temporal) {
+        computeTemporalJitter(
+          params.frame,
+          cloudsPass.marchWidth,
+          cloudsPass.marchHeight,
+          params.temporalJitter
+        )
+        const viewMatrix = camera.viewMatrix
+        const projectionMatrix = (camera.frustum as unknown as { projectionMatrix: Matrix4 })
+          .projectionMatrix
+        buildReprojectionMatrices(prevCamera, viewMatrix, projectionMatrix, camera.inverseViewMatrix, params.temporalJitter, {
+          reprojectionMatrix: params.reprojectionMatrix,
+          viewReprojectionMatrix: params.viewReprojectionMatrix
+        })
+        // 帧末存本帧快照（clone——Cesium camera 矩阵是 live 引用，必须拷贝）
+        prevCamera = {
+          viewMatrix: Matrix4.clone(viewMatrix, new Matrix4()),
+          projectionMatrix: Matrix4.clone(projectionMatrix, new Matrix4())
+        }
+        // ── T2 运动自适应 α（2026-09-02 涂抹+抖动修复）：此刻 prevCameraPos 仍是上帧
+        // 位置（下方才更新）——运动标量 = 平移距离 + 方向角变化 × 等效半径（旋转
+        // positionWC 不动但画面全动，必须计入）。运动中超阈值时 α 从 temporalAlpha
+        // （静止收敛值）平滑升至 motionAlpha——history 重投影错位/拖影的权重下降
+        // （快速抖动换细颗粒噪声）；停止后 lerp 回 base 收敛。首帧参考 undefined →
+        // motion=0 → α 从 base 起步（history 尚未建立，base 慢收敛更稳）。
+        const transM =
+          prevCameraPos != null ? Cartesian3.distance(camera.positionWC, prevCameraPos) : 0
+        let dirAngle = 0
+        if (prevDirWC != null) {
+          const d = Cartesian3.dot(prevDirWC, camera.directionWC)
+          dirAngle = Math.acos(Math.min(1, Math.max(-1, d)))
+        }
+        motionAlphaCurrent = computeMotionAlpha(
+          transM + dirAngle * MOTION_EQUIV_RADIUS_M,
+          params.temporalAlpha,
+          params.motionAlpha,
+          motionAlphaCurrent ?? params.temporalAlpha
+        )
+        resolvePass?.setTemporalAlpha(motionAlphaCurrent)
+
+        // 静止冻结判定（2026-09-02）：存上帧相机位置 + T2 上帧 look 方向（块末统一更新）
+        prevCameraPos = Cartesian3.clone(camera.positionWC, prevCameraPos ?? new Cartesian3())
+        prevDirWC = Cartesian3.clone(camera.directionWC, prevDirWC ?? new Cartesian3())
+      }
+
+      // ── M3 BSM：级联矩阵更新 + 生成（sunDirection 更新后，本帧矩阵与光照一致）──
+      // preRender 时刻 camera.frustum.near/far 是完整视锥值（multi-frustum 分段前）——
+      // cascade 归一化域与 u_shadowCameraNear 同帧同源（T4 concern #1）。
+      if (shadowPass != null) {
+        // T4 world 分支（spec v3 §3.1）：矩阵输入太阳量化（0.05° 网格——跑钟时矩阵只在
+        // 格点跳变，静止相机+慢太阳下矩阵稳定）；march 与消费端 state.sunDirection 保持
+        // 精确（§3.1.8）。frustum 分支原引用直传（bit 级现行为）。
+        const sunForMatrices = worldAnchor
+          ? quantizeSunDirection(state.sunDirection, SUN_QUANT_STEP, qSunScratch)
+          : state.sunDirection
+        // 虚拟光源距离（仅 frustum 分支：three CloudsEffect.ts:387 语义 lerp(1e6, 1e3, zenith)）。
+        // distance 大（晨昏 zenith=0 → 1e6 上限）是安全的：BSM 两端均不消费 clip.z——生成端
+        // cascade() 的 march 起点经 getRayNearFar 与云层球壳解析求交（inverseShadowMatrices
+        // 的 z=-1 反投影只取 xy），消费端 getShadowUv 只取 clip.xy（正交投影 xy 与 z 解耦）。
+        // CascadedShadowMaps 的「distance 过大会超出 ortho 盒深、勿传大值」警告（T1）仅针对
+        // 未来引入 clip.z 剔除/依赖的场景，当前管线不受约束。world 分支不传（z 盒解析式定
+        // near/far，不消费 distance——spec §3.2）。
+        let distance: number | undefined
+        if (!worldAnchor) {
+          const normal = ellipsoid.geodeticSurfaceNormal(camera.positionWC, normalScratch)
+          const zenith = Math.max(0, Cartesian3.dot(state.sunDirection, normal))
+          distance = 1e6 + (1e3 - 1e6) * zenith
+        }
+        // BSM far/near（spec §3.1.5 + T4 far 不变式 spec §6 v2）——world 分支 shadowState.far ≡
+        // cascades.far（= worldIntervals[cascadeCount]，updateWorld 内部单源；cascadeCount=2 即
+        // 21km）。原 world 分支 far = min(maxRayDistance, SHADOW_FAR_LIMIT)=60km 与 3 级联
+        // intervals 末段 60km 相等纯属设计值巧合——两处归一化域分叉（生成端 updateWorld 按
+        // intervals[cascadeCount] 归一化、消费端 getFadedCascadeIndex 按 shadowState.far 归一化）
+        // 会导致级联选择整体错位，故废除 SHADOW_FAR_LIMIT 的独立参与（far 赋值与 cascades.far
+        // 同源）；update 传的 farFrustum 在 world 分支被 updateWorld 忽略。far 仍不随视锥
+        //（multi-frustum 缩放时不变）、cameraNear 固定 0（u_shadowCameraNear 源头注入 0）。
+        // frustum 分支 bit 级现行为：完整视锥 far 与 maxRayDistance 取小（决策 D6——云 march
+        // 不超 maxRayDistance）；2026-08-28 远端深色斑修复再与 SHADOW_FAR_LIMIT 取小——
+        // maxRayDistance=200km 时最远 cascade 的 texel 达 ~1km，frontDepth 精度崩 → 远端云
+        // 自阴影过暗斑块（屏幕锚定、随相机前进）。收缩到 60km 后三层 split 重排（最远 texel
+        // ~200m），远端云走 uv 越界 fallback（光深 0=无自阴影）——低太阳角远端云的自阴影
+        // 视觉贡献本就弱。
+        const farFrustum = Math.min(camera.frustum.far, params.maxRayDistance, SHADOW_FAR_LIMIT)
+        const near = worldAnchor ? 0 : camera.frustum.near
+        // ── 静止跳过（T5，spec §3.2）与诊断冻结（?cloudsShadowFreeze=1）正交组合 ──
+        // - freeze 激活（开且首帧已过）：update/矩阵覆写整段跳过（T4 行为），render 照常
+        //   每帧——freeze 语义是「冻结矩阵重 march」（噪声分解实验：冻结网格上逐帧差 =
+        //   非矩阵噪声地板），跳 render 会破坏该语义。
+        // - 非 freeze：update 照跑，返回 changed（world = 语义键比较；frustum 恒 true）。
+        //   changed=false（矩阵静止帧）→ 矩阵覆写 + setCurrentMatrices + render 全跳——
+        //   BSM 纹理内容只依赖矩阵/云场/量化太阳格点，静止帧重 march 必产出相同内容，
+        //   跳过即白赚（m7 不变量：跳过帧 shadowMatrices、ShadowPass 内 current/prev
+        //   matrices 与 temporal history 三者冻结不变——render 内部的 prev←本帧登记也
+        //   不发生，静止期结束后首帧 velocity 用冻结 prev，矩阵连续 → 无假速度）。
+        // - shadowTemporal 开时不跳 render：BSM resolve 时序累积依赖逐帧 jitter 相位
+        //   （frame 递增）——「重 march 相同内容」前提被 jitter 破坏，跳帧=累积停更。
+        const freezeActive = options.shadowFreeze === true && matricesFrozen
+        let changed = false
+        if (!freezeActive) {
+          changed = cascades.update(
+            {
+              inverseViewMatrix: camera.inverseViewMatrix,
+              projectionMatrix: (camera.frustum as unknown as { projectionMatrix: Matrix4 })
+                .projectionMatrix,
+              near,
+              far: farFrustum
+            },
+            sunForMatrices,
+            distance
+          )
+          if (changed) {
+            for (let i = 0; i < cascadeCount; i++) {
+              Matrix4.clone(cascades.cascades[i].matrix, shadowMatrices[i])
+              Matrix4.clone(cascades.cascades[i].inverseMatrix, inverseMatrices[i])
+              shadowIntervals[i].x = cascades.cascades[i].interval.x
+              shadowIntervals[i].y = cascades.cascades[i].interval.y
+            }
+            // M4：本帧矩阵先登记（render 内部 velocity 用 prevMatrices=上帧、末尾 prev ← 本帧）
+            shadowPass.setCurrentMatrices(shadowMatrices)
+            shadowState.cameraNear = near
+            // T4 far 不变式（spec §6）：world 单源 cascades.far；frustum 分支 = farFrustum
+            shadowState.far = worldAnchor ? cascades.far : farFrustum
+            shadowState.bsm = shadowPass.bsmTexture
+          }
+          matricesFrozen = true
+        }
+        if (freezeActive || changed || shadowTemporal) {
+          shadowPass.render()
+        }
       }
     }
-  }
 
-  // ── T6 天气预设热切（spec §6.1 + §5.4 组合语义）──
-  // 基线 = 档位/用户显式合并后的 params 值（本 impl 装配时刻快照）——清除预设恢复它，
-  // 用户显式 parameters.coverage 优先于默认 0.3 的语义由此保留。filterScale 缩放基线
-  // coverageFilterWidths（overcast 0.6 收窄 → 连片）；激活同时抬 state.climateBandsFloor
-  // 至 0.6（shader clamp(band, u_climateBandsFloor, 1.3)——「阴天」×副热带谷不退化近晴空）。
-  const presetBaseline = {
-    coverage: params.coverage,
-    coverageFilterWidths: Cartesian4.clone(params.coverageFilterWidths)
-  }
-  const setWeatherPreset = (preset: CloudsWeatherPreset | undefined): void => {
-    if (preset == null) {
-      params.coverage = presetBaseline.coverage
-      Cartesian4.clone(presetBaseline.coverageFilterWidths, params.coverageFilterWidths)
-      state.climateBandsFloor = CLIMATE_BANDS_FLOOR_DEFAULT
-      return
+    // ── T6 天气预设热切（spec §6.1 + §5.4 组合语义）──
+    // 基线 = 档位/用户显式合并后的 params 值（本 impl 装配时刻快照）——清除预设恢复它，
+    // 用户显式 parameters.coverage 优先于默认 0.3 的语义由此保留。filterScale 缩放基线
+    // coverageFilterWidths（overcast 0.6 收窄 → 连片）；激活同时抬 state.climateBandsFloor
+    // 至 0.6（shader clamp(band, u_climateBandsFloor, 1.3)——「阴天」×副热带谷不退化近晴空）。
+    const presetBaseline = {
+      coverage: params.coverage,
+      coverageFilterWidths: Cartesian4.clone(params.coverageFilterWidths)
     }
-    const p = WEATHER_PRESETS[preset]
-    params.coverage = p.coverage
-    Cartesian4.multiplyByScalar(presetBaseline.coverageFilterWidths, p.filterScale, params.coverageFilterWidths)
-    state.climateBandsFloor = CLIMATE_BANDS_FLOOR_PRESET
-  }
+    const setWeatherPreset = (preset: CloudsWeatherPreset | undefined): void => {
+      if (preset == null) {
+        params.coverage = presetBaseline.coverage
+        Cartesian4.clone(presetBaseline.coverageFilterWidths, params.coverageFilterWidths)
+        state.climateBandsFloor = CLIMATE_BANDS_FLOOR_DEFAULT
+        return
+      }
+      const p = WEATHER_PRESETS[preset]
+      params.coverage = p.coverage
+      Cartesian4.multiplyByScalar(presetBaseline.coverageFilterWidths, p.filterScale, params.coverageFilterWidths)
+      state.climateBandsFloor = CLIMATE_BANDS_FLOOR_PRESET
+    }
 
-  // ── impl 组装（spec §7）：完整销毁清单（handle.destroy 与 setQuality 重建共用）──
-  // 不含 preRender listener——顶层持有，换 impl 引用即切换。
-  return {
-    cloudsPass,
-    resolvePass,
-    shadowPass,
-    shadowState,
-    cascades,
-    params,
-    setWeatherPreset,
-    onPreRender,
-    destroy(): void {
-      // 顺序：先 CloudsPass（消费端，撤 bsm 引用）→ 云 resolve（march 后第二个 VOXELS 实例）→
-      // ShadowPass（释放 bsmTexture——T3 concern #4），最后生成端 turbulence dummy。
-      // T6：atlas 消费端（march/ShadowPass shader）销毁后再 dispose——atlasFallbackDummy
-      // 仅 skip-path 创建。overlay 不在此清单（v2 spec §6.1：per-handle 资源，由顶层
-      // handle.destroy/setQuality 失败分支摘）
-      cloudsPass.destroy()
-      resolvePass?.destroy()
-      shadowPass?.destroy()
-      shadowTurbulenceDummy?.destroy()
-      atlas?.dispose()
-      // Texture3D augment 类型未声明 destroy（WeatherAtlas dispose 内同款 cast 调用）
-      ;(atlasFallbackDummy as unknown as { destroy(): void } | undefined)?.destroy()
+    // ── impl 组装（spec §7）：完整销毁清单（handle.destroy 与 setQuality 重建共用）──
+    // 不含 preRender listener——顶层持有，换 impl 引用即切换。
+    return {
+      cloudsPass,
+      resolvePass,
+      shadowPass,
+      shadowState,
+      cascades,
+      params,
+      setWeatherPreset,
+      onPreRender,
+      destroy(): void {
+        // 顺序：先 CloudsPass（消费端，撤 bsm 引用）→ 云 resolve（march 后第二个 VOXELS 实例）→
+        // ShadowPass（释放 bsmTexture——T3 concern #4），最后生成端 turbulence dummy。
+        // T6：atlas 消费端（march/ShadowPass shader）销毁后再 dispose——atlasFallbackDummy
+        // 仅 skip-path 创建。overlay 不在此清单（v2 spec §6.1：per-handle 资源，由顶层
+        // handle.destroy/setQuality 失败分支摘）
+        cloudsPass.destroy()
+        resolvePass?.destroy()
+        shadowPass?.destroy()
+        shadowTurbulenceDummy?.destroy()
+        atlas?.dispose()
+        // Texture3D augment 类型未声明 destroy（WeatherAtlas dispose 内同款 cast 调用）
+        ;(atlasFallbackDummy as unknown as { destroy(): void } | undefined)?.destroy()
+      }
     }
+  } catch (e) {
+    atlas?.dispose()
+    // Texture3D augment 类型未声明 destroy（destroy 清单同款 cast 调用）
+    ;(atlasFallbackDummy as unknown as { destroy(): void } | undefined)?.destroy()
+    throw e
   }
 }
 

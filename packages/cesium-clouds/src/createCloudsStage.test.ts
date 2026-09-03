@@ -20,6 +20,11 @@ import { describe, it, expect, vi } from 'vitest'
 // 恰建 1 个 Texture（全链路唯一 new Texture 点）。
 const textureProbe = { instances: [] as any[] }
 
+// Texture3D 实例探针（T8 顺手修）：buildImpl 内 atlasFallbackDummy（atlasDisabled 无 raw 降级
+// 路径）经 new Texture3D 创建——外圈 catch 防泄漏用例断言其 destroy 被调。与 textureProbe
+//（Texture，turbulence dummy）分表：后者有「恰 1 个」数量断言，混入会破坏不变量。
+const texture3dProbe = { instances: [] as any[] }
+
 // vi.mock('cesium')：仅 mock WebGL 类（PostProcessStage/Sampler），保留真实 math（Cartesian3/Matrix3 等）+
 // Simon1994/Transforms/JulianDate（preRender sunDirection 算法用，真实实现可 node 跑）。
 vi.mock('cesium', async (importOriginal) => {
@@ -60,6 +65,7 @@ vi.mock('cesium', async (importOriginal) => {
       this.pixelDatatype = opts.pixelDatatype
       this.source = opts.source
       this.destroy = vi.fn()
+      texture3dProbe.instances.push(this)
     }
   }
 })
@@ -1445,12 +1451,20 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
   })
 
   it('evolutionPhaseS 调试钩子：偏移演化/平流输入（不动太阳）', () => {
+    // 无 phase 基线（同刻 firePreRender）：phase 只进 atlasT/windOffset——sunDirection
+    // 应与基线逐位一致（T8 断言补强：原仅查单位向量长度，防不住相位调制太阳方向）
+    const baseScene = createMockScene()
+    const baseHandle = createCloudsStage(baseScene, createMockLuts(), createMockWeather(), { clouds: true })
+    firePreRender(baseScene)
+    const baseSun = Cartesian3.clone((createCloudsPass as any).mock.calls[0][3].sunDirection)
+    baseHandle!.destroy()
+
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
       clouds: true,
       evolutionPhaseS: 3600
     })
-    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    const stateArg = (createCloudsPass as any).mock.calls.at(-1)![3]
     firePreRender(scene)
     const tSec = preRenderTSec() + 3600
     expect(stateArg.atlasT).toBeCloseTo(
@@ -1459,8 +1473,8 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
     expect(stateArg.windOffset).toEqual(
       computeWindOffsetTiles(tSec, DEFAULT_PLAN.windMps, DEFAULT_PLAN.tileKm)
     )
-    // 太阳段不受钩子影响（sunDirection 仍单位向量）
-    expect(Cartesian3.magnitude(stateArg.sunDirection)).toBeCloseTo(1, 6)
+    // 太阳段不受钩子影响：与无 phase 基线逐位一致
+    expect(stateArg.sunDirection).toEqual(baseSun)
     handle!.destroy()
   })
 
@@ -1557,5 +1571,40 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
     expect(weatherAtlasProbe.instances[0].dispose).toHaveBeenCalledTimes(1)
     expect(() => handle!.destroy()).not.toThrow()
     expect(weatherAtlasProbe.instances[0].dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('buildImpl 中段抛错：外圈 catch 释放 atlas 再 rethrow（T8 顺手修，T6 评审遗留①）', () => {
+    const scene = createMockScene()
+    // once 桩落在本次 createCloudsStage 的唯一 createCloudsPass 调用上（atlas 创建已完成、
+    // 主体装配中段抛错——烘焙内层防护管不到的窗口，正是本用例锁的外圈路径）
+    ;(createCloudsPass as any).mockImplementationOnce(() => {
+      throw new Error('GL 资源失败')
+    })
+    expect(() =>
+      createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    ).toThrow('GL 资源失败')
+    expect(weatherAtlasProbe.instances).toHaveLength(1)
+    // 泄漏防护：异常路径上 atlas 仍被 dispose（正常路径由 destroy 清单覆盖）
+    expect(weatherAtlasProbe.instances[0].dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('buildImpl 中段抛错（atlasDisabled 无 raw → dummy 路径）：外圈 catch 销毁 atlasFallbackDummy', () => {
+    texture3dProbe.instances.length = 0
+    const scene = createMockScene()
+    ;(createCloudsPass as any).mockImplementationOnce(() => {
+      throw new Error('GL 资源失败')
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() =>
+      createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+        clouds: true,
+        atlasDisabled: true
+      })
+    ).toThrow('GL 资源失败')
+    warn.mockRestore()
+    expect(weatherAtlasProbe.instances).toHaveLength(0) // 无 raw → 未建 atlas
+    expect(texture3dProbe.instances).toHaveLength(1) // 1×1×1 全白 dummy 已建
+    // 泄漏防护：异常路径上 dummy 仍被 destroy
+    expect(texture3dProbe.instances[0].destroy).toHaveBeenCalledTimes(1)
   })
 })
