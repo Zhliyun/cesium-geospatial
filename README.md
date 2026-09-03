@@ -127,6 +127,7 @@ http://localhost:5173/?time=2026-08-28T17:30:00Z&camera=-80.6057,64.5197,7852,68
 | `cloudsTint` | 0.88,1,1 | 夜间云色调乘子（线性 RGB，乘底光+月光；沿革冷蓝 1.32→弱蓝 1.15→中性偏暖定稿） |
 | `cloudsTwilightBoost` | 6 | 暮光天光补偿倍率：太阳 [+2°,-1.5°] 窗内云天光项 1→boost（黄昏云过黑修复——crude 天光+overlay 不乘动态曝光欠亮 ~3×；实测云/天空显示比 32%→80%；1=关；白天零回归） |
 | `cloudsFade=0` | 开 | 高空云层渐隐开关：相机高度 >50km 起云渐隐、>300km 全隐（太空俯视视角云 march 域外伪影不可根治且视觉贡献趋零，隐去后为干净蓝色地球；`0` 关闭看全量云盘）。近地/航空体验域（<50km）零影响 |
+| `cloudsHitMipBoost=N` | 1 | 云内步 mip 调制倍率（甲内近水平性能修复，2026-09-04）：命中云后的 march 步长 `mix(stepSize, maxStepSize, min(1, mipLevel·N))` 与空区步 LOD 对齐——上游云内步只 ×1.01/步，甲内近水平「沿云飞」几十 km 时 500 步打满（2519m+pitch≈-9.5° 实测 28 FPS）。缺省 1=38 FPS 档（近景 <2km 逐位不变）；`4`=54 FPS（中景云略淡、俯视云海轻微糊化）；`8`=59 FPS 满帧（中景云墙消解，慎用）。近景/俯视主视觉优先保真时保持 1 |
 | `cloudsShadow=0` | 开 | 关 BSM 自阴影（对比云体积感） |
 | `cloudsShadowAnchor=frustum` | world | 回退视锥锚定 BSM（AB 对照基线；默认 world 世界锚定固定网格，抗移动闪动） |
 | `cloudsShadowScale=N` | 1 | world 锚定 radii × N（诊断用，N=5 → {80,168,480}km 膨胀层） |

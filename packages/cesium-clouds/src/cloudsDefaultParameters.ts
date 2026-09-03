@@ -106,6 +106,12 @@ export interface CloudsParameters {
   maxStepSize: number
   maxRayDistance: number
   perspectiveStepScale: number
+  /**
+   * 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（clouds.frag u_hitStepMipBoost）。
+   * 缺省 1=空区步同款调制；>1 更激进（远云步长更快吃满 maxStepSize）。undefined 时
+   * CloudsPass 绑定兜底 1。
+   */
+  hitStepMipBoost?: number
   minDensity: number
   minExtinction: number
   minTransmittance: number

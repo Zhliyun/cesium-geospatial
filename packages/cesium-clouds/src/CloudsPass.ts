@@ -517,6 +517,8 @@ export function createCloudsPass(
     maxStepSize: () => params.maxStepSize,
     maxRayDistance: () => params.maxRayDistance,
     perspectiveStepScale: () => params.perspectiveStepScale,
+    // 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（缺省 1）
+    u_hitStepMipBoost: () => params.hitStepMipBoost ?? 1,
     minDensity: () => params.minDensity,
     minExtinction: () => params.minExtinction,
     minTransmittance: () => params.minTransmittance,

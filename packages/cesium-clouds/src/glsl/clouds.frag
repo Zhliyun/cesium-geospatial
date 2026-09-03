@@ -95,6 +95,9 @@ uniform float minStepSize;
 uniform float maxStepSize;
 uniform float maxRayDistance;
 uniform float perspectiveStepScale;
+// 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（缺省 1=空区步同款调制；
+// >1 更激进——远云步长更快吃满 maxStepSize，换 FPS 但中景云变稀；demo ?cloudsHitMipBoost=）
+uniform float u_hitStepMipBoost;
 
 // Secondary raymarch
 uniform int maxIterationCountToSun;
@@ -702,8 +705,16 @@ vec4 marchClouds(
     }
 
     // Take a shorter step because we've already hit the clouds.
+    // 【2026-09-04 甲内近水平 march LOD】云内步补 mip 调制（对齐上方空区步 L570 同一公式）：
+    // 上游设计域=云外视角斜穿云层（云内路径=厚度/sinθ，短），云内步只 ×perspectiveStepScale
+    // （+1%/步，50m 起步走 100km 需 ~486 步）；甲内近水平「沿云飞」几十 km 时 500 步打满
+    // （sampleCount 直显实测天空区 300-500 步/像素，28 FPS；low 档 50 步上限同机位满帧旁证）。
+    // mip 随距离增长（log2(1+d·1e-5)：50km≈0.59 / 100km=1.0）→ 远云大步（LOD 语义与空区步
+    // 一致，mip 糊化采样与大步误差自洽）；近景 <2km mip≈0 步长不变逐位保真。大步加速
+    // transmittance 衰减 → early termination 更早，协同收益。
     stepSize *= perspectiveStepScale;
-    rayDistance += stepSize;
+    // 【getHitStepMipModulation】
+    rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel * u_hitStepMipBoost));
   }
 
   // The final product of 5.9.1 and we'll evaluate this in aerial perspective.

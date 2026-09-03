@@ -588,3 +588,29 @@ describe('coverage=1 云甲内盐粒修复：甲内分支段长截断', () => {
     compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'inside-layer max distance guard')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-04 甲内近水平 march LOD：云内步 mip 调制】marchClouds 命中云后的步长只
+// ×perspectiveStepScale（+1%/步）——上游设计域=云外视角斜穿云层（云内路径=厚度/sinθ，
+// 短）；甲内近水平「沿云飞」（camera=...,2519,...,-9.5，2519m 在甲内）云内路径几十 km，
+// 500 步打满（sampleCount 直显实测天空区 300-500 步/像素 → 28 FPS；low 档 50 步上限
+// 同机位 60 FPS 满帧旁证 march 步数主导）。空区步早有 mip 调制（远处跳 maxStepSize
+// 大步），云内步没有——修=云内步对齐同一公式：远处高 mip 大步（LOD 语义自洽：mip 糊化
+// 采样与大步误差同阶）、近景 <2km mip≈0 步长不变逐位保真；大步加速 transmittance 衰减
+// → early termination 更早。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('甲内近水平 march LOD：云内步 mip 调制', () => {
+  it('调制在场：云内步与空区步同款 mix 公式（注释锚防与空区步误配）', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    // 空区步已有同款 `rayDistance += mix(...)` 行——单行断言会误绿，须锚+行连续
+    expect(src).toContain(
+      '// 【getHitStepMipModulation】\n    rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel * u_hitStepMipBoost));'
+    )
+    // 调制倍率 uniform 在场（demo ?cloudsHitMipBoost= 缺省 1）
+    expect(src).toContain('uniform float u_hitStepMipBoost;')
+  })
+
+  it('glslang：含云内步调制完整 shader 真编译', () => {
+    compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'hit-step mip modulation')
+  })
+})

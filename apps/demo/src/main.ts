@@ -582,6 +582,9 @@ async function main(): Promise<void> {
           // getString 的 string|null 收敛到字面量联合，无需 as 断言）
           ...(cloudsQuality != null ? { quality: cloudsQuality } : {}),
           ...(cloudsUpscale != null ? { upscaleDivisor: cloudsUpscale } : {}),
+          // 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（缺省 1=空区步同款）
+          ...(getNumber('cloudsHitMipBoost') != null
+            ? { hitStepMipBoost: getNumber('cloudsHitMipBoost')! } : {}),
           // ── 云分布重设计（spec §6）URL 全集 ──
           // 天气预设创建期注入（白名单守卫已解析；运行期热切走 handle.setWeatherPreset，demo 暂无 UI）。
           // spec §6.1「显式标量优先于预设」：URL 显式给 ?cloudsCoverage= 时跳过预设

@@ -274,6 +274,13 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   altitudeOffsetM?: number
   /**
+   * 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（clouds.frag u_hitStepMipBoost）：
+   * 命中云后的步长 `mix(stepSize, maxStepSize, min(1, mipLevel·boost))`。缺省 1=空区步同款
+   * 调制；甲内近水平「沿云飞」场景（2519m+pitch≈-9.5°，sampleCount 实测 300-500 步/像素
+   * 打满 28 FPS）调大可大幅削减远云步数。demo `?cloudsHitMipBoost=`。
+   */
+  hitStepMipBoost?: number
+  /**
    * T6 WeatherAtlas 烘焙输入（spec §4.3）：仅这些变化才需重烘；采样时调制（coverage/密度/
    * 气候带/预设）走 uniform 热切不动烘焙。缺省走 WeatherAtlas 内置缺省（5.3h/8m/s/1337/100）。
    */
@@ -488,6 +495,12 @@ function buildCloudsStageImpl(
       params,
       packLayerUniforms(applyAltitudeOffset(DEFAULT_CLOUD_LAYERS, options.altitudeOffsetM))
     )
+  }
+
+  // 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率注入（仅显式传时覆盖；缺省
+  // CloudsPass `?? 1` 兜底=空区步同款调制）
+  if (options.hitStepMipBoost != null) {
+    params.hitStepMipBoost = options.hitStepMipBoost
   }
 
   // ── 每帧可变状态（createCloudsStage 持有；preRender 更新；CloudsPass uniformMap 闭包读引用）──
