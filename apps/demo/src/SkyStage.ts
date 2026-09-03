@@ -51,7 +51,12 @@ export function createSkyStage(
       transmittance_texture: () => luts.transmittance,
       scattering_texture: () => luts.scattering,
       single_mie_scattering_texture: () => luts.scattering, // COMBINED 模式不用，传同值
-      irradiance_texture: () => luts.irradiance
+      irradiance_texture: () => luts.irradiance,
+      // HAS_HIGHER_ORDER_SCATTERING_TEXTURE 分支（prefix 恒 define）多阶散射采样——
+      // skyStage.frag 已补声明，此处补绑定（对齐 AtmosphereStage.ts 同名 uniform）。
+      // 缺绑定=渲染中止级编译错（seed 链排查 2026-09-03：render loop 停→tiles/云全死→
+      // 所有浏览器 A/B 截图成死帧伪像）；同 49ad628（另一分支已修，本分支补齐）。
+      higher_order_scattering_texture: () => luts.higherOrderScattering
     }
   })
 

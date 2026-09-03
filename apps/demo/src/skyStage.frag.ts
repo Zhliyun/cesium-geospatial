@@ -11,6 +11,11 @@ uniform sampler2D transmittance_texture;
 uniform sampler3D scattering_texture;
 uniform sampler3D single_mie_scattering_texture;
 uniform sampler2D irradiance_texture;
+// buildAtmospherePrefix 恒 define HAS_HIGHER_ORDER_SCATTERING_TEXTURE（云 god rays 防过暗，C9），
+// runtime.glsl 的 GetSkyRadiance/GetSkyRadianceToPoint 在该分支引用此 uniform——漏声明即
+// undeclared identifier 编译炸（渲染中止：tiles/云全部停摆，浏览器 A/B 实验全成死帧伪像；
+// aerialPerspective/clouds 均各自声明，唯此文件遗漏）。绑定见 SkyStage uniforms。
+uniform sampler3D higher_order_scattering_texture;
 
 #include "bruneton/common"
 #include "bruneton/runtime"
