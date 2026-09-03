@@ -50,4 +50,14 @@ describe('weatherBake.frag 编译（spec §5.1/§5.2）', () => {
     const assembled = buildStandaloneWeatherBakeShader(glslIndex)
     expect(assembled.split('precision highp float;').length - 1).toBe(1)
   })
+
+  it('评审修复钉死（fix round 2）：low/mid 挖除语义（低中互斥，对齐采样端 Skybolt 标定）', () => {
+    const src = glslIndex.weatherBakeFrag
+    // T8 真浏览器实证：「独立通道+max」与采样端 Skybolt 调制链（coverage=0.3/
+    // coverageFilterWidths=0.6，按旧图挖除语义设计）失配 → 调制压不住 → 饱和白雾、
+    // 单体结构丢失。烘焙端恢复旧图挖除：low = saturate(low - mid)，低中互斥。
+    expect(src).toContain('low = clamp(low - mid, 0.0, 1.0)')
+    // 「独立+max」组合不得回归（max 一旦回归，联合覆盖重新撑爆调制链）
+    expect(src).not.toContain('mid = max(mid, low)')
+  })
 })

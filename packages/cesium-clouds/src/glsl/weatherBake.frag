@@ -88,15 +88,18 @@ void main() {
   vec2 pw = p + WARP_AMP * warpA;         // warp 作用于未平移 p
   vec3 bakePoint = vec3(pw + ringOffset + u_seedOffset, zPhase + u_seedOffset.x);
 
-  // Low clouds（对齐 localWeather.frag low 路线：freq 16 → smoothstep(0.8,1.4)）
-  float low = getWorleyFbmV3(bakePoint, 16.0, 1.7);
-  low = smoothstep(0.8, 1.4, low);
-
-  // Mid clouds（freq 8 + vec3(0.5) 相位，smoothstep(1.0,1.4)）
+  // Mid clouds（freq 8 + vec3(0.5) 相位，smoothstep(1.0,1.4)）——先算（低云挖除的减数）
   float mid = getWorleyFbmV3(bakePoint + vec3(0.5, 0.5, 0.0), 8.0, 9.2);
   mid = smoothstep(1.0, 1.4, mid);
-  mid = max(mid, low); // 旧图为挖除语义（r = saturate(worley - g)，低中互斥）；此处有意改
-  // 独立通道 + max（mid 覆盖 low）——采样端 clouds.glsl:96 remap 按通道独立，无需减除。
+
+  // Low clouds（对齐 localWeather.frag low 路线：freq 16 → smoothstep(0.8,1.4)）
+  // 挖除语义：r = saturate(worley - g)——低云=中云挖除余量（低中互斥）。采样端 clouds.glsl
+  // Skybolt 调制链（coverage=0.3/coverageFilterWidths=0.6，用户已验收标定）按此语义设计。
+  // 沿革：brief 曾定「独立通道+max」，T8 真浏览器实证失配——调制压不住联合覆盖 →
+  // 饱和白雾、单体结构丢失（60fps 透射早退假象）→ 回退旧图组合（采样端不动，controller 裁决）。
+  float low = getWorleyFbmV3(bakePoint, 16.0, 1.7);
+  low = smoothstep(0.8, 1.4, low);
+  low = clamp(low - mid, 0.0, 1.0);
 
   // High clouds（perlin 4D w 维扫掠，对齐 high 路线 freq vec3(6,12,1)）
   float high = perlin(
