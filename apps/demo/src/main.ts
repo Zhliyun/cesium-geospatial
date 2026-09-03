@@ -1,5 +1,5 @@
-// Phase 1 Task 7：demo 接线——把 createAtmosphereStage 接到 ?mode=atmosphere，
-// 接 ion 影像+地形，A 路径场景开关（对数深度/关地面大气/关雾），URL 参数化验收。
+// Phase 1 Task 7：demo 接线——主分支默认 ?mode=atmosphere（createAtmosphereStage + 默认建云，
+// 2026-09-03 拍板），接 ion 影像+地形，A 路径场景开关（对数深度/关地面大气/关雾），URL 参数化验收。
 // 保留 ?mode=sky|depth 旧分支作回归对照。
 import {
   Viewer,
@@ -117,11 +117,11 @@ async function main(): Promise<void> {
   // scene.globe.tilesLoaded / 触发截帧。不改任何渲染行为，仅挂全局引用。
   ;(window as unknown as { __viewer?: Viewer }).__viewer = viewer
 
-  // FPS 显示（性能优化 Phase 0 基线工具）：默认开启，画面右上角实时帧率（ms/帧 + FPS）。
-  // 覆盖所有 mode（大气/sky/depth 通用）。URL ?fps=0 关闭。
+  // FPS 显示（性能优化 Phase 0 基线工具）：默认关闭（2026-09-03 拍板——验收角标非产品形态，
+  // 裸 URL 不再常驻右上角）；?fps=1 开启（ms/帧 + FPS）。覆盖所有 mode（大气/sky/depth 通用）。
   // 注意：只给整体帧率；各 PostProcessStage（atmosphere/tonemap/lensflare/depthTemporal）
   // 的 GPU 细分计时需 Chrome DevTools Performance 面板或 EXT_disjoint_timer_query_webgl2。
-  scene.debugShowFramesPerSecond = getString('fps') !== '0'
+  scene.debugShowFramesPerSecond = getString('fps') === '1'
 
   // 通用：隐藏 Cesium 自带天空盒/大气/日/月（atmosphere 模式由后处理接管；
   // sky/depth 分支延续 Phase 0 行为）
@@ -130,7 +130,8 @@ async function main(): Promise<void> {
   if (scene.sun != null) scene.sun.show = false
   if (scene.moon != null) scene.moon.show = false
 
-  const mode = getString('mode') ?? 'sky'
+  // 主分支默认 atmosphere（2026-09-03 拍板——裸 URL 即主体验）；?mode=sky|depth 保留作回归对照。
+  const mode = getString('mode') ?? 'atmosphere'
 
   // URL time / camera：所有 mode 共享（time 决定太阳方向，camera 决定初始视角）。
   // 此前只在 atmosphere 分支解析，导致 sky/depth 对照时相机不到目标位置。
@@ -523,12 +524,13 @@ async function main(): Promise<void> {
       }
     }
 
-    // phase3 体积云 M2 主 raymarch：?clouds=1 → loadWeatherTextures + createCloudsStage
+    // phase3 体积云 M2 主 raymarch：clouds 默认开启（2026-09-03 拍板；?clouds=0 关闭）→
+    // loadWeatherTextures + createCloudsStage
     // （CloudsPass custom Primitive pass=VOXELS + MRT + cloudsBuffer overlay 接 atmosphere 链尾）。
-    // 验收 URL：?mode=atmosphere&clouds=1（天空有云形 flat lighting；相机移动稳定 ECEF 密切球；
-    // 零回归——?clouds 不传时 createCloudsStage 返 undefined，atmosphere 链完全不变）。
+    // 验收 URL：?mode=atmosphere（裸 URL 即有云；相机移动稳定 ECEF 密切球；
+    // 零回归——?clouds=0 时 createCloudsStage 不调用，atmosphere 链完全不变）。
     // 失败不阻断（weather .bin fetch 失败 → console.warn 跳过，atmosphere 照常）。
-    if (!skipAtmosphere && getString('clouds') === '1') {
+    if (!skipAtmosphere && getString('clouds') !== '0') {
       try {
         const weather = await loadWeatherTextures(
           context as Parameters<typeof loadWeatherTextures>[0],
