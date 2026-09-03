@@ -32,11 +32,14 @@ uniform float u_climateBandsFloor; // band 下限 clamp（T6 spec §5.4：预设
 uniform sampler3D shapeTexture;
 uniform vec3 shapeRepeat;
 uniform vec3 shapeOffset;
+// P1 云内纹理风平流（纹理域 mod 1，CPU float64 mod 后传入——与 u_windOffset 同款精度铁律）
+uniform vec3 u_shapeWindOffset;
 
 #ifdef SHAPE_DETAIL
 uniform sampler3D shapeDetailTexture;
 uniform vec3 shapeDetailRepeat;
 uniform vec3 shapeDetailOffset;
+uniform vec3 u_detailWindOffset;
 #endif // SHAPE_DETAIL
 
 #ifdef TURBULENCE

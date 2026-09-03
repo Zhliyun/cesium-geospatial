@@ -132,6 +132,7 @@ import {
   computeDayOfYear,
   computeEvolutionTNorm,
   computeItczCenterLatDeg,
+  computeShapeWindOffsets,
   computeWindOffsetTiles
 } from './weatherTime'
 import { applyAltitudeOffset, packLayerUniforms, DEFAULT_CLOUD_LAYERS } from './cloudLayersPacking'
@@ -445,6 +446,8 @@ function buildCloudsStageImpl(
     altitudeCorrection: new Cartesian3(),
     atlasTexture: undefined,
     windOffset: new Cartesian2(),
+    shapeWindOffset: new Cartesian3(),
+    detailWindOffset: new Cartesian3(),
     atlasT: 0,
     itczCenterSin: 0,
     climateBandsFloor: CLIMATE_BANDS_FLOOR_DEFAULT
@@ -746,6 +749,16 @@ function buildCloudsStageImpl(
       const evolutionPhase = options.evolutionPhaseS ?? 0
       state.atlasT = computeEvolutionTNorm(tSec + evolutionPhase, timelinePlan.evolutionPeriodS)
       state.windOffset = computeWindOffsetTiles(tSec + evolutionPhase, timelinePlan.windMps, timelinePlan.tileKm)
+      // P1 云内纹理平流：与 coverage 平流同源时间/风速（时钟冻结/evolutionPhase 钩子语义一致），
+      // 各自 repeat 纹理域独立 mod 1（float64 CPU 侧，spec §4.1 铁律）
+      const shapeOffsets = computeShapeWindOffsets(
+        tSec + evolutionPhase,
+        timelinePlan.windMps,
+        params.shapeRepeat,
+        params.shapeDetailRepeat
+      )
+      state.shapeWindOffset = shapeOffsets.shape
+      state.detailWindOffset = shapeOffsets.detail
       const gregorian = JulianDate.toGregorianDate(time)
       state.itczCenterSin = Math.sin(
         (computeItczCenterLatDeg(computeDayOfYear(gregorian.month, gregorian.day)) * Math.PI) / 180

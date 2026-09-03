@@ -157,7 +157,9 @@ MediaSample sampleMedia(
     dot(density, remapClamped(weather.heightFraction, vec4(0.3), vec4(0.0)));
   #endif // TURBULENCE
 
-  vec3 shapePosition = (position + turbulence) * shapeRepeat + shapeOffset;
+  // P1：+u_shapeWindOffset——云团 coverage 平流（u_windOffset）时内部三维结构跟随漂移
+  //（此前 shape 纹理完全静态：轮廓动而内部花纹焊死）。纹理域 mod 1，CPU 侧算好。
+  vec3 shapePosition = (position + turbulence) * shapeRepeat + shapeOffset + u_shapeWindOffset;
   float shape = texture(shapeTexture, shapePosition).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
@@ -167,7 +169,7 @@ MediaSample sampleMedia(
 
   #ifdef SHAPE_DETAIL
   if (mipLevel * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
-    vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset;
+    vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset + u_detailWindOffset;
     float detail = texture(shapeDetailTexture, detailPosition).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(

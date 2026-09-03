@@ -3,7 +3,7 @@
 // 云图时间轴纯函数（spec §4.1/§5.4）——全部 CPU 侧 float64 计算。
 // 铁律：JulianDate 绝对秒 ~8.4e8，float32 ULP=64s——tNorm/windOffset 必须
 // 在 CPU mod 完再传 uniform，GPU 侧禁止对原始秒 mod（spec §4.1 精度陷阱）。
-import { Cartesian2 } from 'cesium'
+import { Cartesian2, Cartesian3 } from 'cesium'
 
 /** 烘焙种子（硬编码常量——两个 Viewer 各自烘焙结果逐位相同的前提，spec §4.5）。 */
 export const WEATHER_BAKE_SEED = 1337
@@ -40,6 +40,47 @@ export function computeWindOffsetTiles(
   const offsetTiles = (speedMps * tSec) / (tileKm * 1000)
   const o = posMod(offsetTiles, 1)
   return new Cartesian2(o, o)
+}
+
+/**
+ * 云内形状/细节噪声的风向（ECEF 对角，归一化后合成模长 = speedMps）。
+ * v1 固定不暴露（spec §9 风向例外同款）。与 coverage 平流（computeWindOffsetTiles，
+ * face uv 域对角）同速不同域——方向系差异由真实大气风切变部分掩盖；v1 目标是
+ * 「云团带着内部结构走」的量级正确（2026-09-03 P1，对照桌面 README 方案补强），
+ * 方向精确对齐留观感反馈后再做。
+ */
+const SHAPE_WIND_DIR = { x: 1.0, y: 0.7, z: 0.45 }
+const SHAPE_WIND_DIR_LEN = Math.sqrt(
+  SHAPE_WIND_DIR.x ** 2 + SHAPE_WIND_DIR.y ** 2 + SHAPE_WIND_DIR.z ** 2
+)
+
+/**
+ * shape/shapeDetail 纹理域风平流偏移（P1）——修「云内三维纹理完全静态」缝隙
+ * （shapeOffset/shapeDetailOffset 恒 (0,0,0)：云团 coverage 轮廓动而内部花纹焊死，
+ * 延时视角显形）。米距 = speedMps × tSec（方向分量归一化）；纹理域 = 米距 × repeat
+ * （per 分量），posMod 1（纹理 REPEAT 域，CPU float64 mod 铁律同 spec §4.1——
+ * tSec~8.4e8 时纹理域值 ~1e7，float32 直接传会丢掉全部有效位）。
+ * 时钟冻结 ⇒ tSec 不变 ⇒ 偏移冻结（与 atlasT/windOffset 同源语义）。
+ * shader 侧直接加在 `... × repeat + offset` 之后（clouds.glsl shape/detail 两处）。
+ */
+export function computeShapeWindOffsets(
+  tSec: number,
+  speedMps: number,
+  shapeRepeat: Cartesian3,
+  shapeDetailRepeat: Cartesian3
+): { shape: Cartesian3; detail: Cartesian3 } {
+  const meters = (speedMps * tSec) / SHAPE_WIND_DIR_LEN
+  const shape = new Cartesian3(
+    posMod(meters * SHAPE_WIND_DIR.x * shapeRepeat.x, 1),
+    posMod(meters * SHAPE_WIND_DIR.y * shapeRepeat.y, 1),
+    posMod(meters * SHAPE_WIND_DIR.z * shapeRepeat.z, 1)
+  )
+  const detail = new Cartesian3(
+    posMod(meters * SHAPE_WIND_DIR.x * shapeDetailRepeat.x, 1),
+    posMod(meters * SHAPE_WIND_DIR.y * shapeDetailRepeat.y, 1),
+    posMod(meters * SHAPE_WIND_DIR.z * shapeDetailRepeat.z, 1)
+  )
+  return { shape, detail }
 }
 
 const DAYS_BEFORE_MONTH = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]

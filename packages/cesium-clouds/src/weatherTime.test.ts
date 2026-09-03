@@ -1,6 +1,6 @@
 // packages/cesium-clouds/src/weatherTime.test.ts
 import { describe, expect, it } from 'vitest'
-import { Cartesian2 } from 'cesium'
+import { Cartesian2, Cartesian3 } from 'cesium'
 import {
   WEATHER_BAKE_SEED,
   WEATHER_EVOLUTION_PERIOD_S,
@@ -8,6 +8,7 @@ import {
   computeDayOfYear,
   computeEvolutionTNorm,
   computeItczCenterLatDeg,
+  computeShapeWindOffsets,
   computeWindOffsetTiles
 } from './weatherTime'
 
@@ -69,5 +70,78 @@ describe('weatherTime 时间轴纯函数（spec §4.1/§5.4）', () => {
     expect(computeItczCenterLatDeg(33)).toBeCloseTo(-2.5, 2) // 谷点邻域
     // 年均 ~5°N（峰谷对称中点，中心偏北，非 0）
     expect((computeItczCenterLatDeg(215) + computeItczCenterLatDeg(215 + 182)) / 2).toBeCloseTo(5, 2)
+  })
+})
+
+describe('computeShapeWindOffsets（P1：shape/detail 云内纹理风平流，纹理域 mod 1）', () => {
+  const SHAPE_REPEAT = new Cartesian3(0.0003, 0.0003, 0.0003)
+  const DETAIL_REPEAT = new Cartesian3(0.006, 0.006, 0.006)
+
+  it('纹理域位移 = 米距 × repeat（mod 1）——与 coverage 平流同速（speedMps 同源）', () => {
+    // 小 tSec 使 x 分量（方向系数最大）不跨 mod 1 跳点：800m × 3e-4 = 0.24 < 1
+    const o = computeShapeWindOffsets(100, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    // x 分量方向系数最大 → 位移 ≤ 0.24 且非零；具体系数不锁死（未来参数化方向不破测试）
+    expect(o.shape.x).toBeGreaterThan(0)
+    expect(o.shape.x).toBeLessThanOrEqual(0.24 + 1e-12)
+  })
+
+  it('同物理速度下 detail 纹理域速度 = shape 的 repeat 比值倍（0.006/3e-4 = 20×）', () => {
+    // 取相邻 t（差 1s）的 wrap 安全段：x 分量 t=100 处位移 <1，Δ=8×3e-4=0.0024 无跳点
+    const o0 = computeShapeWindOffsets(100, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    const o1 = computeShapeWindOffsets(101, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    const dShape = o1.shape.x - o0.shape.x
+    const dDetail = o1.detail.x - o0.detail.x
+    expect(dDetail).toBeCloseTo(dShape * 20, 9)
+  })
+
+  it('三分量方向系数 x 最大（对角风向，非轴向退化）', () => {
+    // 方向序须在「1 秒增量」上断言：detail 频率高（t=100s 已跨 3+ 周期），mod 1
+    // 余数被 wrap 跳点破坏单调性，绝对值不可比；增量 ~0.02-0.04 不跨跳点（可验算）
+    const o0 = computeShapeWindOffsets(100, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    const o1 = computeShapeWindOffsets(101, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    const dShape = {
+      x: o1.shape.x - o0.shape.x,
+      y: o1.shape.y - o0.shape.y,
+      z: o1.shape.z - o0.shape.z
+    }
+    expect(dShape.x).toBeGreaterThan(dShape.y)
+    expect(dShape.y).toBeGreaterThan(dShape.z)
+    const dDetail = {
+      x: o1.detail.x - o0.detail.x,
+      y: o1.detail.y - o0.detail.y,
+      z: o1.detail.z - o0.detail.z
+    }
+    expect(dDetail.x).toBeGreaterThan(dDetail.y)
+    expect(dDetail.y).toBeGreaterThan(dDetail.z)
+  })
+
+  it('域约束 [0,1)：大 tSec（JulianDate 量级）与负 tSec（时间回退）均安全', () => {
+    const big = computeShapeWindOffsets(8.4e8, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    const neg = computeShapeWindOffsets(-1e9, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    for (const o of [big, neg]) {
+      for (const v of [o.shape.x, o.shape.y, o.shape.z, o.detail.x, o.detail.y, o.detail.z]) {
+        expect(v).toBeGreaterThanOrEqual(0)
+        expect(v).toBeLessThan(1)
+      }
+    }
+  })
+
+  it('确定性：同输入两次调用逐分量相等（同机多 Viewer 铁律延伸）且返回独立实例', () => {
+    const a = computeShapeWindOffsets(12345, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    const b = computeShapeWindOffsets(12345, 8, SHAPE_REPEAT, DETAIL_REPEAT)
+    expect(a.shape).not.toBe(b.shape)
+    expect(a.detail).not.toBe(b.detail)
+    expect(a.shape.x).toBe(b.shape.x)
+    expect(a.shape.y).toBe(b.shape.y)
+    expect(a.shape.z).toBe(b.shape.z)
+    expect(a.detail.x).toBe(b.detail.x)
+    expect(a.detail.y).toBe(b.detail.y)
+    expect(a.detail.z).toBe(b.detail.z)
+  })
+
+  it('speedMps=0（?cloudsWind=0）→ 恒零偏移（关平流不炸）', () => {
+    const o = computeShapeWindOffsets(8.4e8, 0, SHAPE_REPEAT, DETAIL_REPEAT)
+    expect(o.shape.x + o.shape.y + o.shape.z).toBe(0)
+    expect(o.detail.x + o.detail.y + o.detail.z).toBe(0)
   })
 })

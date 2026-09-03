@@ -72,6 +72,8 @@ import type { WeatherTextures } from './weatherTextures'
 // T6 平流偏移缺省（state.windOffset 未注入——standalone CloudsPass / 首帧前——的 fallback；
 // 只读共享实例，uniform 上传只读不写）
 const ZERO_WIND_OFFSET = new Cartesian2(0, 0)
+// P1 云内纹理平流缺省（同上语义）
+const ZERO_SHAPE_WIND_OFFSET = new Cartesian3(0, 0, 0)
 
 /**
  * 检测 PostProcessStage/RT 可用的最高 HDR 像素数据类型（对齐 core AtmosphereStage.resolvePostHdrDatatype，
@@ -140,6 +142,13 @@ export interface CloudsFrameState {
   /** T6 平流偏移（tile 单位 mod 1，preRender 每帧按 scene.time 覆写——computeWindOffsetTiles）。
    *  缺省 (0,0)（无平流；float64 mod 已在 CPU 完成，spec §4.1 精度陷阱）。 */
   windOffset?: Cartesian2
+  /**
+   * P1 云内纹理风平流（纹理域 mod 1，preRender 每帧覆写——computeShapeWindOffsets）。
+   * shape/detail 各自 repeat 域独立 fract。缺省 (0,0,0)（无平流——standalone CloudsPass）。
+   */
+  shapeWindOffset?: Cartesian3
+  /** 同上，shapeDetail 域（高频 20×——detail 纹理周期 167m vs shape 3.3km）。 */
+  detailWindOffset?: Cartesian3
   /** T6 演化相位 tNorm ∈[0,1)（preRender 每帧覆写——computeEvolutionTNorm，3D atlas z 坐标）。缺省 0。 */
   atlasT?: number
   /** T6 ITCZ 中心纬度正弦（preRender 每帧覆写——computeItczCenterLatDeg(doy) 取 sin）。缺省 0。 */
@@ -235,6 +244,8 @@ export function buildSharedCloudsUniforms(
     // 函数 CPU float64 mod 产物）preRender 每帧覆写，此处闭包逐帧读。
     weatherAtlasTexture: () => state.atlasTexture,
     u_windOffset: () => state.windOffset ?? ZERO_WIND_OFFSET,
+    u_shapeWindOffset: () => state.shapeWindOffset ?? ZERO_SHAPE_WIND_OFFSET,
+    u_detailWindOffset: () => state.detailWindOffset ?? ZERO_SHAPE_WIND_OFFSET,
     u_atlasT: () => state.atlasT ?? 0,
     u_itczCenterSin: () => state.itczCenterSin ?? 0,
     u_climateBands: () => params.climateBands,
