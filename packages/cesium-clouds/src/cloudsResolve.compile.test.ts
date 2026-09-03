@@ -96,3 +96,23 @@ describe('M4 T2 cloudsResolve.frag surgery 断言', () => {
     expect(src).not.toContain('#define TEMPORAL_UPSCALE')
   })
 })
+
+// 【2026-09-03 穿云黑块修复】TAA 分支补 disocclusion rejection——312573d 只加在
+// temporalUpscale 分支（N=4 时代默认档），1ce0d93 默认档切 N=1 走 temporalAntialiasing
+// 后补丁丢失：穿云 velocity 错位 → history 采到无效 texel → γ=2 宽 AABB 剪不住 →
+// mix 90% 黑 history 固化扩散（用户傍晚穿云黑块 A/B 实证）。
+describe('穿云黑块修复：temporalAntialiasing 补 disocclusion rejection', () => {
+  it('TAA 分支含 |Δa| rejection（与 temporalUpscale 同款）', () => {
+    const src = buildCloudsResolveFragmentShader(OPTS)
+    const taa = src.slice(src.indexOf('void temporalAntialiasing'))
+    expect(taa).toContain('abs(currentColor.a - historyColor.a)')
+    expect(taa).toContain('Disocclusion rejection')
+  })
+
+  it('glslang：TAA 组合（temporalUpscale=false）真编译', () => {
+    compileOrFail(
+      buildStandaloneCloudsResolveShaderForValidation({ temporalUpscale: false }),
+      'TAA rejection'
+    )
+  })
+})

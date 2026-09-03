@@ -486,3 +486,42 @@ describe('月光光照项（方向 C）', () => {
     expect(ok).toBe(true)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-03 穿云黑块修复】depth 采样 jitter 仅低分 march 启用——全分下 ±0.5px 深度
+// 偏移在云/地形深度边缘读到天空深度 → rayDistanceToScene=0 → march 不被地形截断 →
+// 傍晚低角度长路径 Beer 满衰减 → 覆盖率满黑帧（temporal history 固化成扩散黑块，
+// camera=108.4,34.8,1083 傍晚复现组 A/B 实证）。低分（targetUvScale>1）保留上游超分语义。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('穿云黑块修复：depth 采样 jitter 仅 LOW_RES_MARCH（upscaleDivisor>1）启用', () => {
+  // 两采样行都在源文本里（#ifdef 由 GPU 预处理裁剪）——开关语义断言 #define LOW_RES_MARCH 注入与否
+  const NO_JITTER_SAMPLE = 'texture(depthBuffer, vUv * targetUvScale).r'
+  const JITTER_SAMPLE = 'texture(depthBuffer, vUv * targetUvScale + temporalJitter).r'
+
+  it('全分（缺省 upscaleDivisor=1）：不注入 LOW_RES_MARCH（GPU 预处理走无 jitter 深度采样）', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    expect(src).not.toContain('#define LOW_RES_MARCH')
+    expect(src).toContain(NO_JITTER_SAMPLE)
+    expect(src).toContain(JITTER_SAMPLE) // ifdef 分支共存，由 LOW_RES_MARCH 裁剪
+  })
+
+  it('低分（upscaleDivisor=4）：注入 #define LOW_RES_MARCH（depth 采样带 temporalJitter，超分语义保留）', () => {
+    const src = buildCloudsMainFragmentShader({ ...M2_OPTIONS, upscaleDivisor: 4 })
+    expect(src).toContain('#define LOW_RES_MARCH')
+    expect(src).toContain(NO_JITTER_SAMPLE)
+    expect(src).toContain(JITTER_SAMPLE)
+  })
+
+  it('非法 upscaleDivisor（如 3）防御：视同 1（不注入 LOW_RES_MARCH）', () => {
+    const src = buildCloudsMainFragmentShader({ ...M2_OPTIONS, upscaleDivisor: 3 as 1 | 2 | 4 })
+    expect(src).not.toContain('#define LOW_RES_MARCH')
+  })
+
+  it('glslang：两分支真编译', () => {
+    compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'divisor=1')
+    compileOrFail(
+      buildStandaloneCloudsShaderForValidation({ ...M2_OPTIONS, upscaleDivisor: 4 }),
+      'divisor=4'
+    )
+  })
+})

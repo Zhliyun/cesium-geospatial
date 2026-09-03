@@ -83,6 +83,15 @@ export interface CloudsMainOptions {
    * 不用档位时生效（quality 在场时被忽略——spec §5 单一来源）。
    */
   shadowCascadeCount?: number
+  /**
+   * march 分辨率分母（2026-09-03 穿云黑块修复）：>1 = 低分 march，depth 采样带
+   * temporalJitter（低分网格亚 texel 深度采样，上游超分语义）；1（缺省）= 全分 march，
+   * depth 采样**不带** jitter——±0.5px 偏移在云/地形深度边缘读到天空深度 →
+   * rayDistanceToScene=0 → march 不被地形截断 → 傍晚低角度长路径 Beer 满衰减 →
+   * 覆盖率满黑帧（temporal history 固化成扩散黑块）；全分下无超分收益纯伤害。
+   * 以 #define LOW_RES_MARCH 编译期裁剪。非法值（非 2/4）视同 1。
+   */
+  upscaleDivisor?: 1 | 2 | 4
 }
 
 type ResolvedCloudsMainOptions = Required<CloudsMainOptions>
@@ -93,7 +102,8 @@ const DEFAULTS: ResolvedCloudsMainOptions = {
   accurateSunSkyLight: true,
   debugShow: null,
   lightShafts: true,
-  shadowCascadeCount: 3
+  shadowCascadeCount: 3,
+  upscaleDivisor: 1
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include
@@ -136,10 +146,15 @@ const CLOUDS_MAIN_DEFINES = [
 
 // 构造 M2 运行期 define 集（基础 clouds.frag 编译分支 + M2 桥接分支开关）。
 function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
+  // 穿云黑块修复（2026-09-03）：depth 采样 jitter 仅低分 march（targetUvScale>1）需要
+  // （低分网格亚 texel 深度采样）；全分下 jitter 把深度边缘采样切到天空 → march 不被
+  // 地形截断 → 傍晚长路径 Beer 黑帧。非法值（非 2/4）视同 1（与 CloudsPass resolve 同款防御）。
+  const lowResMarch = o.upscaleDivisor === 2 || o.upscaleDivisor === 4
   return [
     ...CLOUDS_MAIN_DEFINES,
     '#define PERSPECTIVE_CAMERA', // getViewZ perspectiveDepthToViewZ 分支（Cesium 相机恒透视）
     '#define SHADOW_CASCADE_COUNT ' + o.shadowCascadeCount,
+    lowResMarch ? '#define LOW_RES_MARCH' : '',
     o.accurateSunSkyLight ? '#define ACCURATE_SUN_SKY_LIGHT' : '',
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',
     o.turbulence ? '#define TURBULENCE' : '',
@@ -359,7 +374,16 @@ function surgeryCloudsFrag(source: string): string {
   // Cesium 桥接：globe depthTexture 是 log-depth 编码（logarithmicDepthBuffer=true），
   // czm_reverseLogDepthDist（core LOG_DEPTH_GLSL 注入）反演视轴深度；three 版
   // reverseLogDepth 公式不适用 Cesium。
+  // 【2026-09-03 穿云黑块修复】depth 采样 jitter 仅低分 march（LOW_RES_MARCH）保留：
+  // 全分下 vUv±jitter（±0.5px）在深度边缘读到天空深度 → rayDistanceToScene=0 →
+  // march 不被地形截断 → 傍晚低角度长路径 Beer 满衰减 → 覆盖率满黑帧（temporal history
+  // 固化成扩散黑块）；全分无超分收益纯伤害。低分（targetUvScale>1）下 jitter 提供
+  // 亚 texel 深度采样（超分重建边缘，上游语义）。
+  #ifdef LOW_RES_MARCH
   float logDepth = texture(depthBuffer, vUv * targetUvScale + temporalJitter).r;
+  #else
+  float logDepth = texture(depthBuffer, vUv * targetUvScale).r;
+  #endif
   if (logDepth < 1.0 - 1e-7) {
     float zDist = czm_reverseLogDepthDist(logDepth, czm_currentFrustum.x, czm_currentFrustum.y);
     viewZ = -zDist;

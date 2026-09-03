@@ -178,6 +178,17 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   }
 
   vec4 historyColor = texture(colorHistoryBuffer, prevUv);
+  // 【2026-09-03 穿云黑块修复】disocclusion rejection——312573d 只加在 temporalUpscale 分支
+  // （N=4 时代默认档），1ce0d93 默认档切 N=1 走本分支后补丁丢失：穿云 velocity 跨层错位 →
+  // history 采到无效 texel（黑）→ γ=2 宽 AABB 剪不住 → mix 90% 黑 history 固化扩散（傍晚
+  // 穿云黑块 A/B 复现实证）。|Δa|>阈 = 云/非云遮挡关系翻转，不信任 history 直出 current。
+  if (abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+    outputColor = currentColor;
+    #ifdef SHADOW_LENGTH
+    outputShadowLength = currentShadowLength.r;
+    #endif // SHADOW_LENGTH
+    return; // Disocclusion rejection
+  }
   vec4 clippedColor = varianceClipping(colorBuffer, coord, currentColor, historyColor);
   outputColor = mix(clippedColor, currentColor, temporalAlpha);
 
