@@ -191,6 +191,11 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   cloudsOverlayExposure?: number
   /**
+   * 【2026-09-03 穿云黑块探针】overlay 数值直显：0=正常合成（缺省）；1=直显 cloudsBuffer.a；
+   * 2=直显 cloudsBuffer.rgb 线性原值。诊断 resolve 输出真实 rgba 用。demo `?cloudsOverlayDebug=N`。
+   */
+  overlayDebug?: number
+  /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
    * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
@@ -346,11 +351,21 @@ export interface CloudsStageHandle {
 const OVERLAY_SHADER = `uniform sampler2D colorTexture;
 uniform sampler2D u_cloudsBuffer;
 uniform float u_cloudsExposure;
+// 【2026-09-03 穿云黑块探针】0=正常合成；1=直显 cloudsBuffer.a；2=直显 cloudsBuffer.rgb（线性原值）。
+uniform float u_overlayDebug;
 in vec2 v_textureCoordinates;
 
 void main() {
   vec4 scene = texture(colorTexture, v_textureCoordinates);
   vec4 cloud = texture(u_cloudsBuffer, v_textureCoordinates);
+  if (u_overlayDebug > 1.5) {
+    out_FragColor = vec4(cloud.rgb, 1.0);
+    return;
+  }
+  if (u_overlayDebug > 0.5) {
+    out_FragColor = vec4(vec3(cloud.a), 1.0);
+    return;
+  }
   // 线性域 premultiplied over（spec D5）：E·premultiplied ≡ premultiplied(E·straight)。
   // ACES + gamma 由链尾 tonemap 统一。
   vec3 final = scene.rgb * (1.0 - cloud.a) + cloud.rgb * u_cloudsExposure;
@@ -1012,7 +1027,9 @@ export function createCloudsStage(
           ? impl.resolvePass.getResolvedBridge()
           : impl.cloudsPass.getColorBridge(),
       // 云曝光（线性域缩放，spec §4.3；URL ?cloudsExposure=N 可调）
-      u_cloudsExposure: options.cloudsOverlayExposure ?? CLOUDS_OVERLAY_EXPOSURE_DEFAULT
+      u_cloudsExposure: options.cloudsOverlayExposure ?? CLOUDS_OVERLAY_EXPOSURE_DEFAULT,
+      // 【2026-09-03 穿云黑块探针】overlay 数值直显（0=正常；URL ?cloudsOverlayDebug=1 显 a / 2 显 rgb）
+      u_overlayDebug: options.overlayDebug ?? 0
     },
     sampleMode: PostProcessStageSampleMode.NEAREST,
     pixelFormat: PixelFormat.RGBA,

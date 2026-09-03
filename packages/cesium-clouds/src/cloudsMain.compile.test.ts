@@ -525,3 +525,21 @@ describe('穿云黑块修复：depth 采样 jitter 仅 LOW_RES_MARCH（upscaleDi
     )
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-03 穿云黑块修复 II（761m 旋转视角）】march 起点 jitter 段长守卫——贴云甲底
+// 掠射视角段长可短至十余米（≈2-3 步），±2 步起点抖动使相位帧间 sampleCount=0 ↔ 有云
+// 翻转 → resolve 对暗 scene 收敛出 alpha 稳态 → 扩散黑块。守卫=段长 <8 步时起点 jitter
+// 归零（对齐 temporal=0 的稳定采样行为，A/B 实证 0 黑帧）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('穿云黑块修复 II：march 起点 jitter 段长守卫', () => {
+  it('段长守卫在场：rayDistance 起点 jitter 经 startJitter 守卫（<8 步薄段归零）', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    expect(src).toContain('float startJitter = maxRayDistance < stepSize * 8.0 ? 0.0 : jitter;')
+    expect(src).toContain('float rayDistance = stepSize * startJitter * 2.0;')
+  })
+
+  it('glslang：含守卫完整 shader 真编译', () => {
+    compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'startJitter guard')
+  })
+})

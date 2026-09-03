@@ -544,6 +544,9 @@ async function main(): Promise<void> {
           : cloudsDebug === 3 ? ('sampleCount' as const)
           : cloudsDebug === 4 ? ('shadowMap' as const)
           : cloudsDebug === 5 ? ('cascades' as const)
+          // 【2026-09-03 穿云黑块探针】march 分量直显
+          : cloudsDebug === 6 ? ('march' as const)
+          : cloudsDebug === 7 ? ('marchA' as const)
           : undefined
         // 质量档位白名单解析（controller 裁决 Ruling 4）：?cloudsQuality 非法值（如 foo）
         // → undefined 走库内缺省 high，而非 as 直传踩 Record 键 undefined
@@ -631,6 +634,8 @@ async function main(): Promise<void> {
           ...(getString('cloudsLightShafts') === '0' ? { lightShafts: false } : {}),
           // 云 overlay 曝光（默认 12 线性域缩放，2026-08-29 V2 验收定稿；偏灰调大/过曝调小）
           ...(getNumber('cloudsExposure') != null ? { cloudsOverlayExposure: getNumber('cloudsExposure')! } : {}),
+          // 【2026-09-03 穿云黑块探针】overlay 数值直显：1=cloudsBuffer.a / 2=rgb 线性
+          ...(getNumber('cloudsOverlayDebug') != null ? { overlayDebug: getNumber('cloudsOverlayDebug')! } : {}),
           // 夜间环境底光（方向 B，2026-08-29）：夜间云照明地板（默认 0.12 标定夜空底光量级；
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0

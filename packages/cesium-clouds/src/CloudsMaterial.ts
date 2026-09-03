@@ -69,7 +69,7 @@ export interface CloudsMainOptions {
    *   'shadowMap'（BSM 可视化，M3）/ 'cascades'（cascade 分层着色：红=0 绿=1 蓝=2，越界=白）。
    *   默认 null 正常渲染。
    */
-  debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | 'cascades' | null
+  debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | 'cascades' | 'march' | 'marchA' | null
   /**
    * M5 云 god rays 开关（默认 true，对齐 three defaults.lightShafts）：define SHADOW_LENGTH →
    * marchShadowLength 沿视线累加 BSM 光深 → applyAerialPerspective 以 shadow_length 调
@@ -163,6 +163,9 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     o.debugShow === 'sampleCount' ? '#define DEBUG_SHOW_SAMPLE_COUNT' : '',
     o.debugShow === 'shadowMap' ? '#define DEBUG_SHOW_SHADOW_MAP' : '',
     o.debugShow === 'cascades' ? '#define DEBUG_SHOW_CASCADES' : '',
+    // 【2026-09-03 穿云黑块探针】march 分量直显（rgb×50 / alpha；a 钉 1 防 overlay 混淆）
+    o.debugShow === 'march' ? '#define DEBUG_SHOW_MARCH_RADIANCE' : '',
+    o.debugShow === 'marchA' ? '#define DEBUG_SHOW_MARCH_ALPHA' : '',
     o.lightShafts ? '#define SHADOW_LENGTH' : ''
   ].filter(s => s.length > 0)
 }

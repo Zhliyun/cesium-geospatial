@@ -524,7 +524,12 @@ vec4 marchClouds(
   float maxRayDistance = rayNearFar.y - rayNearFar.x;
   float stepSize = minStepSize + (perspectiveStepScale - 1.0) * rayNearFar.x;
   // I don't understand why spatial aliasing remains unless doubling the jitter.
-  float rayDistance = stepSize * jitter * 2.0;
+  // 【2026-09-03 穿云黑块修复（761m 贴甲底旋转视角）】起点 jitter 仅在段长足够（≥8 步）时
+  // 启用：贴云甲底（minHeight）掠射视角的 march 段可短至十余米（≈2-3 步），±2 步起点抖动
+  // 使相位帧间「整段跳过（sampleCount=0 → vec4(0)）/命中」翻转 → resolve 对暗 scene 收敛出
+  // alpha 中间稳态 → 扩散黑块（temporal=0 即 jitter=0 时 0/36 黑帧的 A/B 实证）。
+  float startJitter = maxRayDistance < stepSize * 8.0 ? 0.0 : jitter;
+  float rayDistance = stepSize * startJitter * 2.0;
 
   for (int i = 0; i < maxIterationCount; ++i) {
     if (rayDistance > maxRayDistance) {
@@ -1072,6 +1077,27 @@ void main() {
     vec2 velocity = vUv - prevUv;
     depthVelocity = vec3(frontDepth, velocity);
   }
+
+  #ifdef DEBUG_SHOW_MARCH_RADIANCE
+  // 【2026-09-03 穿云黑块探针】march 线性 rgb ×50 放大直显（a 钉 1 防 overlay alpha 混淆）——
+  // 分辨「黑块区=暗云帧（rgb 低非零）」还是「无云帧（rgb=0）」。
+  outputColor = vec4(color.rgb * 50.0, 1.0);
+  outputDepthVelocity = vec3(0.0);
+  #ifdef SHADOW_LENGTH
+  outputShadowLength = 0.0;
+  #endif // SHADOW_LENGTH
+  return;
+  #endif // DEBUG_SHOW_MARCH_RADIANCE
+
+  #ifdef DEBUG_SHOW_MARCH_ALPHA
+  // 【2026-09-03 穿云黑块探针】march alpha 直显——黑块区 alpha 高 = overlay 在画暗云帧。
+  outputColor = vec4(vec3(color.a), 1.0);
+  outputDepthVelocity = vec3(0.0);
+  #ifdef SHADOW_LENGTH
+  outputShadowLength = 0.0;
+  #endif // SHADOW_LENGTH
+  return;
+  #endif // DEBUG_SHOW_MARCH_ALPHA
 
   #ifdef DEBUG_SHOW_FRONT_DEPTH
   outputColor = vec4(turbo(frontDepth / maxRayDistance), 1.0);
