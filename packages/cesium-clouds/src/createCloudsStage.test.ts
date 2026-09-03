@@ -1397,15 +1397,39 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), weather, {
       clouds: true,
-      atlasDisabled: true
+      atlasDisabled: true,
+      // T6 fix：烘焙输入组（plan 语义）在 escape 路径同样透传——repeat/演化/风速行为与
+      // 烘焙路径一致（fallback 是对照基线，不是参数语义阉割版）
+      weatherBake: { evolutionHours: 2, weatherRepeat: 20 }
     })
     expect(weatherAtlasProbe.calls).toHaveLength(1)
     expect(weatherAtlasProbe.calls[0].pngFallback).toBe(weather.localWeatherRaw)
-    expect(weatherAtlasProbe.calls[0].evolutionHours).toBeUndefined() // 烘焙输入不参与 fallback 路径
+    expect(weatherAtlasProbe.calls[0].evolutionHours).toBe(2)
+    expect(weatherAtlasProbe.calls[0].weatherRepeat).toBe(20)
     expect(weatherAtlasProbe.instances[0].mode).toBe('pngFallback')
     const stateArg = (createCloudsPass as any).mock.calls[0][3]
     expect(stateArg.atlasTexture).toBe(weatherAtlasProbe.instances[0].atlasTexture)
+    // 采样端 repeat 同步联动（escape 路径行为一致）
+    expect(paramsOf(handle!)!.localWeatherRepeat.x).toBe(20)
     handle!.destroy()
+  })
+
+  it('weatherRepeat 联动采样端 localWeatherRepeat（spec §6.2 参数语义：repeat=烘焙输入组单源）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      weatherBake: { weatherRepeat: 20 }
+    })
+    const repeat = paramsOf(handle!)!.localWeatherRepeat
+    expect(repeat.x).toBe(20)
+    expect(repeat.y).toBe(20)
+    handle!.destroy()
+    // 不传：默认 100 零回归（resolveWeatherAtlasPlan 缺省 weatherRepeat=100 = defaults 写死值）
+    const handle2 = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const repeat2 = paramsOf(handle2!)!.localWeatherRepeat
+    expect(repeat2.x).toBe(100)
+    expect(repeat2.y).toBe(100)
+    handle2!.destroy()
   })
 
   it('atlasDisabled=true 且无 raw PNG（decode 失败极端）：warn + 跳过创建，不炸（1×1×1 全白 dummy 降级）', () => {

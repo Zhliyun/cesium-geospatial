@@ -450,8 +450,11 @@ function buildCloudsStageImpl(
     if (weatherPngForFallback != null) {
       // escape：旧静态图 64 层平铺包装（不烘焙，T8 对照基线）。usePngFallback=显式
       // escape 开关（T8 CRITICAL 分派语义修复）——pngFallback 参数已降级为纯兜底材料。
+      // 烘焙输入组（plan 语义）同样透传——repeat/演化/风速在 fallback 路径行为与烘焙
+      // 路径一致（T6 fix：T8 复测发现 repeat 联动缺口，fallback 不是参数语义阉割版）。
       atlas = createWeatherAtlas({
         context,
+        ...options.weatherBake,
         usePngFallback: true,
         pngFallback: weatherPngForFallback
       })
@@ -482,6 +485,14 @@ function buildCloudsStageImpl(
     // 时间轴 plan：正常路径读 atlas.plan（烘焙输入单源）；skip 路径退默认计划（时间轴纯函数
     // 仍工作——atlasT/windOffset 照常推进，只是纹理是静态 dummy）
     const timelinePlan = atlas?.plan ?? resolveWeatherAtlasPlan({})
+
+    // ── T6 fix（T8 复测缺口）：采样端 repeat 与 plan.weatherRepeat 联动（spec §6.2 参数
+    // 语义补全）——「降 repeat 去壁纸」此前只改了 windOffset 换算 tileKm 一半，march 的
+    // uv×localWeatherRepeat 仍写死 100。weatherRepeat 属烘焙输入组（创建时定死），buildImpl
+    // 一次赋值即可；escape/pngFallback/skip 三路径同源 timelinePlan 行为一致。缺省 100=
+    // defaults 写死值（零回归）。注意：此处有意覆盖用户显式 parameters.localWeatherRepeat
+    // ——repeat 单源 plan（两者同时显式时 plan 赢，spec §6.2 参数分组语义）。
+    params.localWeatherRepeat = new Cartesian2(timelinePlan.weatherRepeat, timelinePlan.weatherRepeat)
 
     const sunInertialScratch = new Cartesian3()
     const moonOriginScratch = new Cartesian3()
