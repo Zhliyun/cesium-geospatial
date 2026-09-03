@@ -116,3 +116,24 @@ describe('穿云黑块修复：temporalAntialiasing 补 disocclusion rejection',
     )
   })
 })
+
+// 【2026-09-03 夜间云内移动黑块修复】getClosestFragment 远平面守卫——云甲内视角下
+// depthVelocity.r 在「有云 texel（云距）/无云 texel（cameraFar≈1e10）」间逐像素跳变，
+// 3×3 全局最近深度让无云 texel 借到别处云的 velocity → history 重投影错位 → 云 a/rgb
+// 拖尾成层叠鬼影（暗色块，移动时持续、刷新才清；夜晚 761m 复现组 n-move-05 实证）。
+// 修=中心 texel 自身 depth 为远平面级（无云）时不借邻居、退回自身 velocity（自身即
+// no-hit 分支的 view-space 自洽重投影）。
+describe('夜间云内移动黑块修复：getClosestFragment 远平面守卫', () => {
+  it('守卫在场：无云（远平面 depth）texel 退回自身 velocity，不跨层借邻居', () => {
+    const src = buildCloudsResolveFragmentShader(OPTS)
+    expect(src).toContain('getClosestFragmentNoCloudGuard')
+    expect(src).toContain('vec4 centerDepthVelocity = texelFetch(depthVelocityBuffer, coord, 0);')
+  })
+
+  it('glslang：守卫在场真编译', () => {
+    compileOrFail(
+      buildStandaloneCloudsResolveShaderForValidation({ temporalUpscale: false }),
+      'no-cloud guard'
+    )
+  })
+})

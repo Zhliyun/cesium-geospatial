@@ -64,6 +64,17 @@ const int bayerIndices2[4] = int[4](0, 2, 3, 1);
 #endif // UPSCALE_DIVISOR == 2
 
 vec4 getClosestFragment(const ivec2 coord) {
+  // 【2026-09-03 夜间云内移动黑块修复：getClosestFragmentNoCloudGuard】云甲内视角下
+  // depthVelocity.r 在「有云 texel（云距）/无云 texel（cameraFar≈1e10）」间逐像素跳变。
+  // 3×3 全局最近深度会让无云 texel 借到别处云的 velocity → history 重投影错位 → 云的
+  // a/rgb 拖尾成层叠鬼影（暗色块；移动时持续供错、刷新才清；夜晚 761m 复现组实证）。
+  // 修=中心 texel 自身 depth 为远平面级（无样本=无云）时直接退回自身 velocity——
+  // 自身即 no-hit 分支的 view-space 自洽重投影，语义最准。有云 texel 保持上游
+  // closest-neighbor 行为（边缘稳定性）不变。
+  vec4 centerDepthVelocity = texelFetch(depthVelocityBuffer, coord, 0);
+  if (centerDepthVelocity.r >= 1e8) {
+    return centerDepthVelocity;
+  }
   vec4 result = vec4(1e7, 0.0, 0.0, 0.0);
   vec4 neighbor;
   #pragma unroll_loop_start
