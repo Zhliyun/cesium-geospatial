@@ -140,6 +140,22 @@ http://localhost:5173/?mode=atmosphere&clouds=1&time=2026-08-28T17:30:00Z&camera
 | `cloudsGodRays=N` | 1 | god rays 增益（20=艺术放大出明显光柱） |
 | `cloudsShapeDetail=0` / `cloudsTurbulence=0` / `cloudsAccurate=0` | – | 关对应噪声/光照分支（隔离诊断） |
 
+#### 云分布重设计参数
+
+| 参数 | 说明 |
+|---|---|
+| `?cloudsCoverage=` | 云密度 0-1（默认 0.3） |
+| `?cloudsAltitudeOffset=` | 低云带升降（米，clamp -500..+3000，默认 0） |
+| `?cloudsWeather=` | 天气预设 clear\|fair\|cloudy\|overcast |
+| `?cloudsClimateBands=` | 纬度气候带强度（0=关，默认 1） |
+| `?cloudsEvolutionHours=` | 云图演化环周期（小时，默认 5.3） |
+| `?cloudsWind=` | 平流风速 m/s（默认 8） |
+| `?cloudsSeed=` | 烘焙种子（默认 1337） |
+| `?cloudsWeatherRepeat=` | 云图平铺（默认 100） |
+| `?cloudsEvolutionPhase=` | 演化相位偏移秒（调试，不动太阳） |
+| `?cloudsAtlas=0` | 逃生门：旧静态云图 |
+| `?play=1&speed=N` | 时钟走动（默认冻结；speed 默认 60） |
+
 #### 体积云 stage API（库消费者必读）
 
 `createCloudsStage` 返回的 `overlayStage` **不会自动 add** 到 `scene.postProcessStages`——

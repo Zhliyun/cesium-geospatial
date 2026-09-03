@@ -139,6 +139,14 @@ async function main(): Promise<void> {
     viewer.clock.currentTime = JulianDate.fromIso8601(time)
   }
 
+  // ?play=1 → 时钟走动（默认冻结=Cesium 现状语义，演化/平流演示经此开关）：
+  // shouldAnimate + multiplier=?speed=（默认 60）。云分布重设计（spec §4.1）的演化/平流
+  // 由 scene.time 驱动；确定性验收用 ?time= 钉死不受 ?play 影响（shouldAnimate 不改 currentTime 初值）。
+  if (getString('play') === '1') {
+    viewer.clock.shouldAnimate = true
+    viewer.clock.multiplier = getNumber('speed') ?? 60
+  }
+
   // URL camera：lon,lat,height,heading,pitch（角度制，人类可读）；heading/pitch 可省略
   const cameraStr = getString('camera')
   if (cameraStr != null && cameraStr.length > 0) {
@@ -554,6 +562,16 @@ async function main(): Promise<void> {
           : cloudsUpscaleRaw === '2' ? 2 as const
           : cloudsUpscaleRaw === '4' ? 4 as const
           : undefined
+        // 云分布重设计（spec §6.1）：?cloudsWeather=clear|fair|cloudy|overcast 天气预设。
+        // 白名单守卫同 cloudsQuality（非法值 → undefined 走库内缺省，防 WEATHER_PRESETS
+        // Record 键 undefined）；创建期走 options.weatherPreset（T6：buildImpl 后统一
+        // setWeatherPreset 单一路径 + 跨 setQuality 重放），不另调 handle 方法。
+        const cloudsWeatherRaw = getString('cloudsWeather')
+        const cloudsWeatherPreset =
+          cloudsWeatherRaw === 'clear' || cloudsWeatherRaw === 'fair'
+          || cloudsWeatherRaw === 'cloudy' || cloudsWeatherRaw === 'overcast'
+            ? cloudsWeatherRaw
+            : undefined
         const cloudsHandle = createCloudsStage(scene, luts, weather, {
           clouds: true,
           // 质量档位（spec 2026-08-29）：?cloudsQuality=low|medium|high|ultra（缺省 high=现状；
@@ -561,6 +579,27 @@ async function main(): Promise<void> {
           // getString 的 string|null 收敛到字面量联合，无需 as 断言）
           ...(cloudsQuality != null ? { quality: cloudsQuality } : {}),
           ...(cloudsUpscale != null ? { upscaleDivisor: cloudsUpscale } : {}),
+          // ── 云分布重设计（spec §6）URL 全集 ──
+          // 天气预设创建期注入（白名单守卫已解析；运行期热切走 handle.setWeatherPreset，demo 暂无 UI）
+          ...(cloudsWeatherPreset != null ? { weatherPreset: cloudsWeatherPreset } : {}),
+          // 低云带升降（米）：库内 clamp -500..+3000，仅低云带 L0/L1 生效（高卷云不动）
+          ...(getNumber('cloudsAltitudeOffset') != null
+            ? { altitudeOffsetM: getNumber('cloudsAltitudeOffset')! } : {}),
+          // 演化相位偏移秒（调试钩子：仅偏移演化/平流输入不动太阳——确定性对照用）
+          ...(getNumber('cloudsEvolutionPhase') != null
+            ? { evolutionPhaseS: getNumber('cloudsEvolutionPhase')! } : {}),
+          // 逃生门：?cloudsAtlas=0 跳过 WeatherAtlas 烘焙回旧静态云图采样
+          ...(getString('cloudsAtlas') === '0' ? { atlasDisabled: true } : {}),
+          // 烘焙输入四键（缺省 5.3h / 8 m/s / 1337 / 100；仅这些变化才需重烘——
+          // 采样时调制走 uniform 热切）
+          ...(getNumber('cloudsEvolutionHours') != null || getNumber('cloudsWind') != null
+              || getNumber('cloudsSeed') != null || getNumber('cloudsWeatherRepeat') != null
+            ? { weatherBake: {
+                ...(getNumber('cloudsEvolutionHours') != null ? { evolutionHours: getNumber('cloudsEvolutionHours')! } : {}),
+                ...(getNumber('cloudsWind') != null ? { windMps: getNumber('cloudsWind')! } : {}),
+                ...(getNumber('cloudsSeed') != null ? { seed: getNumber('cloudsSeed')! } : {}),
+                ...(getNumber('cloudsWeatherRepeat') != null ? { weatherRepeat: getNumber('cloudsWeatherRepeat')! } : {})
+              } } : {}),
           ...(cloudsDebugShow != null ? { debugShow: cloudsDebugShow } : {}),
           ...(getString('cloudsShapeDetail') === '0' ? { shapeDetail: false } : {}),
           ...(getString('cloudsTurbulence') === '0' ? { turbulence: false } : {}),
@@ -592,9 +631,18 @@ async function main(): Promise<void> {
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
-          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null
+          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null
             ? {
                 parameters: {
+                  // 云密度覆盖（云分布重设计 spec §6：默认 0.3；注意 weatherPreset 激活时
+                  // 会覆盖此基线——preset 优先语义，库内 presetBaseline 快照保留恢复路径）
+                  ...(getNumber('cloudsCoverage') != null
+                    ? { coverage: getNumber('cloudsCoverage')! }
+                    : {}),
+                  // 纬度气候带强度（0=关纯随机分布，默认 1 全带）
+                  ...(getNumber('cloudsClimateBands') != null
+                    ? { climateBands: getNumber('cloudsClimateBands')! }
+                    : {}),
                   ...(getNumber('cloudsNightAmbient') != null
                     ? { nightAmbient: getNumber('cloudsNightAmbient')! }
                     : {}),
