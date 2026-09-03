@@ -585,6 +585,15 @@ async function main(): Promise<void> {
           // 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（缺省 1=空区步同款）
           ...(getNumber('cloudsHitMipBoost') != null
             ? { hitStepMipBoost: getNumber('cloudsHitMipBoost')! } : {}),
+          // 【2026-09-04 march 实验参数直通】单变量 perf 分解（缺省走 quality 档不动）
+          ...(getNumber('cloudsMaxIter') != null
+            ? { maxIterationCount: getNumber('cloudsMaxIter')! } : {}),
+          ...(getNumber('cloudsMinTrans') != null
+            ? { minTransmittance: getNumber('cloudsMinTrans')! } : {}),
+          ...(getNumber('cloudsToSunIter') != null
+            ? { maxIterationCountToSun: getNumber('cloudsToSunIter')! } : {}),
+          ...(getNumber('cloudsMaxStep') != null
+            ? { maxStepSize: getNumber('cloudsMaxStep')! } : {}),
           // ── 云分布重设计（spec §6）URL 全集 ──
           // 天气预设创建期注入（白名单守卫已解析；运行期热切走 handle.setWeatherPreset，demo 暂无 UI）。
           // spec §6.1「显式标量优先于预设」：URL 显式给 ?cloudsCoverage= 时跳过预设

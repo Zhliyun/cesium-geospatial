@@ -281,6 +281,15 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   hitStepMipBoost?: number
   /**
+   * 【2026-09-04 march 实验参数直通】单变量 perf 分解用（仅显式传时覆盖档位值）：
+   * 主 march 迭代上限 / 透射率早退阈值 / 受照次级 march 预算 / 最大步长。
+   * demo `?cloudsMaxIter=` / `?cloudsMinTrans=` / `?cloudsToSunIter=` / `?cloudsMaxStep=`。
+   */
+  maxIterationCount?: number
+  minTransmittance?: number
+  maxIterationCountToSun?: number
+  maxStepSize?: number
+  /**
    * T6 WeatherAtlas 烘焙输入（spec §4.3）：仅这些变化才需重烘；采样时调制（coverage/密度/
    * 气候带/预设）走 uniform 热切不动烘焙。缺省走 WeatherAtlas 内置缺省（5.3h/8m/s/1337/100）。
    */
@@ -502,6 +511,15 @@ function buildCloudsStageImpl(
   if (options.hitStepMipBoost != null) {
     params.hitStepMipBoost = options.hitStepMipBoost
   }
+
+  // 【2026-09-04 march 实验参数直通】单变量 perf 分解用（demo ?cloudsMaxIter/?cloudsMinTrans/
+  // ?cloudsToSunIter/?cloudsMaxStep=）——仅显式传时覆盖档位值，缺省走 quality 档不动。
+  if (options.maxIterationCount != null) params.maxIterationCount = options.maxIterationCount
+  if (options.minTransmittance != null) params.minTransmittance = options.minTransmittance
+  if (options.maxIterationCountToSun != null) {
+    params.maxIterationCountToSun = options.maxIterationCountToSun
+  }
+  if (options.maxStepSize != null) params.maxStepSize = options.maxStepSize
 
   // ── 每帧可变状态（createCloudsStage 持有；preRender 更新；CloudsPass uniformMap 闭包读引用）──
   // T6 atlas 字段：atlasTexture 由下方 WeatherAtlas 创建注入（或 skip-path dummy）；
