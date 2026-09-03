@@ -162,3 +162,59 @@
 ## 顺手修复（第一部分交付）
 
 - commit `0682c76`：①buildImpl atlas 创建后主体包 try/catch（catch 内 `atlas?.dispose(); atlasFallbackDummy?.destroy(); throw e`，防中段抛错 ~16MB GPU 悬挂）②evolutionPhaseS 太阳断言补强为与无 phase 基线 `toEqual`。cesium-clouds 287 tests 全绿 + tsc 干净（+2 新用例锁外圈 catch 正常/dummy 两路径）。
+
+---
+
+# 复测（dbdcea8 分派修复后，2026-09-03）
+
+dispatch 修复（方案 A：`usePngFallback` 显式 escape × `pngFallback` 纯兜底材料，T5 fix round 2，16/16 分派单测）已落地。本段为六项复测结果 + **复测新发现的 CRITICAL #2**。
+
+## 复测判定一行式
+
+| 项 | 判定 | 核心数据 |
+|---|---|---|
+| 1 冒烟 | **PASS** | GL 零错、wired、无 `[clouds]` warn（烘焙静默成功）、cloudFrac 0.64、有云内容；escape 组同过（0.4388 与第一轮 wrap 完全一致=旧静态图行为精确复原） |
+| 2 烘焙耗时 | **PASS（记录）** | `__cloudsStage` 就绪时刻对照：baked 1374/1225ms vs 包装 1272/1237ms——两轮 delta **+102/−12ms**（±16ms 轮询粒度+帧调度抖动内）——烘焙增量亚百毫秒、首帧一次性、用户无感；spec 预估 15-40ms 与实测兼容 |
+| 3 B5 去壁纸 | **PASS（纹理源切换）/ FAIL（内容质量）** | baked vs escape 8km：meanAbs 10.27 / fracChanged **35%** / maxDelta 86（修复前逐位 0）✓ 壁纸源已换；62km：2.53 / 11.8% ✓；rows 形态分化（baked 1.36 平坦 vs wrap 3.91 中下带陡增）。**但 baked 画面=近均匀白雾，云单体结构丢失**（见 CRITICAL #2），「去壁纸」目的达成而「云形正常」不成立 |
+| 4 B1 演化 | **弱响应（记录）** | play=1 Δ5min fracChanged 0.045%（maxDelta 82）、Δ30min 0.11%——随时间增长方向正确，但修复前 wind-only 版为 0.37/0.55——量级缩水 ~300×，肉眼难感知，与 CRITICAL #2 饱和压制一致 |
+| 5 B2 归因 | **PASS（太阳钉死）/ 弱响应（云）** | phase 0 vs 1800：天顶亮度差 **0.020%**（<2% 门禁 100×余量）✓ 太阳不动；云侧 diff 0.11%——演化输入生效但被饱和压制。（操作注记：URL 键为 `cloudsEvolutionPhase`，首轮误写 `cloudsEvolutionPhaseS` 得逐位 0 假象） |
+| 6 B3 回绕 | **PASS（闭合）** | phase 19070 vs 0：fracChanged **0.019%**（正常 10s 步长 0.004% 的 ~4.5×，远低于跨环位差量级）——演化 z 维闭合铁律成立；wind 分量不回绕的设计确认项仍在（见第一轮 #3），但当前被 #5 windOffset 失效掩盖 |
+| 7 B10 逃生门 | **PASS** | escape 零 GL 错、cloudFrac 0.4388（=第一轮 wrap 0.4387）、B5 差异证明其与 baked 内容级分离——`?cloudsAtlas=0` 现为真差异开关 ✓ |
+
+（B11 帧率见下；B4 确定性同 URL 双加载逐位 0 在修复后复验成立。）
+
+## CRITICAL #2（复测新发现）：baked 内容渲染为饱和白雾，云单体结构丢失
+
+**现象**（8km lat50 主机位，headed 真 GPU）：baked 渲染近均匀白雾+固定淡斑（`r2-b5-baked-8k.png`）；escape（旧静态图）渲染清晰积云群+蓝隙（`r2-b5-wrap-8k.png`）。B5 的 35% 差异本质即「白雾 vs 有结构云」。
+
+**失配定位**：烘焙输出通道语义为「独立 + max(mid,low)」（T3 计划内改动，weatherBake.frag:98），而采样端 coverage/coverageFilterWidths 是按旧图「挖除互斥」语义标定的（第一轮 B8 反序已预警同族问题）。`smoothstep(0.8,1.4,FBM)+smoothstep(1.0,1.4)` 输出大面积高值 → mix(localWeather,1,filterWidths) 进一步推向 1 → Skybolt remap 压不住 → density 处处饱和。
+
+**量化佐证**：
+- coverage=0.1（近晴）画面几乎不变（cloudFrac 0.30，暗斑布局全同 `r2-baked-cov01.png`）——暗斑非云结构，调制链压不动饱和内容；
+- 性能反证：baked 60.04fps vs escape 44.94fps（同参数同相机）——饱和云透射率快速衰减 → march early-exit 反而减负；修复前两者同图同 37.9；
+- baked rows 粗糙度 1.36 vs wrap 3.91——高频结构缺失。
+
+**处置建议（用户拍板项）**：①烘焙端重标定（smoothstep 阈值/FBM 增益，让输出分布对齐旧图统计）或 ②采样端重标定（coverage 默认/coverageFilterWidths 按新语义适配）。此项不修，演化/平流/种子的一切「弱响应」都无法排除饱和压制干扰。
+
+## FAIL/上报汇总（复测轮）
+
+| # | 级别 | 项 | 证据 | 处置建议 |
+|---|---|---|---|---|
+| 1 | **CRITICAL** | baked 内容饱和白雾、云单体结构丢失（见上节） | `r2-b5-baked-8k.png` vs `r2-b5-wrap-8k.png`；coverage 0.1 失敏；fps 60 vs 45 | 烘焙端或采样端重标定（用户拍板哪端） |
+| 2 | **CRITICAL（疑，受 #1 干扰）** | `cloudsSeed` 重烘无实际效果：seed=1 vs 默认 1337 云形态**逐斑相同**（`r2-seed1.png` vs `r2-b5-baked-8k.png` 肉眼同图；diff 0.093%） | 饱和可压制「幅度」但不能解释「饱和区布局不变」——疑 `u_seedOffset` 未实际进入烘焙（FullscreenPass uniformMap 键匹配/闭包时序）或 bakeSeedToOffset 值退化 | T5 复查 u_seedOffset 注入链；修 #1 后重测 |
+| 3 | **CRITICAL（疑，受 #1 干扰）** | `u_windOffset` 平流无实机响应：phase 0→9000（wind 应位移 72km≈0.72 tile≈184texel）diff 仅 0.14%；phase 0→19070（52km）0.019%——远低于第一轮 wind-only 版同参数 0.37/0.57 | `cloudsWind=1000` 放大档 12.5s 位移 12.5km diff 2.9%（非零）——uniform 链可能活但被饱和压制；无法在 #1 存在下判定 | 修 #1 后重测 phase 系列；仍无响应则查 march uniformMap |
+| 4 | Important | `cloudsWeatherRepeat` 不影响 march 采样端 `localWeatherRepeat`（uv×repeat 恒默认 100）：repeat=1 vs 100 渲染几乎同图（rows 1.368 vs 1.360） | T7 参数只进烘焙 plan（tileKm→wind 换算），march 端 repeat 是独立 params 字段未同步——「降 repeat 去壁纸」参数化（spec §5.1 升级路径）当前实际无效 | T6/T7 补 params 联动或文档注明该键当前语义=wind 换算 only |
+| 5 | tuning（沿用第一轮） | B8 overcast vs cloudy 微反序 | 同第一轮 | 用户拍板 |
+| 6 | design（沿用第一轮） | wind 不随演化环回绕 | 同第一轮；当前被 #3 掩盖，#3 排除后需重测 B3 | 用户确认整场循环需求 |
+
+## 意外发现（复测轮）
+
+1. **URL 键笔误教训**：`cloudsEvolutionPhaseS`（带 S）静默无效（demo 读 `cloudsEvolutionPhase`）——得逐位 0 假象。URL 参数解析无未知键告警，验收/调试时先核对键名（T9 可考虑未知 `clouds*` 键 console.warn）。
+2. **性能侧饱和探针**：同参数 fps 差（60 vs 45）可作内容饱和的廉价旁证——march early-exit 使 fps 与云结构复杂度负相关。
+3. atlas mode 运行时探针仍缺位（handle 未暴露 atlas.mode）——复测用「console 静默 + B5 内容级差异」双证据替代；smoke 脚本对 escape URL 加显式标注。
+4. headless SwiftShader 冒烟在真烘焙路径下零 GL 错——**Texture3D 逐层 FBO 烘焙+generateMipmap 在 SwiftShader 可用**（spec §4.3 冒烟项关闭）。
+
+## 复测产物
+
+- 截图：`apps/demo/verify-artifacts/r2-*.png`（baked/wrap 8km+62km 对照、side 并排×2、phase 系列、wind1000 系列、repeat1、seed1、cov01、noshadow 对照）
+- 脚本：`verify-clouds-distribution.mjs` 新增 `bake` 命令（headed 烘焙耗时，16ms 轮询 `__cloudsStage` 就绪时刻对照）+ smoke atlasMode 推断更新

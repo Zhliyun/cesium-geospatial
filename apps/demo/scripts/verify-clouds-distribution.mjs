@@ -354,13 +354,32 @@ async function runSmoke(opts) {
   // 仅报告 warn 原文，判定留给 T8 报告（证据：default vs cloudsAtlas=0 两 URL 渲染逐位相同）。
   const atlasWarnTexts = atlasWarns.map((l) => l.text)
 
+  // atlas mode 推断（dbdcea8 修复后）：baked 成功路径全程静默（bakeAtlas 无成功日志），
+  // 降级/失败才有 warn——无 warn 即 baked（与 B5 渲染差异对照互证：baked vs escape 两源
+  // 内容不同）。handle 未暴露 atlas.mode（运行时探针缺位如实记录，T8 报告遗留项）。
+  // 注意 escape（cloudsAtlas=0）包装路径同样全程静默——console 只能排除「降级发生」，
+  // 不能区分 baked/escape；escape 由 URL 参数标注（B5 渲染差异为内容级判据）。
+  const isEscape = /cloudsAtlas=0/.test(query)
+  let atlasMode = isEscape
+    ? 'pngFallback（URL 显式 escape 标注；console 静默一致）'
+    : 'baked（console 静默推断；与 B5 渲染差异互证）'
+  if (consoleLines.some((l) => l.text.includes('usePngFallback 但无 pngFallback 数据'))) {
+    atlasMode = 'pngFallback（escape 无材料回退烘焙 warn）'
+  } else if (consoleLines.some((l) => l.text.includes('烘焙失败，降级静态 PNG fallback'))) {
+    atlasMode = 'pngFallback（烘焙失败降级 warn）'
+  } else if (consoleLines.some((l) => l.text.includes('FBO 不完整'))) {
+    atlasMode = 'baked-but-empty（FBO 不完整 warn，atlas 全 0 无云）'
+  } else if (consoleLines.some((l) => l.text.includes('generateMipmap 失败'))) {
+    atlasMode = 'baked（mip 降级 LINEAR warn——lod0 可用）'
+  }
+
   const result = {
     url,
     tilesLoaded,
     wired,
     errors,
     atlasWarns: atlasWarnTexts,
-    atlasMode: 'unknown（无运行时探针；console 静默——见 T8 报告分派 bug）',
+    atlasMode,
     mipWarn: consoleLines.some((l) => l.text.includes('generateMipmap 失败')),
     sky: stats,
     shotPath
@@ -381,8 +400,71 @@ const opts = parseArgs(process.argv.slice(2))
 const cmd = opts._[0]
 const out = (obj) => console.log(JSON.stringify(obj, null, 2))
 
+// bake：headed 烘焙耗时观察（SwiftShader 耗时无意义，故 headed 真测）。
+// 方法：init script 16ms 轮询 window.__cloudsStage 赋值时刻（main.ts stage 创建完成同步赋值，
+// 含 loadWeatherTextures fetch 链）；同法测默认（烘焙）与 ?cloudsAtlas=0（PNG 包装，同资产同
+// 上传、只差 64 层烘焙 pass+mip）——两者就绪时刻差 ≈ 烘焙增量成本。粒度受轮询间隔限制（±16ms）。
+async function cmdBake(opts) {
+  const stages = [
+    ['baked', COMMON],
+    ['pngWrap', COMMON.replace('clouds=1', 'clouds=1&cloudsAtlas=0')]
+  ]
+  const results = []
+  for (const [name, query] of stages) {
+    const browser = await chromium.launch({ headless: false })
+    const context = await browser.newContext({ viewport: { width: W, height: H } })
+    await context.addInitScript(() => {
+      window.__stageAt = 0
+      const timer = setInterval(() => {
+        if (window.__cloudsStage != null && window.__stageAt === 0) {
+          window.__stageAt = performance.now()
+          clearInterval(timer)
+        }
+      }, 16)
+    })
+    const page = await context.newPage()
+    const consoleLines = []
+    page.on('console', (msg) => consoleLines.push({ type: msg.type(), text: msg.text() }))
+    page.on('pageerror', (err) => consoleLines.push({ type: 'pageerror', text: String(err) }))
+    const url = `${opts.base}/?${query}`
+    const t0 = Date.now()
+    await page.goto(url, { waitUntil: 'load', timeout: 120000 })
+    let stageAt = 0
+    try {
+      await page.waitForFunction(() => window.__stageAt > 0, undefined, { timeout: 120000 })
+      stageAt = await page.evaluate(() => window.__stageAt)
+    } catch {
+      console.warn(`[bake] ${name}: __cloudsStage 120s 未就绪（stage 创建失败或 clouds 未接线）`)
+    }
+    const warns = consoleLines.filter((l) => l.text.includes('[clouds]')).map((l) => l.text)
+    results.push({
+      name,
+      readyFromNavStartMs: +stageAt.toFixed(0),
+      wallGotoMs: Date.now() - t0,
+      tilesLoaded: await page
+        .waitForFunction(() => window.__viewer?.scene?.globe?.tilesLoaded === true, undefined, { timeout: 30000 })
+        .then(() => true)
+        .catch(() => false),
+      cloudsWarns: warns
+    })
+    console.log(`[bake] ${name}: stage 就绪 @${stageAt.toFixed(0)}ms（navStart 起）`)
+    await browser.close()
+  }
+  const [baked, wrap] = results
+  out({
+    stages: results,
+    bakeDeltaMs:
+      baked && wrap && baked.readyFromNavStartMs && wrap.readyFromNavStartMs
+        ? baked.readyFromNavStartMs - wrap.readyFromNavStartMs
+        : null,
+    note: 'bakeDeltaMs = 烘焙路径就绪时刻 − 包装路径就绪时刻（同资产同链，差≈64 层烘焙 pass+mip 生成；含 ±16ms 轮询粒度与帧调度抖动，读数量级参考）'
+  })
+}
+
 if (cmd === 'smoke') {
   await runSmoke(opts)
+} else if (cmd === 'bake') {
+  await cmdBake(opts)
 } else if (cmd === 'shot') {
   mkdirSync(opts.out, { recursive: true })
   await cmdShot(opts, opts._[1], opts._[2])
@@ -412,7 +494,7 @@ if (cmd === 'smoke') {
   cmdSide(opts._[1], opts._[2], opts._[3])
 } else {
   console.error(
-    '用法: smoke | shot <name> <query> | triple <prefix> <query> | evolve | fps <query> | diff a b [--rows] | rows shot | coverage shot [--band y0,y1] | suncheck a b | side a b out'
+    '用法: smoke | bake | shot <name> <query> | triple <prefix> <query> | evolve | fps <query> | diff a b [--rows] [--tol N] | rows shot | coverage shot [--sky-ratio 0.35] [--band y0,y1] | suncheck a b | side a b out'
   )
   process.exitCode = 1
 }
