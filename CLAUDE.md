@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 把 **three-geospatial** 的 Bruneton 大气渲染移植进 **Cesium**（原生注入，非替换 Globe）。渲染通过 Cesium `PostProcessStage` 后处理实现，复用 Cesium 内置的 `czm_*` automatic uniforms、对数深度、`depthTexture`。当前阶段：phase1（B 路径大气透视）已合并到 `main`；phase2a（HDR 浮点后处理链基建）设计中。
 
-**参考库定位（关键）**：`three-geospatial`（`/Users/zhangliyun/Documents/Ayvods/Web3D/three-geospatial`）为算法/技术**主参考**；`cesium-clouds-atmosphere`（`/Users/zhangliyun/Documents/Ayvods/Web3D/cesium-clouds-atmosphere`）仅当 three-geospatial 方案移植到 Cesium 遇障时参考其已适配方案。
+**参考库定位（关键）**：`three-geospatial`（`/Users/zhangliyun/Documents/Ayvods/Web3D/three-geospatial`）与 `navara`（`/Users/zhangliyun/Documents/Ayvods/Web3D/navara`，Rust/WASM GIS 核心 + Three.js 渲染的 3D 地图引擎，含完整动态体积云方案 examples/weather/clouds）并列算法/技术**主参考**（2026-09-03 用户拍板：navara 地位与 three-geospatial 一致，方案可能更完整）。
 
 ## 常用命令
 

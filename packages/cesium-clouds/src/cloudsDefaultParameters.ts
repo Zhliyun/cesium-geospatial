@@ -310,7 +310,11 @@ export function defaultCloudsParameters(): CloudsParameters {
     coverage: 0.3,
     // 气候带强度（T6，spec §5.4）：1=默认全带（ITCZ 峰/副热带谷/风暴带/极地衰减）；0=关
     climateBands: 1.0,
-    localWeatherRepeat: new Cartesian2(100.0, 100.0),
+    // 经纬域 repeat（face 缝根治 2026-09-03 方案 A）：x=经向瓦数（赤道瓦宽 40075/400
+    // ≈100km）、y=纬向瓦数（20015/200 ≈100km，保瓦物理方形）——与旧 face 域 (100,100)
+    // 的瓦物理尺寸连续（face 域 100 瓦/face ≈ 经纬域 400 瓦/赤道）。x 须偶数：经度割缝
+    // lon=±π 两侧 x 差 repeat/2，偶数×0.5=整数瓦 = REPEAT wrap 两侧同点闭合。
+    localWeatherRepeat: new Cartesian2(400.0, 200.0),
     localWeatherOffset: new Cartesian2(0.0, 0.0),
     shapeRepeat: new Cartesian3(0.0003, 0.0003, 0.0003),
     shapeOffset: new Cartesian3(0.0, 0.0, 0.0),

@@ -12,37 +12,27 @@ vec2 getSphericalUv(const vec3 position) {
   return vec2(phi * RECIPROCAL_PI2 + 0.5, theta * RECIPROCAL_PI + 0.5);
 }
 
-vec2 getCubeSphereUv(const vec3 position) {
-  // Cube-sphere relaxation by: http://mathproofs.blogspot.com/2005/07/mapping-cube-to-sphere.html
-  // TODO: Tile and fix seams.
-  // Possible improvements:
-  // https://iquilezles.org/articles/texturerepetition/
-  // https://gamedev.stackexchange.com/questions/184388/fragment-shader-map-dot-texture-repeatedly-over-the-sphere
-  // https://github.com/mmikk/hextile-demo
-
-  vec3 n = normalize(position);
-  vec3 f = abs(n);
-  vec3 c = n / max(f.x, max(f.y, f.z));
-  vec2 m;
-  if (all(greaterThan(f.yy, f.xz))) {
-    m = c.y > 0.0 ? vec2(-n.x, n.z) : n.xz;
-  } else if (all(greaterThan(f.xx, f.yz))) {
-    m = c.x > 0.0 ? n.yz : vec2(-n.y, n.z);
-  } else {
-    m = c.z > 0.0 ? n.xy : vec2(n.x, -n.y);
-  }
-
-  vec2 m2 = m * m;
-  float q = dot(m2.xy, vec2(-2.0, 2.0)) - 3.0;
-  float q2 = q * q;
-  vec2 uv;
-  uv.x = sqrt(1.5 + m2.x - m2.y - 0.5 * sqrt(-24.0 * m2.x + q2)) * (m.x > 0.0 ? 1.0 : -1.0);
-  uv.y = sqrt(6.0 / (3.0 - uv.x * uv.x)) * m.y;
-  return uv * 0.5 + 0.5;
-}
+// getCubeSphereUv 已移除（2026-09-03 face 缝根治，方案 A）——旧 cube-sphere face uv
+// 实现见 git 历史（takram 上游 TODO "Tile and fix seams" 的遗留）。weather 采样域统一
+// 走下方 getGlobeUv 经纬等距圆柱域。
 
 vec2 getGlobeUv(const vec3 position) {
-  return getCubeSphereUv(position);
+  // 经纬等距圆柱域（face 缝根治 2026-09-03，方案 A 用户拍板）：weather atlas 采样域从
+  // cube-sphere face uv（takram 上游同位 TODO "Tile and fix seams" 未修，旧实现见 git）
+  // 换成全球连续的经纬度。根治两症状（2026-09-03 用户复现 lon=-25/lat=42 恰在 +X/+Z
+  // face 边界，?play&speed=60 下显形）：
+  //  ① 边界两侧图案突变——face uv 跨界跳变 → 采样内容不连续；
+  //  ② 平流方向不一致——u_windOffset 加在 uv 域，face 基向各异 → 地面方向不同，
+  //     speed=60 时有效 480m/s 反向跑极显眼。
+  // 经纬域下 uv 及导数（dFdx→getMipLevel 的 mip 跳变）全球连续；经度割缝（lon=±π）
+  // x 两侧差 0.5×repeat.x，repeat.x 取偶数（默认 400）时 REPEAT wrap 两侧同点闭合。
+  // 已知取舍（拍板记录）：等距圆柱失真——高纬瓦物理宽度 ×cos(lat)，云图横向压密
+  // （内容随机，观感=高纬云横向更细碎）；极点收缩为线。repeat 语义随之更新：
+  // x=经向瓦数（赤道瓦宽 40075/x km）、y=纬向瓦数（默认 x/2 保瓦物理方形）。
+  vec3 n = normalize(position);
+  float lon = atan(n.y, n.x);
+  float lat = asin(clamp(n.z, -1.0, 1.0));
+  return vec2(lon * 0.15915494309189535 + 0.5, 0.5 + lat * 0.3183098861837907); // 1/2π, 1/π
 }
 
 float getMipLevel(const vec2 uv) {

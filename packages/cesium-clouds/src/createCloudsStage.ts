@@ -506,7 +506,10 @@ function buildCloudsStageImpl(
     // 一次赋值即可；escape/pngFallback/skip 三路径同源 timelinePlan 行为一致。缺省 100=
     // defaults 写死值（零回归）。注意：此处有意覆盖用户显式 parameters.localWeatherRepeat
     // ——repeat 单源 plan（两者同时显式时 plan 赢，spec §6.2 参数分组语义）。
-    params.localWeatherRepeat = new Cartesian2(timelinePlan.weatherRepeat, timelinePlan.weatherRepeat)
+    params.localWeatherRepeat = new Cartesian2(
+      timelinePlan.weatherRepeat,
+      timelinePlan.weatherRepeat / 2
+    ) // 经纬域（方案 A 2026-09-03）：y=经向一半（保瓦物理方形，等距圆柱纬向全跨度=π）
 
     const sunInertialScratch = new Cartesian3()
     const moonOriginScratch = new Cartesian3()

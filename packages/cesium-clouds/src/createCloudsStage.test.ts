@@ -82,19 +82,15 @@ vi.mock('./WeatherAtlas', async (importOriginal) => {
     createWeatherAtlas: vi.fn((opts: any) => {
       weatherAtlasProbe.calls.push(opts)
       const fallback = opts.pngFallback != null
+      // plan 直接走真实 resolveWeatherAtlasPlan（缺省值单源——mock 手抄缺省曾致
+      // 方案 A 改默认 repeat 时测试脱钩）
+      const plan = (actual as any).resolveWeatherAtlasPlan(opts)
       const inst = {
         // tag 恒定（不带计数）：JSON 装配对拍用例（「quality 缺省：装配传参与显式 high 逐字
         // 一致」）序列化 state.atlasTexture——实例身份由对象引用区分，无需唯一 tag
         atlasTexture: { tag: 'atlas' },
         mode: fallback ? 'pngFallback' : 'baked',
-        plan: {
-          evolutionPeriodS: (opts.evolutionHours ?? 5.3) * 3600,
-          windMps: opts.windMps ?? 8,
-          seed: opts.seed ?? 1337,
-          weatherRepeat: opts.weatherRepeat ?? 100,
-          tileKm: (40075.017 / 4) / (opts.weatherRepeat ?? 100),
-          usePngFallback: fallback
-        },
+        plan,
         dispose: vi.fn()
       }
       weatherAtlasProbe.instances.push(inst)
@@ -1414,7 +1410,7 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
     handle!.destroy()
   })
 
-  it('weatherRepeat 联动采样端 localWeatherRepeat（spec §6.2 参数语义：repeat=烘焙输入组单源）', () => {
+  it('weatherRepeat 联动采样端 localWeatherRepeat（spec §6.2 参数语义：repeat=烘焙输入组单源；经纬域 y=经向一半）', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
       clouds: true,
@@ -1422,13 +1418,13 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
     })
     const repeat = paramsOf(handle!)!.localWeatherRepeat
     expect(repeat.x).toBe(20)
-    expect(repeat.y).toBe(20)
+    expect(repeat.y).toBe(10) // 经纬域（方案 A 2026-09-03）：y=经向一半保瓦物理方形
     handle!.destroy()
-    // 不传：默认 100 零回归（resolveWeatherAtlasPlan 缺省 weatherRepeat=100 = defaults 写死值）
+    // 不传：默认 400 零回归（resolveWeatherAtlasPlan 缺省 weatherRepeat=400 = defaults 写死值）
     const handle2 = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
     const repeat2 = paramsOf(handle2!)!.localWeatherRepeat
-    expect(repeat2.x).toBe(100)
-    expect(repeat2.y).toBe(100)
+    expect(repeat2.x).toBe(400)
+    expect(repeat2.y).toBe(200)
     handle2!.destroy()
   })
 

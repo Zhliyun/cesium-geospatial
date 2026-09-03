@@ -20,12 +20,12 @@ describe('WeatherAtlas 计划解析（spec §4/§6.2）', () => {
     expect(ATLAS_SLICES).toBe(64)
   })
 
-  it('默认计划：5.3h/8mps/seed1337/repeat100/非 fallback', () => {
+  it('默认计划：5.3h/8mps/seed1337/repeat400/非 fallback', () => {
     const plan = resolveWeatherAtlasPlan({})
     expect(plan.evolutionPeriodS).toBeCloseTo(5.3 * 3600, 0)
     expect(plan.windMps).toBe(8)
     expect(plan.seed).toBe(1337)
-    expect(plan.weatherRepeat).toBe(100)
+    expect(plan.weatherRepeat).toBe(400)
     expect(plan.usePngFallback).toBe(false)
   })
 
@@ -43,9 +43,9 @@ describe('WeatherAtlas 计划解析（spec §4/§6.2）', () => {
     expect(resolveWeatherAtlasPlan({}).usePngFallback).toBe(false)
   })
 
-  it('tileKm = CUBE_FACE_WIDTH_KM / repeat', () => {
-    expect(resolveWeatherAtlasPlan({ weatherRepeat: 100 }).tileKm).toBeCloseTo(
-      40075.017 / 4 / 100,
+  it('tileKm = 赤道周长 / 经向 repeat（经纬域语义，方案 A 2026-09-03）', () => {
+    expect(resolveWeatherAtlasPlan({ weatherRepeat: 400 }).tileKm).toBeCloseTo(
+      40075.017 / 400,
       3
     )
   })
@@ -61,7 +61,7 @@ describe('WeatherAtlas 计划解析（spec §4/§6.2）', () => {
     expect(plan.windMps).toBe(3)
     expect(plan.seed).toBe(42)
     expect(plan.weatherRepeat).toBe(50)
-    expect(plan.tileKm).toBeCloseTo(40075.017 / 4 / 50, 3)
+    expect(plan.tileKm).toBeCloseTo(40075.017 / 50, 3)
   })
 })
 

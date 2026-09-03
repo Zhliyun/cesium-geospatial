@@ -85,9 +85,12 @@ export interface WeatherAtlasPlan {
   windMps: number
   /** 烘焙种子（bakeSeedToOffset 的输入）。 */
   seed: number
-  /** cube face 上 weather 平铺次数（tileKm = CUBE_FACE_WIDTH_KM / repeat）。 */
+  /** 经向（赤道）weather 平铺瓦数（tileKm = 赤道周长 / repeat；face 缝根治 2026-09-03
+   *  方案 A：采样域改经纬度，repeat 语义从「每 cube face 瓦数」改为「经向瓦数」，默认
+   *  400 ≈ 旧 face 域 100 瓦/face 的瓦物理尺寸连续；须偶数——经度割缝闭合）。 */
   weatherRepeat: number
-  /** 单 tile 弧长 km（T6 采样端 uRepeat/windOffset 换算用）。 */
+  /** 单 tile 弧长 km（T6 采样端 uRepeat/windOffset 换算用；经纬域取赤道瓦宽，
+   *  纬向瓦宽 = 赤道/2÷(repeat/2) 数值相同，共用即可）。 */
   tileKm: number
   /** true = 跳过烘焙直接用 PNG fallback（T8 对照/逃生门）。 */
   usePngFallback: boolean
@@ -101,7 +104,7 @@ export interface WeatherAtlasOptions {
   windMps?: number
   /** 烘焙种子；缺省 WEATHER_BAKE_SEED=1337。 */
   seed?: number
-  /** 平铺次数；缺省 100。 */
+  /** 平铺次数（经向瓦数，须偶数）；缺省 400（经纬域，≈旧 face 域 100 的瓦尺寸）。 */
   weatherRepeat?: number
   /** 烘焙失败的兜底材料（RGBA8 原始 PNG decode 数据）。提供【不】触发直接分派——
    * 旧语义「提供即 fallback」使 T6 无条件传参时 bakeAtlas 死代码（T8 CRITICAL 实证：
@@ -138,7 +141,7 @@ export function resolveWeatherAtlasPlan(options: {
   pngFallback?: WeatherPngFallback | undefined
   usePngFallback?: boolean
 }): WeatherAtlasPlan {
-  const weatherRepeat = options.weatherRepeat ?? 100
+  const weatherRepeat = options.weatherRepeat ?? 400
   return {
     evolutionPeriodS:
       options.evolutionHours != null
@@ -147,7 +150,9 @@ export function resolveWeatherAtlasPlan(options: {
     windMps: options.windMps ?? WEATHER_WIND_SPEED_MPS,
     seed: options.seed ?? WEATHER_BAKE_SEED,
     weatherRepeat,
-    tileKm: CUBE_FACE_WIDTH_KM / weatherRepeat,
+    // 经纬域（方案 A 2026-09-03）：tileKm = 赤道周长/经向瓦数。CUBE_FACE_WIDTH_KM×4
+    // = 40075.017km 赤道周长（face 域旧公式 /repeat 在 repeat=400 时错 4 倍，不可复用）。
+    tileKm: (CUBE_FACE_WIDTH_KM * 4) / weatherRepeat,
     usePngFallback: options.usePngFallback === true
   }
 }
