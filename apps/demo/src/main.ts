@@ -763,19 +763,31 @@ async function main(): Promise<void> {
               console.info(`[phase3-clouds] quality → ${next}（setQuality 内部重建）`)
             }
           })
-          // 平移探针（噪声分解实验）：每帧 moveForward N 米（直线平移，激发 BSM texel 跳变
-          // 通道——rotateLeft 是轨道移动，模式单一）。preRender 里持续驱动，录屏窗口截取。
+          // 平移探针（噪声分解实验）：每帧沿**水平向前**（ECEF 切面投影，保持地心高度不变）
+          // 前进 N 米——2026-09-04 用户指正：原 moveForward 沿视线（含 pitch）斜向下移动，
+          // 甲内/贴地视角会斜穿出云层而非「沿云飞行」，且高度持续下降不贴近真实飞行路径。
+          // 直线平移激发 BSM texel 跳变通道（rotateLeft 是轨道移动，模式单一）。
           const probeMove = getNumber('cloudsProbeMove')
           if (probeMove != null && probeMove > 0) {
             let probeFrame = 0
+            const probeUp = new Cartesian3()
+            const probeFwd = new Cartesian3()
             scene.preRender.addEventListener(() => {
               probeFrame++
               if (probeFrame > 30) {
                 // 前 30 帧等场景稳定（瓦片/BSM 首帧），之后匀速前进
-                viewer.camera.moveForward(probeMove)
+                // 水平向前 = direction 去掉地心向上分量（切面投影）后归一化
+                const cam = viewer.camera
+                Cartesian3.normalize(cam.positionWC, probeUp)
+                const d = Cartesian3.dot(cam.directionWC, probeUp)
+                Cartesian3.normalize(
+                  Cartesian3.subtract(cam.directionWC, Cartesian3.multiplyByScalar(probeUp, d, probeFwd), probeFwd),
+                  probeFwd
+                )
+                cam.move(probeFwd, probeMove)
               }
             })
-            console.info(`[probe] 平移探针激活：每帧前进 ${probeMove}m（第 30 帧起）`)
+            console.info(`[probe] 平移探针激活：每帧水平前进 ${probeMove}m（第 30 帧起）`)
           }
           // 轨道探针（spec §6 主战场）：每帧 rotateLeft N 弧度（绕焦点，位姿耦合移动——
           // position 与 orientation 同时变，激发与平移不同的矩阵扰动通道）。前 30 帧等
