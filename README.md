@@ -188,14 +188,6 @@ add 时机由消费者编排，否则云不可见：
 | `profile=1` | 逐 stage GPU 计时（每 60 帧 console.log，需 EXT_disjoint_timer_query_webgl2） |
 | `temporalEma=0` / `temporalQuality=high` / `depthThreshold=N` / `depthTemporal=1` | 深度时域平滑开关/档位/阈值/显式创建 |
 
-### 移动探针（验收云影闪动用，30 帧后自动启动）
-
-| 参数 | 说明 |
-|---|---|
-| `cloudsProbeMove=N` | 每帧前进 N 米（匀速平移） |
-| `cloudsProbeOrbit=N` | 每帧左转 N 弧度（轨道，N=0.00001 为慢速） |
-| `cloudsProbeZoom=N` | 每帧 zoomIn N 米（dolly，滚轮语义） |
-
 ## 常用命令
 
 ```bash

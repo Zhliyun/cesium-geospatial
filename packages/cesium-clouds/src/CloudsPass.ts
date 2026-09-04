@@ -610,11 +610,8 @@ export function createCloudsPass(
       destroyed = true
       primitives.remove(primitive)
       primitive.destroy() // 释放 MRT FBO（GL framebuffer handle），destroyAttachments=false 不连带 texture
-      // 【2026-09-04 double-destroy 修复（B3 自适应真机热切首次暴露）】shadowLenTex 在
-      // lightShafts=true 时已含于 mrtTextures（L392 数组组装），forEach 已销毁——此处再
-      // destroy 即 DeveloperError throwOnDestroyed。god rays 合并以来 impl.destroy 从未在
-      // 真机被调用（页面关闭不触发），B3 相机态自适应首次真实热切而暴露。
       mrtTextures.forEach((t) => t.destroy())
+      shadowLenTex?.destroy()
       dummyDepthBuffer.destroy()
       dummyTurbulence.destroy()
       // dummyWeatherAtlas Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用——dummyShadowBuffer 同款）
