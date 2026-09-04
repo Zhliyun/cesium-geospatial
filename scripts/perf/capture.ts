@@ -28,15 +28,16 @@ interface Scenario {
   name: string
   query: string // 不含 base 的 query 串（? 开头）
 }
-// 注：time 固定（关键：不固定则太阳方向随 wall-clock 变，ref/out 跨时间永不匹配；且夜间场景过暗门禁无判别力。
-//     2026-08-04T01:00:00Z 在 139E/34N（日本）为上午，日景）。其余公共参数见 baseline.md 表头。
-// groundLighting=0&groundDim=0.5（2026-09-01 地面光色乘子上线）：现 ref 基线录于乘子前，
-// SSIM 0.999 门禁保留（抓 vite 缓存假绿的命门）——场景 query 显式关乘子**并锁回 groundDim=0.5**
-// （乘子默认开启时 groundDim 默认已重标 0.43，只关乘子不锁 dim 会残留 14% 地面亮度差，
-// 实测 camera-low SSIM 0.99890 FAIL）；视觉验收通过后 --saveRef 全量重录（重录工序：
-// pkill vite+rm .vite 清缓存 → ?groundLighting=1/0 成对活性断言 → 录 → =0 场景门禁须 fail
-// 负向验证 → results 记录，见对抗审查 D 节）。
-const COMMON = 'mode=atmosphere&inscatterScale=25&fps=0&time=2026-08-04T01:00:00Z&groundLighting=0&groundDim=0.5'
+// 注：time+play=0 成对钉死（关键：412182e 起时间默认流动，单 time= 只钉初值仍流动——不钉死则
+//     太阳方向随 wall-clock/页面加载耗时漂移，ref/out 跨会话永不匹配；2026-08-04T01:00:00Z 在
+//     139E/34N（日本）为上午日景，避免夜间过暗门禁无判别力）。clouds=0：本门禁目标是
+//     atmosphere stage，headless SwiftShader 云渲染崩坏不可信（memory clouds-resolve-motion-
+//     artifacts），云不进门禁（云回归由 verify-clouds-distribution.mjs / bake-readback.mjs 守）。
+// 2026-09-04 基线重录（ref 原录于 2026-08-06，与渲染现状差一个月演化固定差）：去钉
+// inscatterScale=25（2026-09-02 定稿默认 8，旧钉测的是已废弃路径）与
+// groundLighting=0&groundDim=0.5（2026-09-01 乘子上线时的过渡桥——定稿主路径=乘子默认开+
+// groundDim 0.43 缺省）。基线测当前默认主路径；缺省再变时按同工序重录即可。
+const COMMON = 'mode=atmosphere&fps=0&time=2026-08-04T01:00:00Z&play=0&clouds=0'
 const SCENARIOS: Scenario[] = [
   // 4 个复现/混合视角（spec §0.3/§0.5）
   { name: 'camera-low', query: `${COMMON}&camera=139.2399,34.8752,5000,8.7,-21.1` },
@@ -226,14 +227,38 @@ async function waitTilesLoaded(page: Page, timeoutMs: number): Promise<void> {
 
 // 容错版：tilesLoaded 超时（如纯天空视角 globe 不在视锥内、长时间不 settle）不致命——
 // 截图继续（天空静态画面本就无需瓦片），仅 warn。返回是否等到 tilesLoaded。
+//
+// 2026-09-04 重录发现：tilesLoaded **首次为 true 不够**——refinement 波次间隙会瞬时 true
+// （下一批子瓦片入队前后），截图恰好落在波次中段=瓦片马赛克帧（实测 high-graze/bug5 间歇
+// maxΔ 44/53、真帧自洽逐位 0 差）。改为「连续保持 HOLD_MS 为 true」才认为瓦片终态：
+// refinement 完毕无新请求，远视场场景自洽逐位通过。
+const TILES_LOADED_HOLD_MS = 5000
+
 async function waitTilesLoadedTolerant(page: Page, timeoutMs: number): Promise<boolean> {
   try {
     await waitTilesLoaded(page, timeoutMs)
-    return true
   } catch {
     console.warn(`[capture] tilesLoaded 等待超时（${timeoutMs}ms），仍截图（天空/无瓦片场景可接受）`)
     return false
   }
+  const deadline = Date.now() + timeoutMs
+  let lastFalse = Date.now() // 最近一次观测到 false 的时刻（初始=首达 true 时刻）
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(250)
+    const ok = await page.evaluate(() => {
+      const v = (window as unknown as {
+        __viewer?: { scene?: { globe?: { tilesLoaded?: boolean } } }
+      }).__viewer
+      return v?.scene?.globe?.tilesLoaded === true
+    })
+    if (!ok) {
+      lastFalse = Date.now()
+    } else if (Date.now() - lastFalse >= TILES_LOADED_HOLD_MS) {
+      return true
+    }
+  }
+  console.warn(`[capture] tilesLoaded 连续保持检查超时（${timeoutMs}ms），按当前状态截图`)
+  return true
 }
 
 async function captureScenario(

@@ -16,8 +16,10 @@
 
 ## 场景（4 个复现视角 + 2 极端分离变量）
 
-> 公共参数：均加 `?mode=atmosphere&inscatterScale=25`（用户验收固化的主路径）。截图采集时另加 `&fps=0`（关 FPS 角标，避免污染门禁）
-> **+ `&time=2026-08-04T01:00:00Z`（固定太阳方向）**——不固定则太阳位置随 wall-clock 变，ref/out 跨时间永不匹配，门禁失效；且该时刻在 139E/34N（日本）为上午日景，避免夜间过暗。
+> 公共参数（2026-09-04 重录定稿）：`?mode=atmosphere&fps=0&time=2026-08-04T01:00:00Z&play=0&clouds=0`。
+> `time+play=0` 成对钉死（412182e 起时间默认流动，单 time= 只钉初值）；该时刻在 139E/34N（日本）为上午日景，避免夜间过暗门禁无判别力。
+> `clouds=0`：本门禁目标是 atmosphere stage，headless SwiftShader 云渲染崩坏不可信，云回归走专项工具（verify-clouds-distribution.mjs / bake-readback.mjs）。
+> 沿革：08-06 版 COMMON 曾钉 `inscatterScale=25&groundLighting=0&groundDim=0.5`（当时主路径+乘子过渡桥）——09-04 重录去钉（inscatterScale 定稿缺省 8、乘子定稿默认开+groundDim 0.43），基线测当前缺省主路径。
 >
 > **Bug4/5/6 camera URL 说明**：docs/memory 未记录逐 Bug 的精确复现视角，下表 URL 由相邻复现视角派生
 > （nadir 俯视用 depth-temporal-ema results 的 `93.4055,32.7362,*,-89` 机位；山体/地平线掠射用 `95.7229,31.5070,11645,295.8,-4.3`）。
@@ -74,10 +76,23 @@
 
 - [x] `capture.ts` headless 截图 + SSIM/maxΔ 门禁跑通（Playwright chromium + SwiftShader WebGL）。
 - [x] ref 参考截图采集（`scripts/perf/ref/`，7 场景全）——**headless SwiftShader 后端**。
-- [x] 门禁自洽验证：`--check` 6/7 PASS（SSIM=1.0 maxΔ=0），退出码契约正确（PASS=0 / FAIL=1）。
+- [x] 门禁自洽验证：~~08-06 版 6/7 PASS~~ → **2026-09-04 重录后 7/7 全 PASS（SSIM=1.0 maxΔ=0 逐位），退出码契约正确（PASS=0 / FAIL=1）**。
+- [x] **基线重录（2026-09-04，CI 遗留 #2 销项）**：见下方「2026-09-04 基线重录」节。
 - [ ] 环境信息（GPU / Chrome / 分辨率 / vsync）回填——需真实浏览器。
 - [ ] GPU 时间基线（`?profile=1`）回填——headless SwiftShader 的 ms 无意义，**必须真实 GPU**。
 - [ ] **真实 GPU ref 重采**：下方注意——ref 与 out 必须同后端，真实 GPU 验收前需 `--save-ref` 重采。
+
+## 2026-09-04 基线重录（CI 遗留 #2 销项）
+
+**原因**：ref 录于 2026-08-06，之后一个月渲染演化（云默认开、inscatterScale 定稿 8、地面光色乘子默认开、时间默认流动）→ 旧 ref 与现状固定差、门禁恒 FAIL 失去判别力；旧 COMMON 的 `inscatterScale=25&groundLighting=0&groundDim=0.5` 均为过渡期钉子，测的是已废弃路径。
+
+**COMMON 变更**（详见 capture.ts 注释）：`+play=0`（时间流动化后与 `time=` 成对钉死）、`+clouds=0`（SwiftShader 云渲染崩坏不可信，云回归走 verify-clouds-distribution.mjs / bake-readback.mjs 专项工具）；去钉 inscatterScale/groundLighting/groundDim（基线=当前定稿缺省主路径）。
+
+**重录发现（tilesLoaded 瞬时 true 竞速，capture.ts 已修）**：`tilesLoaded` 首次为 true 不够——refinement 波次间隙会瞬时 true，2s settle 挡不住，截图恰好落在波次中段=瓦片马赛克帧（实测 high-graze/bug5 间歇 maxΔ 44/53，而正常帧自洽逐位 0 差；bug5 首录竟是根级瓦片全空的均匀蓝灰死帧）。修=「连续保持 5s 为 true」才截图，7/7 全部自洽逐位通过（含历史老大难 nadir）。诊断工具 `scripts/perf/diff-regions.ts`（8×8 网格差异分布）为此役新增。
+
+**负向验证（门禁判别力）**：临时 `COMMON+&groundLighting=0` 采 camera-low → `SSIM=0.99852 maxΔ=6` **FAIL**（乘子地面足迹被抓到）→ 还原 COMMON 复检 PASS。门禁非橡皮图章。
+
+**结果**：7 场景 ref 全量重录（headless SwiftShader 后端不变）；`--check` 7/7 PASS 逐位 0 差。
 
 ### 采集发现（决策相关）
 
