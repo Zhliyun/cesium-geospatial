@@ -1760,4 +1760,18 @@ describe('B3 相机态自适应 upscale', () => {
     for (let i = 0; i < 25; i++) cb(scene, t)
     expect(calls().length).toBe(n0)
   })
+
+  it('云下仰视域（2026-09-04 扩展）：20m+仰角触发，云下俯视不触发', () => {
+    // 20m 贴地 +5.1° 仰视（用户真机场景）：穿甲 ~80km 实测 33.5 FPS → 切 N=2
+    const { scene, cb, calls, t } = setupAdaptive({
+      pitch: (5.1 * Math.PI) / 180,
+      positionCartographic: { height: 20 }
+    })
+    for (let i = 0; i < 20; i++) cb(scene, t)
+    expect(calls().at(-1)[4].upscaleDivisor).toBe(2)
+    // 云下俯视（-30°，视线打地面不穿甲）→ 回 N=1
+    scene.camera.pitch = (-30 * Math.PI) / 180
+    for (let i = 0; i < 20; i++) cb(scene, t)
+    expect(calls().at(-1)[4].upscaleDivisor).toBe(1)
+  })
 })

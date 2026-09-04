@@ -167,6 +167,10 @@ const ADAPTIVE_HEIGHT_MAX = 7300
 // 10° 带宽防拖拽在阈值附近反复重建（重建含 atlas 重烘 ~200-500ms，必须防抖）
 const ADAPTIVE_PITCH_ENTER_DEG = -35
 const ADAPTIVE_PITCH_EXIT_DEG = -40
+// 云下仰视/平视域（2026-09-04 扩展）：20m+5.1° 仰视穿甲 ~80km 实测 33.5 FPS；
+// 云下俯视不穿甲成本低。滞回 -10 进 / -15 出
+const ADAPTIVE_GROUND_PITCH_ENTER_DEG = -10
+const ADAPTIVE_GROUND_PITCH_EXIT_DEG = -15
 // 连续帧数防抖：瞬时穿越不切，稳态驻留才切
 const ADAPTIVE_STABLE_FRAMES = 20
 
@@ -1128,7 +1132,7 @@ export function createCloudsStage(
   let adaptiveExitRun = 0
   const applyAdaptiveDivisor = (n: 1 | 2): void => {
     if (destroyed || effectiveOptions.upscaleDivisor === n) return
-    console.info(`[clouds] adaptive upscale → N=${n}（甲内近水平域${n === 2 ? '进入' : '离开'}）`)
+    console.info(`[clouds] adaptive upscale → N=${n}（甲内/云下成本域${n === 2 ? '进入' : '离开'}）`)
     effectiveOptions.upscaleDivisor = n
     impl.destroy()
     try {
@@ -1149,17 +1153,27 @@ export function createCloudsStage(
   }
   const updateAdaptive = (): void => {
     if (!adaptiveEnabled) return
-    // 判据：相机在甲内高度带 + 俯角浅（近水平）。俯视（pitch 很负）时甲内穿甲路径短
-    // 成本低（2519m 俯视实测满帧），不切。Cartographic/pitch 异常（mock/未就绪）恒不触发。
+    // 判据分两域（2026-09-04 扩展云下仰视域）：
+    // ①甲内（900-7300m）+俯角浅（>-35°）：甲内近水平穿甲路径长（2519m/-9.5° 实测打满）；
+    //   俯视（pitch 很负）时甲内穿甲路径短成本低（2519m/-74.5° 实测满帧），不切。
+    // ②云下（<900m）+仰视/平视（>-10°）：视线穿甲弦长=云厚/sin(仰角)，20m+5.1° 仰视
+    //   实测 ~80km（33.5 FPS）；云下俯视视线打地面不穿甲，不切。
+    // 云上（>7300m）俯视实测满帧不切；高空掠射域暂无数据暂不覆盖。
+    // Cartographic/pitch 异常（mock/未就绪）恒不触发。
     const carto = scene.camera.positionCartographic
     const height = carto != null ? carto.height : Number.NaN
     const pitchDeg = (scene.camera.pitch * 180) / Math.PI
+    const pitchGate = adaptiveActive ? ADAPTIVE_PITCH_EXIT_DEG : ADAPTIVE_PITCH_ENTER_DEG
+    const groundPitchGate = adaptiveActive
+      ? ADAPTIVE_GROUND_PITCH_EXIT_DEG
+      : ADAPTIVE_GROUND_PITCH_ENTER_DEG
     const inDomain =
       Number.isFinite(height) &&
       Number.isFinite(pitchDeg) &&
-      height >= ADAPTIVE_HEIGHT_MIN &&
-      height <= ADAPTIVE_HEIGHT_MAX &&
-      pitchDeg > (adaptiveActive ? ADAPTIVE_PITCH_EXIT_DEG : ADAPTIVE_PITCH_ENTER_DEG)
+      ((height >= ADAPTIVE_HEIGHT_MIN &&
+        height <= ADAPTIVE_HEIGHT_MAX &&
+        pitchDeg > pitchGate) ||
+        (height < ADAPTIVE_HEIGHT_MIN && pitchDeg > groundPitchGate))
     if (inDomain) {
       adaptiveEnterRun++
       adaptiveExitRun = 0
