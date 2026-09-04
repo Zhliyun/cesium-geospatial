@@ -594,6 +594,9 @@ async function main(): Promise<void> {
             ? { maxIterationCountToSun: getNumber('cloudsToSunIter')! } : {}),
           ...(getNumber('cloudsMaxStep') != null
             ? { maxStepSize: getNumber('cloudsMaxStep')! } : {}),
+          // 【2026-09-04 B3 相机态自适应 upscale】甲内+近水平自动切 march 半分（缺省开；
+          // ?cloudsAdaptive=0 关；用户显式 ?cloudsUpscale= 时自动禁用）
+          ...(getString('cloudsAdaptive') === '0' ? { adaptiveUpscale: false } : {}),
           // ── 云分布重设计（spec §6）URL 全集 ──
           // 天气预设创建期注入（白名单守卫已解析；运行期热切走 handle.setWeatherPreset，demo 暂无 UI）。
           // spec §6.1「显式标量优先于预设」：URL 显式给 ?cloudsCoverage= 时跳过预设

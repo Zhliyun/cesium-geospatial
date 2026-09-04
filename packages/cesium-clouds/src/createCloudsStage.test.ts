@@ -1687,3 +1687,77 @@ describe('高空云层渐隐：computeCloudsHeightFade', () => {
     expect(computeCloudsHeightFade(1e6, 5e5, 3e5)).toBe(1)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-04 B3 相机态自适应 upscale】甲内（900-7300m）+近水平（俯角 >-35° 进 / <-40°
+// 出滞回）连续 20 帧触发 upscaleDivisor 1↔2 重建（1259m 贴甲底 1080p 实测 45 FPS→满帧；
+// 云外观测逐位不变）。用户显式 upscaleDivisor 时禁用；NaN/缺字段 camera 恒不触发（mock 兼容）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('B3 相机态自适应 upscale', () => {
+  function setupAdaptive(cameraOverrides: Record<string, unknown> = {}) {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    Object.assign(scene.camera, cameraOverrides)
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    const cb = scene._listeners.preRender[0]
+    const calls = () => (createCloudsPass as any).mock.calls
+    const t = JulianDate.now()
+    return { scene, cb, calls, t }
+  }
+
+  it('甲内近水平持续 20 帧切 divisor=2（重建），防抖带内不切', () => {
+    const { scene, cb, calls, t } = setupAdaptive({
+      pitch: 0,
+      positionCartographic: { height: 1259 }
+    })
+    const n0 = calls().length
+    for (let i = 0; i < 19; i++) cb(scene, t)
+    expect(calls().length).toBe(n0) // 19 帧防抖内不切
+    cb(scene, t) // 第 20 帧 → 切 N=2（重建 cloudsPass，options.upscaleDivisor=2）
+    expect(calls().length).toBe(n0 + 1)
+    expect(calls().at(-1)[4].upscaleDivisor).toBe(2)
+  })
+
+  it('出域滞回回切 1 + 高度带外不触发', () => {
+    const { scene, cb, calls, t } = setupAdaptive({
+      pitch: 0,
+      positionCartographic: { height: 1259 }
+    })
+    for (let i = 0; i < 20; i++) cb(scene, t)
+    expect(calls().at(-1)[4].upscaleDivisor).toBe(2)
+    // 俯角 -50°（退出阈 -40° 之外）→ 20 帧后回 N=1
+    scene.camera.pitch = (-50 * Math.PI) / 180
+    for (let i = 0; i < 20; i++) cb(scene, t)
+    expect(calls().at(-1)[4].upscaleDivisor).toBe(1)
+    // 高度带外（太空）不触发
+    scene.camera.pitch = 0
+    scene.camera.positionCartographic = { height: 1e7 }
+    const n1 = calls().length
+    for (let i = 0; i < 25; i++) cb(scene, t)
+    expect(calls().length).toBe(n1)
+  })
+
+  it('用户显式 upscaleDivisor=2 → 自适应禁用（重建不发生）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    Object.assign(scene.camera, { pitch: 0, positionCartographic: { height: 1259 } })
+    createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      upscaleDivisor: 2
+    })
+    const n0 = (createCloudsPass as any).mock.calls.length
+    const cb3 = scene._listeners.preRender[0]
+    const t = JulianDate.now()
+    for (let i = 0; i < 25; i++) cb3(scene, t)
+    expect((createCloudsPass as any).mock.calls.length).toBe(n0)
+  })
+
+  it('mock camera 无 pitch/positionCartographic（旧 mock 形态）→ NaN 安全恒不触发', () => {
+    const { scene, cb, calls, t } = setupAdaptive()
+    const n0 = calls().length
+    for (let i = 0; i < 25; i++) cb(scene, t)
+    expect(calls().length).toBe(n0)
+  })
+})

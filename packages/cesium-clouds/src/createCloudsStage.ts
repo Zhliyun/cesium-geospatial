@@ -159,6 +159,18 @@ export const WEATHER_PRESETS: Record<CloudsWeatherPreset, { coverage: number; fi
 }
 
 /** 烘焙输入（T6 options.weatherBake；仅这些变化才需重烘——采样时调制走 uniform 热切，spec §4.3）。 */
+// ── B3 相机态自适应 upscale 常量（2026-09-04）──
+// 高度带：甲物理域 750-8000m 内缩防边界抖动（贴甲底掠射 1259m 实测 45 FPS 是触发场景）
+const ADAPTIVE_HEIGHT_MIN = 900
+const ADAPTIVE_HEIGHT_MAX = 7300
+// 俯角滞回：进入 >-35°（近水平成本爆炸域），退出 <-40°（回俯视/仰视低成本域）——
+// 10° 带宽防拖拽在阈值附近反复重建（重建含 atlas 重烘 ~200-500ms，必须防抖）
+const ADAPTIVE_PITCH_ENTER_DEG = -35
+const ADAPTIVE_PITCH_EXIT_DEG = -40
+// 连续帧数防抖：瞬时穿越不切，稳态驻留才切
+const ADAPTIVE_STABLE_FRAMES = 20
+
+/** 烘焙输入（T6 options.weatherBake；仅这些变化才需重烘——采样时调制走 uniform 热切，spec §4.3）。 */
 export interface CloudsWeatherBakeOptions {
   /** 演化周期（小时）；缺省 5.3（64 切片 × 5min）。demo ?cloudsEvolutionHours=。 */
   evolutionHours?: number
@@ -280,6 +292,14 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * 打满 28 FPS）调大可大幅削减远云步数。demo `?cloudsHitMipBoost=`。
    */
   hitStepMipBoost?: number
+  /**
+   * 【2026-09-04 B3 相机态自适应 upscale】甲内+近水平视角自动切 upscaleDivisor=2
+   * （march RT 面积 ÷4：1259m 贴甲底 1080p 实测 45 FPS→满帧；静止 diff 4.87% 亚显著），
+   * 出域回 1（云外观测逐位不变）。判据=高度带 [900,7300]m + 俯角滞回（>-35° 进 / <-40° 出）
+   * + 连续 20 帧防抖；切换=impl 重建（atlas 重烘 ~200-500ms 单次卡顿）。缺省开；
+   * 用户显式 options.upscaleDivisor 时禁用（显式 > 自适应）。demo `?cloudsAdaptive=0` 关。
+   */
+  adaptiveUpscale?: boolean
   /**
    * 【2026-09-04 march 实验参数直通】单变量 perf 分解用（仅显式传时覆盖档位值）：
    * 主 march 迭代上限 / 透射率早退阈值 / 受照次级 march 预算 / 最大步长。
@@ -1030,6 +1050,13 @@ function buildCloudsStageImpl(
         // 仅 skip-path 创建。overlay 不在此清单（v2 spec §6.1：per-handle 资源，由顶层
         // handle.destroy/setQuality 失败分支摘）
         cloudsPass.destroy()
+        // resolve primitive 的 add 在本函数（L776 区）——remove 同层对称配对。shell.update
+        // 虽有 destroyed 守卫，但残留 collection 属泄漏（B3 热切重建路径首次真实走到这里）
+        if (resolvePass != null) {
+          ;(scene.primitives as unknown as { remove: (p: unknown) => boolean }).remove(
+            resolvePass.primitive
+          )
+        }
         resolvePass?.destroy()
         shadowPass?.destroy()
         shadowTurbulenceDummy?.destroy()
@@ -1068,7 +1095,23 @@ export function createCloudsStage(
   // ── 首次 impl（spec §7）：applied 由顶层解析喂 buildImpl；setQuality 换档时以
   //    「创建时用户显式 options + 新 quality」重新 resolve（用户显式参数保留，§5）──
   const initialQuality = options.quality ?? 'high'
-  let impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(initialQuality, options))
+  // 【2026-09-04 B3 相机态自适应 upscale】甲内+近水平视角（1259m 贴甲底 pitch -14° 实测
+  // 1080p 仅 ~45 FPS）主 march 云内长路径全分 march 是唯一剩余大头（方案 A 后 god rays/
+  // BSM 已非大头，专家组三路共同首推）。自适应=相机进「甲内+近水平」域时切
+  // upscaleDivisor=2（march RT 面积 ÷4，实测满帧+静止 diff 4.87% 亚显著），出域回 1
+  // （云外观测逐位不变）。用户显式 options.upscaleDivisor 时自适应禁用（显式 > 自适应）。
+  const adaptiveEnabled =
+    options.adaptiveUpscale !== false && options.upscaleDivisor == null
+  // effectiveOptions：自适应切换写 upscaleDivisor 后供重建；copy 防改调用者对象。
+  // 后续全部重建（setQuality/自适应）统一走它——保持自适应态跨 quality 换档。
+  const effectiveOptions: CloudsStageOptions = { ...options }
+  let impl = buildCloudsStageImpl(
+    scene,
+    luts,
+    weather,
+    effectiveOptions,
+    applyQualityPreset(initialQuality, effectiveOptions)
+  )
   let currentQuality: CloudsQualityPreset = initialQuality
   let destroyed = false
   // T6：激活中的天气预设记在 handle 侧——setQuality 重建 impl（params/state 全新）后重放，
@@ -1077,6 +1120,63 @@ export function createCloudsStage(
   if (options.weatherPreset != null) {
     impl.setWeatherPreset(options.weatherPreset)
     activePreset = options.weatherPreset
+  }
+
+  // ── B3 自适应状态机（滞回 + 防抖；NaN 安全：mock/异常 camera 判据恒 false=禁用）──
+  let adaptiveActive = false
+  let adaptiveEnterRun = 0
+  let adaptiveExitRun = 0
+  const applyAdaptiveDivisor = (n: 1 | 2): void => {
+    if (destroyed || effectiveOptions.upscaleDivisor === n) return
+    console.info(`[clouds] adaptive upscale → N=${n}（甲内近水平域${n === 2 ? '进入' : '离开'}）`)
+    effectiveOptions.upscaleDivisor = n
+    impl.destroy()
+    try {
+      impl = buildCloudsStageImpl(
+        scene,
+        luts,
+        weather,
+        effectiveOptions,
+        applyQualityPreset(currentQuality, effectiveOptions)
+      )
+      if (activePreset != null) impl.setWeatherPreset(activePreset)
+    } catch (e) {
+      // 原子性同 setQuality：摘 overlay 防悬空 bridge 静默黑帧
+      destroyed = true
+      removeOverlay()
+      throw e
+    }
+  }
+  const updateAdaptive = (): void => {
+    if (!adaptiveEnabled) return
+    // 判据：相机在甲内高度带 + 俯角浅（近水平）。俯视（pitch 很负）时甲内穿甲路径短
+    // 成本低（2519m 俯视实测满帧），不切。Cartographic/pitch 异常（mock/未就绪）恒不触发。
+    const carto = scene.camera.positionCartographic
+    const height = carto != null ? carto.height : Number.NaN
+    const pitchDeg = (scene.camera.pitch * 180) / Math.PI
+    const inDomain =
+      Number.isFinite(height) &&
+      Number.isFinite(pitchDeg) &&
+      height >= ADAPTIVE_HEIGHT_MIN &&
+      height <= ADAPTIVE_HEIGHT_MAX &&
+      pitchDeg > (adaptiveActive ? ADAPTIVE_PITCH_EXIT_DEG : ADAPTIVE_PITCH_ENTER_DEG)
+    if (inDomain) {
+      adaptiveEnterRun++
+      adaptiveExitRun = 0
+      if (!adaptiveActive && adaptiveEnterRun >= ADAPTIVE_STABLE_FRAMES) {
+        adaptiveActive = true
+        adaptiveEnterRun = 0
+        applyAdaptiveDivisor(2)
+      }
+    } else {
+      adaptiveExitRun++
+      adaptiveEnterRun = 0
+      if (adaptiveActive && adaptiveExitRun >= ADAPTIVE_STABLE_FRAMES) {
+        adaptiveActive = false
+        adaptiveExitRun = 0
+        applyAdaptiveDivisor(1)
+      }
+    }
   }
 
   // ── 顶层 overlay（spec §6.2 v2）：per-handle 资源，跨 impl 存活（换档只切 uniform 源）。
@@ -1129,7 +1229,10 @@ export function createCloudsStage(
   //    setQuality 换 impl 引用即切换驱动对象。
   const removePreRender = scene.preRender.addEventListener(
     (_scene: Scene, time: JulianDate) => {
-      if (!destroyed) impl.onPreRender(time)
+      if (!destroyed) {
+        updateAdaptive()
+        impl.onPreRender(time)
+      }
     }
   )
 
@@ -1166,7 +1269,13 @@ export function createCloudsStage(
       if (next === currentQuality) return
       impl.destroy()
       try {
-        impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(next, options))
+        impl = buildCloudsStageImpl(
+          scene,
+          luts,
+          weather,
+          effectiveOptions,
+          applyQualityPreset(next, effectiveOptions)
+        )
         currentQuality = next
         // T6：激活中的预设重放到新 impl（跨换档保持；undefined=无预设，新 impl 天然缺省态）
         if (activePreset != null) impl.setWeatherPreset(activePreset)

@@ -134,6 +134,20 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
+  it('destroy 后每个 MRT texture 恰销毁 1 次（shadowLenTex double-destroy 回归锚，2026-09-04）', () => {
+    // 【2026-09-04 B3 自适应真机热切首次暴露】shadowLenTex 在 lightShafts=true 时已含于
+    // mrtTextures 数组，destroy 清单里 forEach+显式 ?.destroy() 双重销毁 → DeveloperError。
+    // god rays 合并以来 impl.destroy 从未在真机触发（页面关闭不调用），本用例锁死。
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const pass = createCloudsPass(scene, createMockLuts(), createMockWeather(), state) // lightShafts 默认开
+    const texs = [pass.colorTexture, pass.depthVelocityTexture, pass.shadowLengthTexture!]
+    pass.destroy()
+    for (const t of texs) {
+      expect((t as unknown as { destroy: ReturnType<typeof vi.fn> }).destroy).toHaveBeenCalledTimes(1)
+    }
+  })
+
   it('MRT：lightShafts 显式关时 2 texture（drawBuffers 数须=shader out 数；M5 默认开为 3——见 M5 T2 用例）', () => {
     vi.clearAllMocks()
     const scene = createMockScene()
