@@ -1,134 +1,205 @@
-# 云预算自适应设计——贴地掠射+黄昏性能（A 太阳角影子预算 / B 视线仰角段长收紧）
+# 云预算自适应设计——贴地掠射+黄昏性能（A 太阳角影子预算 / B 视线仰角段长收紧）r2
 
-- 日期：2026-09-04
-- 状态：设计定稿（用户逐节确认），待 Phase 0 基线数据校准常数
+- 日期：2026-09-04（r2：三专家评审修订版；r1 见 git 历史）
+- 状态：设计定稿待复审（三专家裁决全部采纳，见 §9 评审记录）
 - 动机：docs/superpowers/plans/2026-09-04-surface-grazing-rotate-lag-results.md
-  （贴地掠射+黄昏=管线最重视角类：纯球 60 → +大气 15.5 → +云 9-10 FPS；
-  黄昏实时时钟坏窗口 3× 波动；旋转 TAA rejection 突刺 p95 136ms/83 长帧）
-- 用户拍板记录：验收标准=Phase 0 基线数据定目标；画质红线=默认启用+独立逃生门
-  +白天/高太阳角逐位零回归硬约束；范围=只做云侧（大气掠射降载留档候选）；
-  实现路径=方案 1（运行时 uniform 预算自适应，月光门控的连续化推广）
+- 评审：渲染工程（2C3M4m 全采纳）、性能方法学（2C5M3m 全采纳）、对抗红队
+  （七路攻击：三重击穿/击穿/部分击穿×3/未破×1，全采纳堵法）——交叉命中两处
+  公式级错误（C1 赤纬误当仰角、C2 曲线方向反），红队实锤 CI 前提性错误
+
+## 0. 用户拍板记录（含 r2 重拍板项）
+
+- 验收标准：Phase 0 基线数据定目标（不拍脑袋）
+- 画质红线：默认启用+独立逃生门；零回归硬约束（r2 重述为显式域，见 §3/§4/§7）
+- 范围：只做云侧 A+B；大气掠射降载留档候选
+- 实现路径：方案 1（运行时 uniform 预算自适应，月光门控连续化推广，开环确定性）
+- **r2 重拍板**：「白天零回归」的旧表述作废（红队证明其为不可兑现的模糊承诺），
+  改为显式域承诺（§7）——请用户对新城确认。
 
 ## 1. 目标与非目标
 
-**目标**：贴地掠射+黄昏场景下，云侧渲染成本显著下降（帧率目标由 Phase 0 基线数据
-定稿写回本节），旋转突刺（>100ms 长帧数）对齐高度分支 A/B 口径显著下降
-（83→5 长帧为参考量级），画质损失经用户真机目验可接受。
+**目标**：贴地掠射+黄昏场景云侧成本显著下降（帧率目标 Phase 0 数据定稿回填 §7），
+旋转突刺（>100ms 长帧）按重测基线等比收缩（协议见 §6.6）。
 
-**非目标**（明确不碰）：
-- 大气 stage 掠射成本（Phase 0 量化占比，若为大头单独立项）
-- 时域/分辨率降载（用户两轮否决方向，本设计不重提；方案 3 反馈闭环同族亦否）
-- god rays 月光门控现状、qualityPresets 档位结构、BSM cascade/mapSize 结构参数
-- 夜间 BSM 是否可停画（观察到的潜在浪费，留档候选不立项）
+**非目标**：大气 stage 掠射成本（Phase 0 量化占比，若为大头单独立项）；时域/分辨率
+降载（用户两轮否决，不重提）；god rays 月光门控现状；qualityPresets 档位结构；
+BSM cascade/mapSize 结构参数；夜间 BSM 停画（留档候选）。
 
-## 2. Phase 0：基线复测与常数校准（spec 首任务）
+**预期上限与止损门**（Phase 0 强制输出）：A+B 理论上限 =（profile 分账的 BSM 生成
+ms + 主 march ms）× 最大收缩率。若上限 <10ms（≈1.5FPS），回用户拍板是否转大气
+掠射立项——不自动加深收缩率凑数。
 
-1. 目标机位 `camera=108.2465,34.3312,19,52.0,-2.6` 钉 `?time=2026-09-04T10:00:00Z&play=0`
-   （复现坏窗口太阳角），合并后 main 上重测三级阶梯（`atmo=0`/`clouds=0`/默认 ×
-   静止/旋转）——注意旧阶梯测于合并前高度，须重测。
-2. 据分解定帧率目标（写回 §1），并定 A/B 曲线常数（下表起草值 → 校准值）。
-3. 测量纪律：headed 真机、CDP 旋转、rAF 分窗统计、同批成对、单 tab
-   （ego-browser 纪律）、`?time=`+`?play=0` 钉死。
+## 2. Phase 0：基线复测、成本分账与常数校准（spec 首任务）
 
-**起草常数表**（全部 Phase 0/真机校准后定稿）：
+代表机位 `camera=108.2465,34.3312,19,52.0,-2.6`（实际停留于地表 ~490-655m，
+当地太阳仰角 10:00Z≈11.3°，红队实算）。测量纪律：headed 真机、单 tab gotoAndWait、
+`?time=`+`?play=0` 钉死、N≥3 取中位、冷却复测、低帧率域用 p50 帧时间（勿用 FPS
+行均值）、环境记录引用 scripts/perf/baseline.md 头部模板。
 
-| 常数 | 起草值 | 语义 |
-|---|---|---|
-| A_SUN_ELEV_FULL | 30°（起草） | 乘数=1 的太阳仰角下界；**定稿=max(30°, CI 最低场景仰角+5°)**（§3 零回归域） |
-| A_SUN_ELEV_FLOOR | 5° | 乘数=下限的太阳仰角上界 |
-| A_BUDGET_FLOOR | 0.5 | 影子预算乘数下限 |
-| B_HEIGHT_GATE | 2000m | 相机高度激活门（严格小于才启用） |
-| B_ELEV_FULL | 10° | 段长不收紧的视线仰角下界 |
-| B_K0 | 0.5 | 水平掠射段长乘数 |
+**数据清单**：
+1. 三级阶梯（atmo=0/clouds=0/默认 × 静止/旋转）——归因地形/大气/云。
+2. **逐 stage GPU 分账**（`?profile=1`，仅静止测——旋转重载视图会压崩标签页）：
+   BSM 生成端 / 主 march / resolve 各占多少——A 只动 BSM、B 只动主 march，
+   两者收益上限=各自作用面。
+3. **仰角-成本扫描**：4-5 个钉时刻（如 04:00/08:00/09:30/10:00/10:30Z）静止 p50
+   ——得「太阳仰角→成本」曲线定 A 曲线形状，并验证最坏窗口位置。
+4. **预算收缩响应扫描**（A 的代理）：钉 10:00Z 下 `?cloudsQuality=low/medium/high`
+   对照。**B 无现成代理——B_K0 只能实现后二轮校准，本 spec 明说 Phase 0 不定 B_K0**。
+5. **B 有效性探针**：临时 hardcode k=0.25 真机测静止 FPS 响应——验证「步数∝段长」
+   前提未被既有段长/8 步长 clamp（clouds.frag:534）抵消；无斜率则 B 弃案。
+6. **A 撞线仰角计算**：shadow.frag:55 `stepSize=clamp(段长/maxIter,minStep,maxStep=1000)`
+   ——maxIter×maxStep 的覆盖半径 vs 目标域影子光线段长上界，推导 FLOOR 下界
+   （见 §3 硬约束）。现状 high 档 maxIter=50 时 50km 外已截断——先量化现状截断域。
+7. 实算回填：CI 七场景与目标场景的太阳仰角（celestialDirections.ts 同源 node 实算，
+   GMST fallback 精度足够；红队手算参考值：95.7°E=28.3°、139.2°E=59.9°、
+   108.2°E@10:00Z=11.3°）+ 硬code 进 §6.5 枚举表并注释来源。
 
 ## 3. A：太阳角自适应影子预算（BSM 生成端）
 
-**物理依据**：BSM（shadow.frag）从太阳方向 march 云层算影。太阳仰角越低光线掠射
-路径越长越贵，而低太阳角影子又长又软——细节最不值钱时恰好最贵。
+**输入量（r2 修正——r1 公式算的是赤纬，三专家交叉击穿）**：
+当地太阳仰角 `elev = asin(clamp(dot(normalize(cameraPositionWC), sunDirection), -1, 1))`
+——与 clouds.frag:594 `muSunLocal = dot(surfaceNormal, sunDirection)` 同语义；贴地
+机位与云域 up 差 <0.1° 可忽略。
 
-**实现**（全 JS 侧，零 shader 编译分支）：
-1. `createCloudsStage` 每帧由 `state.sunDirection` 算太阳仰角
-   `elev = asin(dot(normalize(sunDirection), 地轴单位向量))`（ECEF z 轴）。
-2. 连续曲线：`mult = 1 + (A_BUDGET_FLOOR − 1) × smoothstep(A_SUN_ELEV_FLOOR, A_SUN_ELEV_FULL, elev)`
-   ——高太阳角乘数=1（原值）；随仰角降低平滑下降；无阶跃（日出日落不闪变）。
-3. 乘数改写 BSM 生成端 march uniforms：`shadow.march.maxIterationCount × mult`
-   （取整）、`shadow.march.minStepSize / mult`（步长加大步数减少；不超过 maxStepSize
-   约束，实现处 clamp）。uniformMap 闭包每帧求值，无重建、无重编译。
-4. BSM 内容随预算逐帧变化无额外失效：BSM 本就逐帧 preRender 重画（temporal resolve
-   消费），预算是太阳仰角的连续函数，与 temporal/velocity 兼容（同 M4 冻结论证）。
+**曲线（r2 修正方向）**：
+`mult = A_BUDGET_FLOOR + (1 − A_BUDGET_FLOOR) × smoothstep(A_SUN_ELEV_FLOOR, A_SUN_ELEV_FULL, elev)`
+——elev≥FULL → mult=1（逐位原值域）；elev≤FLOOR → mult=FLOOR；中间平滑无阶跃。
 
-**零回归域**：`elev ≥ A_SUN_ELEV_FULL` 时输出与现状逐位相同。⚠️ CI 七场景的太阳
-仰角须 Phase 0 实算回填（pin `01:00Z` 下 139°E 场景≈40°+，但 95.7°E 场景为当地
-清晨约 20-25°，**初判会落进过渡域**）——定稿规则：`A_SUN_ELEV_FULL = max(30°,
-CI 最低场景仰角 + 5° 余量)`，保证 CI 全域乘数恒 1；§6.5 单测以实算值枚举守卫。
-若该定稿值压缩了 A 的黄昏收益空间，按零回归优先原则接受（不做 CI ref 重录换域）。
+**作用点**：仅 `shadow.march.maxIterationCount`（high 档 50）。闭包返回值层求值：
+`() => Math.max(1, Math.round(params.shadowMarch.maxIterationCount × mult))`
+——params 源对象**永不被回写**（防逐帧复利衰减 25→12→6→1 污染档位语义）。
+r1 的 minStepSize/mult 杠杆砍掉（high 档 minStep=100 远小于自然基步长，除法无效——
+红队攻击 4，YAGNI）。
 
-**逃生门**：`?cloudsShadowAdaptive=0`（URL）→ 乘数恒 1。
+**覆盖硬约束（红队攻击 4 新增）**：步长 `clamp(段长/maxIter, minStep, maxStep=1000)`
+在 maxIter 减半后，若撞 maxStep 上限则覆盖半径减半=**影子尾部漏采错位（banding/
+错位，非变淡）**。硬约束：`maxIter(FLOOR) × maxStep ≥ 目标域影子段长上界`，FLOOR
+下界由此推导且 **≥0.5 硬性**；不满足则弃案回用户（不自动加深收缩）。Phase 0 任务
+6 先算现状撞线域。
+
+**收益场景与 BSM 重画时机**（createCloudsStage.ts:986-988 实证）：
+`if (freezeActive || changed || shadowTemporal) render()` ——旋转/云演化帧逐帧重画
+（**A 的收益正对旋转卡顿主诉**）；完全静止帧跳过重画（白赚，已有机制）。默认
+`shadowTemporal=off`（=M3 无 resolve 无 velocity；demo 仅 `?cloudsShadowTemporal=1`
+显式开）——**连续性靠预算连续性本身**（黄昏乘数变化 ~0.2%/min；SUN_QUANT_STEP
+量化台阶扰动 <0.1% 不可见），r1 的「resolve 平滑」话术删除（引用了不存在的默认
+机制）。仅当用户开 shadowTemporal=1 时，逃生门成对截图须等 resolve 收敛。
+
+**常数（Phase 0 定稿）**：
+| 常数 | 起草值 | 语义 |
+|---|---|---|
+| A_SUN_ELEV_FULL | **20°**（起草，硬上限 30°） | 乘数=1 域下界；红队实算后由目标场景校准（r1 的「CI 最低+5°」规则作废——CI 门禁 clouds=0 不渲染云，前提不成立，见 §7） |
+| A_SUN_ELEV_FLOOR | 5° | 乘数=FLOOR 的仰角上界 |
+| A_BUDGET_FLOOR | **≥0.5 硬下界**（起草 0.5） | 预算乘数下限；由 §3 覆盖约束推导可更严；不达标回用户重立项 |
+
+**逃生门**：`?cloudsShadowAdaptive=0` → 乘数恒 1（uniform 同值逐位回退）。
 
 ## 4. B：视线仰角自适应段长（主 march）
 
-**物理依据**：贴地掠射时主 march 光线斜穿云层路径长（步数∝段长），而近地平线的
-远云已被大气雾霾+高空渐隐（50-300km fade）双重遮蔽——收紧段长的画质代价在该域
-不可见；高空掠射（bug6 类）大气薄、远云清晰，不可收。
+**物理依据（r2 修正）**：贴地掠射光线斜穿云层路径长（步数∝段长，前提待 Phase 0
+探针验证）。r1 的「高空渐隐遮蔽」论据**删除**（该 fade 是相机高度门控，对 19m 贴地
+相机完全无效——红队攻击 6）；贴地域的真实遮蔽=大气雾霾一项，且黄昏地平线云带
+（云高 2km@50km≈2.3° 仰角）**整带落在收紧域内=最显眼内容**——K0/elev 常数校准
+必须含黄昏地平线云带目验，不做「不可见」的无据假设。
 
-**实现**（GLSL 两行公式，参数全由 JS uniform 注入）：
-1. JS 侧按相机高度产出门控 uniform：`u_grazingGate = cameraHeight < B_HEIGHT_GATE ? 1 : 0`
-   （严格小于——CI nadir 场景恰 2000m 不触发），以及曲线常数 uniforms
-   （K0/elevLo/elevHi，Phase 0 校准值）。
-2. GLSL 侧主 march 段长收紧（getRayNearFar 之后、与既有段长/8 clamp 叠乘）：
+**实现**（GLSL 公式两行，参数全由 JS uniform 注入）：
+1. JS 侧计算并注入：门控（**r2 连续化——红队攻击 2**）
+   `u_grazingGate = 1 − smoothstep(1500, 2500, cameraHeight)`（相机穿越门限平滑
+   过渡，无阶跃跳变）；曲线常数 u_grazingK0 / u_grazingElevLo / u_grazingElevHi
+   （**注意 elev 用 sin 值域注入或 GLSL 内 sin()，二选一写死**——防 TS 镜像 fixture
+   在此漂移）。
+2. GLSL 侧：**在 marchClouds 内局部段长变量定义处直接替换**（r2 修明确落点——该
+   局部变量被下游三处消费：段长/8 步长 clamp、startJitter 守卫（53e8bc6 盐粒黑块
+   修复：段长<8×stepSize 时关 jitter）、march 终止；只喂终止条件会导致 jitter 守卫
+   用旧段长误判→黑块复发风险）：
    ```
-   float sinElev = dot(rayDir, normalize(position));        // 逐像素视线仰角 sin
-   float k = mix(K0, 1.0, smoothstep(elevLo, elevHi, sinElev));
-   maxRayDistanceEff = min(maxRayDistance * mix(1.0, k, u_grazingGate), maxRayDistance);
+   // maxRayDistance = rayNearFar.y - rayNearFar.x（局部段长，非 uniform maxRayDistance）
+   float k = mix(u_grazingK0, 1.0, smoothstep(u_grazingElevLo, u_grazingElevHi, abs(sinElev)));
+   maxRayDistance = min(maxRayDistance * mix(1.0, k, u_grazingGate), maxRayDistance);
    ```
-   仰角 ≥ elevHi 或高度门关：逐位原值。
-3. 逐像素性保留：同屏下半（打地/掠射）收紧、上半（仰视）不动。
+   sinElev = dot(rayDir, normalize(cameraPosition))（相机位置逐像素共用，march 前算
+   一次；密切球局部系与测地法线差 ≤0.19° 由校准吸收）。**取 abs**：俯视掠射（相机
+   在云上）与仰视掠射同样产生长穿越路径，双向对称收紧；云下相机俯视线无云段可
+   march（近端空段），收紧为无成本 no-op。|sinElev| ≥ elevHi 或门≈0：逐位原值
+   （gate=0 时 mix=1.0 精确、min(x,x)=x，IEEE 逐位）。
+3. 与 getRayNearFar 既有截断（nearFar.y=min(nearFar.y, maxRayDistance)）共存：先 min
+   后乘，单调收缩无冲突（渲染专家已核）。
 
-**零回归域**：`cameraHeight ≥ B_HEIGHT_GATE` 的全部场景逐位同现状（CI 七场景
-最低 2000m 恰在门外、视觉门禁四场景 ≥5000m）；同帧内仰角 ≥ elevHi 像素逐位不变。
+**零回归域**：cameraHeight ≥ 2500m（平滑门上界）逐位原值；同帧内 |sinElev| ≥ elevHi
+像素逐位不变。CI 七场景因 query 含 `clouds=0` 云 stage 不实例化——对本改动天然
+免疫（nadir 2000m 虽落在门平滑过渡区 gate≈0.5 亦无云可渲染）；CI 门禁继续作为
+大气 stage 回归门（§7）。
 
-**逃生门**：`?cloudsGrazingClamp=0`（URL）→ u_grazingGate 恒 0。
+**逃生门**：`?cloudsGrazingClamp=0` → u_grazingGate 恒 0（IEEE 逐位回退；自动化无处
+落地云侧 diff——真机双 URL 截图 pixel-diff=0 为准，见 §6.6）。
 
 ## 5. 与既有机制的关系
 
-- **月光门控（7d525fc）**：god rays 用 `if (nightFactor × moonFactor > 0)` 整段跳过
-  ——本设计同族推广（0/1 门 → smoothstep 连续预算），代码评审对照该先例。
-- **段长/8 clamp（53e8bc6/0cbcfe2）**：既有 `stepSize = min(stepSize, max(段长×0.125,
-  minStepSize))` 不动，B 的 `maxRayDistanceEff` 在其上游收窄段长，两者叠乘。
-- **qualityPresets**：档位值仍是预算上限的单一来源（A/B 只在档位值域内做乘法收缩，
-  不放大）；low 档用户与自适应叠加语义=更省，无需特判。
-- **M4 静止冻结**：预算是相机/太阳的确定连续函数——静止时逐帧同值，冻结行为不变。
+- **月光门控（7d525fc）**：god rays `if (nightFactor × moonFactor > 0)` 整段跳过——
+  本设计同族推广（0/1 门 → smoothstep 连续预算）。
+- **段长/8 clamp（53e8bc6/0cbcfe2）**：§4 落点替换局部段长后，步长 clamp 与 jitter
+  守卫自动一致（渲染专家 M3 修法）；L528 起始步长只依赖 rayNearFar.x 不受影响。
+- **qualityPresets**：档位值=预算上限单一来源，A/B 只做域内收缩不放大；low 档叠加
+  语义=更省，无特判。
+- **M4 主 march temporal**：与 A/B 无耦合（A 动 BSM 端、B 动段长）；静止冻结
+  （positionWC 位移<0.01m 冻 frame/jitter 相位）在 play=0 下逐帧同值；**play=1 下
+  预算随太阳/云场连续缓变，非跳变**（r2 措辞修正）。
+- **haze/god rays 侧效应**：god rays 段长随 frontDepth 顺带缩短（收益方向）；haze
+  解析雾仍按原段长积分（无 crash）——归真机验收项。
 
-## 6. 测试策略（TDD）
+## 6. 测试与验收
 
-1. A 曲线纯函数表驱动单测（仰角→乘数：域内三点+两边界+域外）。
-2. B 参数计算单测（相机高度→门控值：2000 边界严格性、500m/11.6km 两端）。
-3. createCloudsStage 级：注入高/低太阳 sunDirection，断言 shadow march uniforms
-   原值/缩放；注入不同相机高度，断言 grazing 门控 uniform。
-4. GLSL：glslang 编译测试（compile.test 惯例）+ 公式数值 fixture（TS 镜像同常数，
-   注释声明镜像关系防漂移）。
-5. CI 兼容单测：枚举 CI 七场景（太阳仰角、相机高度），断言全部落在 A/B 零回归域。
-6. 真机验收（用户）：108 机位钉 10:00Z 逃生门成对（帧率/突刺/影子与远云画质目验
-   三对）+ 日本 500m 云海机位回归目验 + 傍晚实时时钟复测用户原场景。
+6.1 A 曲线纯函数表驱动单测（期望值按文字语义写：高仰角=1、低仰角=FLOOR——
+r1 公式方向错误正是此类测试能抓的形态）。
+6.2 B 参数计算单测（高度门平滑域两端+2000/2500 边界、sin 换算一致性）。
+6.3 createCloudsStage 级：注入高/低太阳 sunDirection 断言 shadow march uniform
+原值/缩放；**断言 params 源对象不被回写**；注入相机高度断言 grazing 门控。
+6.4 GLSL：glslang 编译测试 + TS 镜像数值 fixture（常数同源注释防漂移）。
+6.5 **真实消费域枚举**（r2 改——原 CI 枚举是空保护）：真机验收场景 + 云专项工具
+（verify-clouds-distribution.mjs）的场景/钉时刻，实算太阳仰角 hardcode+单测断言
+与 celestialDirections 实算一致。
+6.6 真机验收（用户）：①108 机位钉 10:00Z 逃生门成对（帧率/突刺/画质三对——
+若开 shadowTemporal=1 须等 resolve 收敛再截）；②黄昏地平线云带目验（B 校准必过
+项）；③日本 500m 云海机位回归；④傍晚实时时钟复测原场景。突刺协议钉死：测量
+脚本入库（measure-v3 模式）、40s 窗口、N≥3 中位、CDP 拖拽参数写死、>1s 瓦片突发
+帧单列不混入、**目标按重测基线等比收缩（≤基线×0.5 且 ≤10 帧；「83→5」旧口径随
+高度分支合并作废）**。
 
-## 7. 验收标准（Phase 0 定稿后回填）
+## 7. 零回归承诺（r2 显式域重述——**待用户重拍板**）
 
-- [ ] 帧率目标：Phase 0 定稿（写在此处）
-- [ ] 旋转突刺：>100ms 长帧数较合并后基线显著下降（参考量级 83→5）
-- [ ] 画质：用户真机目验通过（逃生门成对对比）
-- [ ] 零回归：CI 七场景门禁逐位 PASS（现有 --check 流程）+ 零回归域单测全绿
-- [ ] 670+ 全量测试绿 + 两包 tsc clean
+- CI 视觉门禁（SSIM/maxΔ 七场景）：query 含 `clouds=0`，云 stage 不实例化——对本
+  改动天然免疫；继续作为**大气 stage 回归门**保留，但不构成云侧验收（spec 明示，
+  防验收误判）。
+- **A 域承诺**：太阳当地仰角 ≥ A_SUN_ELEV_FULL（起草 20°，硬上限 30°，Phase 0 按
+  真实消费域场景校准）→ BSM 预算逐位原值。即约 9:00-16:00（冬短夏长）零回归；
+  **清晨/傍晚低于 FULL 的时段影子预算平滑收缩至 ≥FLOOR≥0.5**——这是设计意图
+  本身，不再称「白天零回归」。
+- **B 域承诺**：cameraHeight ≥ 2500m 或逐像素视线仰角 ≥ elevHi → 逐位原值；贴地
+  （<2500m）+掠射（<elevHi）域内为收缩域。
+- 域外激活必须可一键回退（两逃生门）且回退逐位（IEEE 论证+真机双 URL 截图 diff=0）。
 
-## 8. 风险与边界
+## 8. 风险与硬规则
 
 | 风险 | 缓解 |
 |---|---|
-| 低太阳角影子变淡/细节损失 | 常数校准+逃生门；影子时域 resolve 平滑 |
-| 掠射远云变薄显形 | 高度门 2000m 限定贴地域；远云本被雾霾遮蔽 |
-| 大气 stage 天花板（非本设计范围） | Phase 0 量化占比给预期；若为大头单独立项 |
-| 曲线常数拍脑袋 | 全部标注起草值，Phase 0 数据+真机校准定稿 |
+| 影子 banding/错位（非变淡——maxStep 撞线截断域扩大） | §3 覆盖硬约束推导 FLOOR 下界；Phase 0 撞线仰角计算；撞线即弃案不硬上 |
+| 掠射远云/地平线云带变薄显形 | 高度门限制贴地域；**黄昏地平线云带目验为校准必过项**（红队攻击 6：该云带整带在收紧域） |
+| B 前提不成立（步长 clamp 抵消） | Phase 0 探针先验证斜率，无斜率 B 弃案 |
+| 大气 stage 天花板 | Phase 0 分账+理论上限公式（§1）；<10ms 止损回用户 |
+| 常数漂移成「降档换皮」 | FLOOR≥0.5 硬下界、FULL≤30° 硬上界、不达标回用户重立项**不自动加深**（红队攻击 7；伪影形态点名：步长加倍产生 banding「带」，用户此前只否决过「糊」——拍板物料=黄昏对照截图） |
 
-相关：[[clouds-inlayer-march-perf]]（性能战役史与测量坑）、
-[[clouds-space-view-stepsize]]（段长 clamp 先例）、
+## 9. 评审记录（2026-09-04，三专家并行，裁决=全采纳）
+
+- 渲染工程：C1 赤纬公式/C2 曲线方向（CRITICAL）+M3 落点/M4 闭包层级/M5 收敛+4minor——
+  全采纳；M5 因 BSM temporal 默认关（红队攻击 3 证实）改写为条件性备注。
+- 性能方法学：C1/C2 交叉确认+M1 CI 空转/M2 Phase 0 三组数据/M3 突刺协议/M4 止损门/
+  M5 B 前提——全采纳（M3 脚本入库与基线重定进 §6.6）。
+- 对抗红队：攻击 1 三重击穿（实算 CI 28.3°/59.9°、用户 11.3°；CI clouds=0 前提性错误；
+  FULL=33.3° 时黄昏收益仅 6.3%）/攻击 2 高度门阶跃/攻击 4 maxStep 撞线/攻击 6 fade
+  论据失效+地平线云带=击穿；攻击 3 BSM temporal 默认关/攻击 5 接线缺口/攻击 7 边界
+  防守=部分击穿；攻击 1e nadir 2000m 边界=未破。全采纳堵法；**FULL 释放至场景校准
+  （黄昏收益从 6.3% 回到 20-38% 空间）**。
+
+相关：[[clouds-inlayer-march-perf]]、[[clouds-space-view-stepsize]]、
 [[clouds-linear-overlay]]（时域降载否决史）、
-docs/superpowers/plans/2026-09-04-surface-grazing-rotate-lag-results.md（动机数据）。
+docs/superpowers/plans/2026-09-04-surface-grazing-rotate-lag-results.md。
