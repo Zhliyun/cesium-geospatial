@@ -1342,20 +1342,20 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
       altitudeOffsetM: 250
     })
     const params = paramsOf(handle!)
-    // 仅低云带 L0/L1 加偏移：minLayerHeights = (750+250, 1000+250, 7500, 0)
-    expect(params.minLayerHeights.x).toBe(1000)
-    expect(params.minLayerHeights.y).toBe(1250)
+    // 仅低云带 L0/L1 加偏移：minLayerHeights = (1500+250, 2000+250, 7500, 0)
+    expect(params.minLayerHeights.x).toBe(1750)
+    expect(params.minLayerHeights.y).toBe(2250)
     expect(params.minLayerHeights.z).toBe(7500) // L2 高卷云不动
-    expect(params.maxLayerHeights.x).toBe(1650)
-    expect(params.maxLayerHeights.y).toBe(2450)
+    expect(params.maxLayerHeights.x).toBe(2400)
+    expect(params.maxLayerHeights.y).toBe(3450)
     expect(params.maxLayerHeights.z).toBe(8000)
     // march 入射壳 + BSM 域随动（红队 BLOCKER-4 教训：packed 标量必须同链重算）
-    expect(params.minHeight).toBe(1000) // 750+250
+    expect(params.minHeight).toBe(1750) // 1500+250
     expect(params.maxHeight).toBe(8000)
-    expect(params.shadowTopHeight).toBe(2450)
-    expect(params.shadowBottomHeight).toBe(1000)
-    // 层间隙空域 [0,1000] [2450,7500]（packIntervalHeights 重扫）
-    expect(params.minIntervalHeights.y).toBe(2450)
+    expect(params.shadowTopHeight).toBe(3450)
+    expect(params.shadowBottomHeight).toBe(1750)
+    // 层间隙空域 [0,1750] [3450,7500]（packIntervalHeights 重扫）
+    expect(params.minIntervalHeights.y).toBe(3450)
     expect(params.maxIntervalHeights.y).toBe(7500)
     // 层成员不随高度变
     expect(params.shadowLayerMask.x).toBe(1)
@@ -1371,20 +1371,20 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
       clouds: true,
       altitudeOffsetM: 99999
     })
-    expect(paramsOf(handleUp!)!.minHeight).toBe(3750) // 750+3000
+    expect(paramsOf(handleUp!)!.minHeight).toBe(4500) // 1500+3000
     handleUp!.destroy()
     const handleDown = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
       clouds: true,
       altitudeOffsetM: -99999
     })
-    expect(paramsOf(handleDown!)!.minHeight).toBe(250) // 750-500
+    expect(paramsOf(handleDown!)!.minHeight).toBe(1000) // 1500-500
     handleDown!.destroy()
   })
 
   it('不传 altitudeOffsetM：params 层 uniforms 保持 defaults 写死值（零回归；写死值是 T2 单测锚）', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
-    expect(paramsOf(handle!).minHeight).toBe(750)
+    expect(paramsOf(handle!).minHeight).toBe(1500)
     expect(paramsOf(handle!).coverage).toBe(0.3)
     handle!.destroy()
   })

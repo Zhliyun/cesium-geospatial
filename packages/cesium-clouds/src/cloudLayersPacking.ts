@@ -22,10 +22,16 @@ export interface CloudLayerParams {
   shadow: boolean
 }
 
-/** 三层云默认值（=CloudLayers.DEFAULT，cloudsDefaultParameters.ts 注释 L229-233 逐字）。 */
+/**
+ * 三层云默认值（结构=CloudLayers.DEFAULT）。
+ * 2026-09-04 缺省高度重定（用户「云层整体偏低」）：L0 750→1500、L1 1000→2000（厚度/密度/
+ * coverage 不动）——低云甲 750-2200m → 1500-3200m（云底 1500m=温带积云典型云底，
+ * 顶 3200m=浓积云合理上限）；L2 高卷云 7500m 物理位置合理不动。packed 派生值自动联动
+ * （cloudsDefaultParameters 亦改为本表派生，单一来源）。
+ */
 export const DEFAULT_CLOUD_LAYERS: CloudLayerParams[] = [
-  { altitude: 750, height: 650, densityScale: 0.2, shapeAmount: 1, shapeDetailAmount: 1, weatherExponent: 1, shapeAlteringBias: 0.35, coverageFilterWidth: 0.6, shadow: true },
-  { altitude: 1000, height: 1200, densityScale: 0.2, shapeAmount: 1, shapeDetailAmount: 1, weatherExponent: 1, shapeAlteringBias: 0.35, coverageFilterWidth: 0.6, shadow: true },
+  { altitude: 1500, height: 650, densityScale: 0.2, shapeAmount: 1, shapeDetailAmount: 1, weatherExponent: 1, shapeAlteringBias: 0.35, coverageFilterWidth: 0.6, shadow: true },
+  { altitude: 2000, height: 1200, densityScale: 0.2, shapeAmount: 1, shapeDetailAmount: 1, weatherExponent: 1, shapeAlteringBias: 0.35, coverageFilterWidth: 0.6, shadow: true },
   { altitude: 7500, height: 500, densityScale: 0.003, shapeAmount: 0.4, shapeDetailAmount: 0, weatherExponent: 1, shapeAlteringBias: 0.35, coverageFilterWidth: 0.5, shadow: false },
   { altitude: 0, height: 0, densityScale: 0.2, shapeAmount: 1, shapeDetailAmount: 1, weatherExponent: 1, shapeAlteringBias: 0.35, coverageFilterWidth: 0.6, shadow: false }
 ]
@@ -62,7 +68,7 @@ export interface PackedLayerUniforms {
 // packIntervalHeights（three uniforms.ts:141-180 语义，产出对齐 cloudsDefaultParameters.ts
 // L235-238 文档）：求「层间隙空域」区间——无任何层覆盖的高度段，供 march 快速跳跃。
 // 端点排序（同高度 open(+1) 先于 close(-1)）后 balance 扫描：0→1（open）处闭合当前
-// 空隙 [cursor, h]，1→0（close）处开启新空隙。默认三层 → 空隙 [0,750] [2200,7500]
+// 空隙 [cursor, h]，1→0（close）处开启新空隙。默认三层 → 空隙 [0,1500] [3200,7500]
 // （第三槽 [0,0] 为补位，保留 three 行为；L3 空层 height=0 不产生端点）。
 function packIntervalHeights(layers: CloudLayerParams[]): { min: Cartesian3; max: Cartesian3 } {
   const entries: Array<{ h: number; delta: number }> = []

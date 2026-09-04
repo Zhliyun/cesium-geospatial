@@ -9,7 +9,7 @@ describe('cloudsConstants', () => {
     expect(CLOUDS_DEFAULT_QUALITY).toBe('high')
   })
 
-  it('三层云高度搬 three 版 CloudLayers（750/1000/7500m）', () => {
-    expect(CLOUDS_LAYER_ALTITUDES_M).toEqual([750, 1000, 7500])
+  it('三层云高度（2026-09-04 重定 1500/2000/7500m，温带积云典型云底）', () => {
+    expect(CLOUDS_LAYER_ALTITUDES_M).toEqual([1500, 2000, 7500])
   })
 })

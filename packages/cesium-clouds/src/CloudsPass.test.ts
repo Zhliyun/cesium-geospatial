@@ -399,8 +399,8 @@ describe('createCloudsPass', () => {
     // 非 6360（km）——clouds bottomRadius uniform 是 three-atmosphere TS 侧米值，
     // 与 Bruneton GLSL const ATMOSPHERE.bottom_radius（km）单位不同
     expect(um.bottomRadius()).toBe(6360000)
-    // 云层高度也是米（minHeight=750 低积云）
-    expect(um.minHeight()).toBe(750)
+    // 云层高度也是米（minHeight=1500 低积云，2026-09-04 重定）
+    expect(um.minHeight()).toBe(1500)
     pass.destroy()
   })
 

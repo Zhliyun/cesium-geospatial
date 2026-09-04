@@ -17,6 +17,7 @@
 
 import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from 'cesium'
 import type { Texture3D } from 'cesium'
+import { DEFAULT_CLOUD_LAYERS, packLayerUniforms } from './cloudLayersPacking'
 
 /**
  * BSM 生成端（ShadowPass）march 档（three-geospatial qualityPresets.ts defaults.shadow 逐字）。
@@ -238,18 +239,19 @@ export interface CloudsParameters {
 }
 
 /**
- * CloudLayers.DEFAULT（three-geospatial CloudLayers.ts:31-68）packed uniform 默认值。
+ * CloudLayers packed uniform 默认值（结构对齐 three-geospatial CloudLayers.ts:31-68）。
  *
- * 4 层：
- *   L0 r  altitude=750  height=650   densityScale=0.2   shapeAmount=1    shapeDetail=1  weatherExp=1  shapeAlter=0.35  coverageFW=0.6  shadow=true
- *   L1 g  altitude=1000 height=1200  densityScale=0.2   shapeAmount=1    shapeDetail=1  weatherExp=1  shapeAlter=0.35  coverageFW=0.6  shadow=true
+ * 4 层（2026-09-04 高度重定后，live 值以 cloudLayersPacking.ts DEFAULT_CLOUD_LAYERS 为单一来源，
+ * 下方返回体经 packLayerUniforms 派生——本注释仅记结构语义）：
+ *   L0 r  altitude=1500 height=650   densityScale=0.2   shapeAmount=1    shapeDetail=1  weatherExp=1  shapeAlter=0.35  coverageFW=0.6  shadow=true
+ *   L1 g  altitude=2000 height=1200  densityScale=0.2   shapeAmount=1    shapeDetail=1  weatherExp=1  shapeAlter=0.35  coverageFW=0.6  shadow=true
  *   L2 b  altitude=7500 height=500   densityScale=0.003 shapeAmount=0.4  shapeDetail=0  weatherExp=1  shapeAlter=0.35  coverageFW=0.5  shadow=false
  *   L3 a  altitude=0    height=0     (default CloudLayer)
  *
  * packIntervalHeights 算法（uniforms.ts:141-180）：entries 排序后 balance=0 处切区间。
- *   entries: (0,open)(0,close)(750,open)(1000,open)(1400,close)(2200,close)(7500,open)(8000,close)
- *   区间: [0,750] [2200,7500] [0,0]
- *   → minIntervalHeights=(0, 2200, 0), maxIntervalHeights=(750, 7500, 0)
+ *   entries: (0,open)(1500,open)(2000,open)(2150,close)(3200,close)(7500,open)(8000,close)
+ *   区间: [0,1500] [3200,7500] [0,0]
+ *   → minIntervalHeights=(0, 3200, 0), maxIntervalHeights=(1500, 7500, 0)
  */
 export function defaultCloudsParameters(): CloudsParameters {
   return {
@@ -334,22 +336,9 @@ export function defaultCloudsParameters(): CloudsParameters {
     turbulenceRepeat: new Cartesian2(20.0, 20.0),
     turbulenceDisplacement: 350.0,
 
-    // 云层 packed（CloudLayers.DEFAULT）
-    minLayerHeights: new Cartesian4(750, 1000, 7500, 0),
-    maxLayerHeights: new Cartesian4(1400, 2200, 8000, 0),
-    minIntervalHeights: new Cartesian3(0, 2200, 0),
-    maxIntervalHeights: new Cartesian3(750, 7500, 0),
-    densityScales: new Cartesian4(0.2, 0.2, 0.003, 0.2),
-    shapeAmounts: new Cartesian4(1, 1, 0.4, 1),
-    shapeDetailAmounts: new Cartesian4(1, 1, 0, 1),
-    weatherExponents: new Cartesian4(1, 1, 1, 1),
-    shapeAlteringBiases: new Cartesian4(0.35, 0.35, 0.35, 0.35),
-    coverageFilterWidths: new Cartesian4(0.6, 0.6, 0.5, 0.6),
-    minHeight: 750,
-    maxHeight: 8000,
-    shadowTopHeight: 2200, // layer 0,1 shadow=true → max(altitude+height) = 2200
-    shadowBottomHeight: 750, // min(altitude) with shadow=true
-    shadowLayerMask: new Cartesian4(1, 1, 0, 0),
+    // 云层 packed：从 DEFAULT_CLOUD_LAYERS 单一来源派生（2026-09-04 前系逐字段手抄副本，
+    // 层缺省调整时会静默脱钩——此后改层缺省只动 cloudLayersPacking.ts 一处）
+    ...packLayerUniforms(DEFAULT_CLOUD_LAYERS),
 
     // BSM（M3，T4 接通；state.shadow 未就绪时 fallback 这些 dummy 值）
     shadowCascadeCount: 3, // = shader #define SHADOW_CASCADE_COUNT 3 = CascadedShadowMaps cascadeCount
