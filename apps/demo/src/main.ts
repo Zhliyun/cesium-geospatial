@@ -637,6 +637,9 @@ async function main(): Promise<void> {
           // BSM 矩阵锚定模式（spec v3）：默认 world 世界锚定固定网格（消移动闪动）；
           // ?cloudsShadowAnchor=frustum 回退视锥拟合（AB 对照基线，含已知缺陷的现实现）
           ...(getString('cloudsShadowAnchor') === 'frustum' ? { shadowAnchor: 'frustum' as const } : {}),
+          // A 太阳角自适应影子预算（spec 2026-09-04 §3）：缺省启用（乘数随当地太阳仰角
+          // 缩放 BSM 生成端步数），?cloudsShadowAdaptive=0 显式关（逐位回退逃生门）
+          ...(getString('cloudsShadowAdaptive') === '0' ? { shadowAdaptive: false } : {}),
           // world 模式 radii×N（E1' 归因实验）：?cloudsShadowScale=5 → {80,168,480}km
           // 膨胀层覆盖全程航迹（缺省 WORLD_RADII_DEFAULT {16,33.6,96}km 单源于 clouds 包）
           ...(getNumber('cloudsShadowScale') != null

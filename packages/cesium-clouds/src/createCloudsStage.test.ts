@@ -1687,3 +1687,65 @@ describe('高空云层渐隐：computeCloudsHeightFade', () => {
     expect(computeCloudsHeightFade(1e6, 5e5, 3e5)).toBe(1)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T-adaptive A：太阳角影子预算（spec 2026-09-04 §3）——preRender 乘数写 state + BSM
+// shadowUniformMap 闭包缩放（params 源不回写）+ options.shadowAdaptive 逃生门
+// ─────────────────────────────────────────────────────────────────────────────
+import { ADAPTIVE_BUDGET_CONSTANTS } from './shadowBudgetAdaptation'
+
+describe('T-adaptive A：太阳角影子预算（spec 2026-09-04 §3）', () => {
+  it('params 源对象永不被回写（红队攻击 7/渲染 M4：复利污染防线）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    const before = paramsOf(handle!).shadowMarch.maxIterationCount
+    // 驱动 preRender 两帧（乘数只写 state；闭包逐帧 round(base·mult) 现算——若有人把
+    // 缩放值回写 params 源，复利衰减一去不返）
+    firePreRender(scene)
+    firePreRender(scene)
+    expect(paramsOf(handle!).shadowMarch.maxIterationCount).toBe(before)
+    handle!.destroy()
+  })
+
+  it('options.shadowAdaptive=false → 乘数恒 1（逃生门，preRender 后仍 1）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      shadowAdaptive: false
+    })
+    // state 对象经 createCloudsPass mock 第 4 参捕获（既有用例同款通道）
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    expect(stateArg.shadowBudgetMult).toBe(1) // 创建期缺省
+    firePreRender(scene)
+    expect(stateArg.shadowBudgetMult).toBe(1) // preRender 尊重逃生门，不随太阳角缩放
+    handle!.destroy()
+  })
+
+  it('缺省开启：preRender 写 state 乘数（∈[BUDGET_FLOOR,1]）+ BSM 闭包返回 round(base·mult) 钳 1', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    const base = paramsOf(handle!).shadowMarch.maxIterationCount
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    const um = (createShadowPass as any).mock.calls[0][0].uniformMap
+    // preRender 前：乘数缺省 1 → 闭包=base 原值（缩放链闭合且恒等）
+    expect(stateArg.shadowBudgetMult).toBe(1)
+    expect(um.maxIterationCount()).toBe(base)
+    // 驱动 preRender：mock 相机 (6378137,0,0) + JulianDateMock 时刻的当地太阳仰角不定，
+    // 但乘数必落在曲线值域 [BUDGET_FLOOR, 1]（spec §3）
+    firePreRender(scene)
+    const mult = stateArg.shadowBudgetMult
+    expect(mult).toBeGreaterThanOrEqual(ADAPTIVE_BUDGET_CONSTANTS.BUDGET_FLOOR)
+    expect(mult).toBeLessThanOrEqual(1)
+    expect(um.maxIterationCount()).toBe(Math.max(1, Math.round(base * mult)))
+    // params 源不变（缩放只发生在闭包返回值层）
+    expect(paramsOf(handle!).shadowMarch.maxIterationCount).toBe(base)
+    handle!.destroy()
+  })
+})

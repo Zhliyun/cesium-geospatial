@@ -127,6 +127,12 @@ export interface CloudsFrameState {
   moonDirection: Cartesian3
   /** Lambert 球积分月相因子（朔 0/弦 0.318/望 1，preRender 由 sun/moon 两方向 dot 算）。 */
   moonIlluminatedFraction: number
+  /**
+   * A 太阳角影子预算乘数（spec 2026-09-04 §3；createCloudsStage preRender 每帧按当地太阳
+   * 仰角更新，缺省 1=无缩放）。CloudsPass 本体不消费——createCloudsStage 的 shadowUniformMap
+   * 闭包读取做 BSM 生成端步数缩放（standalone CloudsPass 无此编排，可选=既有缺省语义）。
+   */
+  shadowBudgetMult?: number
   altitudeCorrection: Cartesian3
   /**
    * M3 BSM 状态（T5 createCloudsStage preRender 填：CascadedShadowMaps.update + ShadowPass.render）。

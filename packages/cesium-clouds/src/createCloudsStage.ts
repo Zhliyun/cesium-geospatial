@@ -119,6 +119,12 @@ import { CascadedShadowMaps } from './CascadedShadowMaps'
 import { createShadowPass, type ShadowPass } from './ShadowPass'
 import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
 import {
+  ADAPTIVE_BUDGET_CONSTANTS,
+  localSunElevationDeg,
+  scaledShadowMaxIterations,
+  shadowBudgetMultiplier
+} from './shadowBudgetAdaptation'
+import {
   CLIMATE_BANDS_FLOOR_DEFAULT,
   CLIMATE_BANDS_FLOOR_PRESET,
   type CloudsParameters,
@@ -234,6 +240,12 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * 机制已验证可用，生成端 jitter + 0.01 慢收敛）。demo `?cloudsShadowTemporal=1` 开。
    */
   shadowTemporal?: boolean
+  /**
+   * A 太阳角自适应影子预算（spec 2026-09-04 §3，缺省 true）：每帧按当地太阳仰角连续缩放
+   * BSM 生成端 maxIterationCount（shadowUniformMap 闭包返回值层，params 源不回写）。
+   * false=乘数恒 1（demo `?cloudsShadowAdaptive=0` 逃生门，逐位回退）。
+   */
+  shadowAdaptive?: boolean
   /**
    * 诊断：冻结 cascade 矩阵（首帧 update 后不再更新，BSM 在冻结网格上每帧重 march）。
    * 噪声分解实验用——「冻结矩阵 + 相机移动」录屏差分 = 非矩阵噪声地板（层切换/jitter/
@@ -528,6 +540,7 @@ function buildCloudsStageImpl(
     sunDirection: new Cartesian3(0, 0, 1),
     moonDirection: new Cartesian3(0, 0, 1),
     moonIlluminatedFraction: 0,
+    shadowBudgetMult: 1, // A 乘数（preRender 每帧按当地太阳仰角更新；缺省 1=无缩放）
     altitudeCorrection: new Cartesian3(),
     atlasTexture: undefined,
     windOffset: new Cartesian2(),
@@ -691,7 +704,10 @@ function buildCloudsStageImpl(
       frame: () => (shadowTemporal ? params.frame : 0),
       inverseShadowMatrices: () => inverseMatrices,
       // shadowMarch 档（qualityPresets.ts defaults.shadow：50/100/1000/1e-5/1e-5/1e-4/2）
-      maxIterationCount: () => params.shadowMarch.maxIterationCount,
+      // A 太阳角自适应（spec 2026-09-04 §3）：生成端步数闭包逐帧按 state 乘数现算
+      //（钳 1 防空转）；params 源不回写——复利污染防线
+      maxIterationCount: () =>
+        scaledShadowMaxIterations(params.shadowMarch.maxIterationCount, state.shadowBudgetMult ?? 1),
       minStepSize: () => params.shadowMarch.minStepSize,
       maxStepSize: () => params.shadowMarch.maxStepSize,
       minDensity: () => params.shadowMarch.minDensity,
@@ -830,6 +846,19 @@ function buildCloudsStageImpl(
           state.moonDirection
         )
       }
+
+      // ── A 太阳角自适应影子预算（spec 2026-09-04 §3）：乘数 preRender 算好存 state，
+      // shadowUniformMap 闭包读取（params 源不回写——复利污染防线）。放太阳段条件外：
+      // fallback 帧（ICRF 缺失）也用 state.sunDirection 现值重算，乘数不滞留旧帧值。
+      state.shadowBudgetMult =
+        options.shadowAdaptive === false
+          ? 1
+          : shadowBudgetMultiplier(
+              localSunElevationDeg(state.sunDirection, camera.positionWC),
+              ADAPTIVE_BUDGET_CONSTANTS.SUN_ELEV_FULL_DEG,
+              ADAPTIVE_BUDGET_CONSTANTS.SUN_ELEV_FLOOR_DEG,
+              ADAPTIVE_BUDGET_CONSTANTS.BUDGET_FLOOR
+            )
 
       // ── T6 云图时间轴（spec §4.1）：CPU float64 mod 后传 uniform（T1 纯函数，同机多 Viewer
       //    clock 同刻 ⇒ 同分布）——evolutionPhaseS 调试钩子仅偏移演化/平流输入，不动太阳 ──

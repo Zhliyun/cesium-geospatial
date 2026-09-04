@@ -28,6 +28,8 @@ const DEG = 180 / Math.PI
  * 当地太阳仰角（度）。r1 C1 修正：dot(sunDir, ECEF z)=赤纬（全球恒值），必须点
  * 相机当地径向——与 clouds.frag:594 muSunLocal=dot(surfaceNormal,sunDirection) 同语义。
  * 贴地机位与云域 up 差 <0.1°，由校准吸收（spec §3）。
+ * 契约：sunDirection 须为 ECEF 单位向量（createCloudsStage preRender normalize 后的
+ * state.sunDirection 满足；非单位向量将系统性抬高/压低仰角读数）。
  */
 export function localSunElevationDeg(sunDirection: Cartesian3, cameraPositionWC: Cartesian3): number {
   const r = Math.sqrt(
