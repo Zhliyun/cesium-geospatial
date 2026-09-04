@@ -634,22 +634,29 @@ vec4 marchClouds(
       // 不采 BSM（月光无云影）、不走 accurate LUT 路径；相位函数复用
       // approximateMultipleScattering（随 ACCURATE_PHASE_FUNCTION define 与太阳项一致）。
       // 同构并列于 sun 项——随后自然走 ×scattering/powder/能量积分，形体感与太阳光照一致。
-      float moonRayDistance = 0.0;
-      float moonOpticalDepth = marchOpticalDepth(
-        position,
-        moonDirection,
-        maxIterationCountToSun,
-        mipLevel,
-        jitter,
-        moonRayDistance
-      );
-      float cosThetaMoon = dot(moonDirection, rayDirection);
-      // 月光谱色：solar_irradiance 是暖白光谱，月光物理上经月面反射（中性偏暖）+ 无大气透射
-      // （月球无大气）——但视觉基准带冷蓝（u_nightTint 同源），与底光色调一致防夜间
-      // 云面混色（2026-08-31 天际线泛红修复配套）。
-      vec3 moonIrradiance = ATMOSPHERE.solar_irradiance
-        * 2.5e-6 * moonLightScale * nightFactor * moonFactor * u_nightTint;
-      radiance += moonIrradiance * approximateMultipleScattering(moonOpticalDepth, cosThetaMoon);
+      // 【2026-09-04 月光 march 白天门控（专家组 A1）】moonIrradiance 乘 nightFactor（昼夜门）
+      // ×moonFactor（月升落门），两项为 0 时下方 marchOpticalDepth 纯白跑——白天每个受照
+      // 云样本白付 ≤maxIterationCountToSun 次 3D 采样（专家实测白天受照样本占比高，省
+      // 30-40% 次级采样）。门控条件严格取乘积 >0：非零任意小值（晨昏带 smoothstep 过渡带）
+      // 仍照跑，光照数学与无条件版逐位等价；sun/moon 方向全屏一致 → warp 内分支一致无发散。
+      if (nightFactor * moonFactor > 0.0) {
+        float moonRayDistance = 0.0;
+        float moonOpticalDepth = marchOpticalDepth(
+          position,
+          moonDirection,
+          maxIterationCountToSun,
+          mipLevel,
+          jitter,
+          moonRayDistance
+        );
+        float cosThetaMoon = dot(moonDirection, rayDirection);
+        // 月光谱色：solar_irradiance 是暖白光谱，月光物理上经月面反射（中性偏暖）+ 无大气透射
+        // （月球无大气）——但视觉基准带冷蓝（u_nightTint 同源），与底光色调一致防夜间
+        // 云面混色（2026-08-31 天际线泛红修复配套）。
+        vec3 moonIrradiance = ATMOSPHERE.solar_irradiance
+          * 2.5e-6 * moonLightScale * nightFactor * moonFactor * u_nightTint;
+        radiance += moonIrradiance * approximateMultipleScattering(moonOpticalDepth, cosThetaMoon);
+      }
 
       #ifdef GROUND_BOUNCE
       // Fudge factor for the irradiance from ground.
@@ -748,7 +755,11 @@ float marchShadowLength(
     float opticalDepth = sampleShadowOpticalDepth(position, 0.0, 0.0, jitter);
     shadowLength += (1.0 - exp(-opticalDepth)) * stepSize * attenuation;
     stepSize *= perspectiveStepScale;
-    rayDistance += stepSize;
+    // 【2026-09-04 god rays march 改造（专家组 A2）】步长封顶对齐主 march（maxStepSize
+    // 共用 uniform）：原版 ×1.01 无封顶，200km 段 ~378 步打满 500 上限；封顶后
+    // minShadowLengthStepSize(50)×1.01^n→1000m，配合段长 clamp（maxShadowLengthRayDistance
+    // 2e5→16000）146 步走满 16km < 150 步预算——远段不再逐 50m 级爬行。
+    rayDistance += min(stepSize, maxStepSize);
   }
   return shadowLength;
 }

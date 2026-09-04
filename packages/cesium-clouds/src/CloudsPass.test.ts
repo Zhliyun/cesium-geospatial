@@ -676,9 +676,11 @@ describe('M5 T2 SHADOW_LENGTH MRT/参数', () => {
     expect(pass.shadowLengthTexture!.width).toBe(1920) // 全分（temporal 默认关）
     expect(pass.shadowLengthTexture!.height).toBe(1080)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
-    expect(um.maxShadowLengthIterationCount()).toBe(500)
+    // 【2026-09-04 god rays march 改造（专家组 A2）】500→150 / 2e5→16000（段长 clamp+步数
+    // 与 50×1.01^n 封顶 1000m 自洽：146 步走满 16km）
+    expect(um.maxShadowLengthIterationCount()).toBe(150)
     expect(um.minShadowLengthStepSize()).toBe(50)
-    expect(um.maxShadowLengthRayDistance()).toBe(2e5)
+    expect(um.maxShadowLengthRayDistance()).toBe(16000)
     pass.destroy()
   })
 

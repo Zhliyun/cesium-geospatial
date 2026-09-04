@@ -287,9 +287,14 @@ export function defaultCloudsParameters(): CloudsParameters {
     secondaryStepScale: 2,
 
     // 云 god rays（M5，three defaults.clouds 逐字）
-    maxShadowLengthIterationCount: 500,
+    // 【2026-09-04 god rays march 改造（专家组 A2）】甲内近水平场景 shadowLength march 与
+    // 主 march 平行同量级打满（500 步上限/无封顶，此前所有归因遗漏的第二 march）：段长
+    // 2e5→16000（god rays 视觉有效域=近中云，attenuation(1-5e-4)^146≈0.93 慢衰减但
+    // 远端光柱贡献被大气散射主导）+ 步数 500→150（50×1.01^n 走满 16km 需 146 步，自洽）
+    // + shader 侧步长封顶 min(stepSize, maxStepSize)。god rays 场景验收后定稿。
+    maxShadowLengthIterationCount: 150,
     minShadowLengthStepSize: 50,
-    maxShadowLengthRayDistance: 2e5,
+    maxShadowLengthRayDistance: 16000,
 
     // scatter 视觉（CloudsMaterial.ts:212-215）
     skyLightScale: 1.0,

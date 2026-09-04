@@ -614,3 +614,41 @@ describe('甲内近水平 march LOD：云内步 mip 调制', () => {
     compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'hit-step mip modulation')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-04 方案 A（专家组排查后实施）：月光 march 白天门控】主循环月光散射块的
+// marchOpticalDepth 朝月 march 在 nightFactor×moonFactor=0（白天/月落）时纯白跑——
+// moonIrradiance 乘两项恒 0。门控条件严格取乘积 >0（晨昏带 smoothstep 过渡带非零
+// 小值仍照跑）→ 光照数学与无条件版逐位等价；白天每受照样本省 ≤toSun 次 3D 采样。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('月光 march 白天门控（方案 A1）', () => {
+  it('门控在场：nightFactor×moonFactor>0 包裹朝月 march', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    expect(src).toContain('if (nightFactor * moonFactor > 0.0) {')
+    // 朝月 march 与 moonIrradiance 仍在（被门控包裹不删除）
+    expect(src).toContain('float moonOpticalDepth = marchOpticalDepth(')
+    expect(src).toContain('approximateMultipleScattering(moonOpticalDepth, cosThetaMoon)')
+  })
+
+  it('glslang：含月光门控完整 shader 真编译', () => {
+    compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'moon march day gate')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-04 方案 A（专家组排查后实施）：god rays march 步长封顶】marchShadowLength
+// 原版 ×1.01 无封顶（200km 段 ~378 步打满 500 上限，甲内近水平场景与主 march 平行
+// 同量级打满——此前归因遗漏的第二 march）。封顶对齐主 march 的 maxStepSize 共用
+// uniform，配合段长 clamp（maxShadowLengthRayDistance 2e5→16000）与步数 500→150
+// 自洽（50×1.01^n 走满 16km 需 146 步）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('god rays march 步长封顶（方案 A2）', () => {
+  it('封顶在场：marchShadowLength 步长 min(stepSize, maxStepSize)', () => {
+    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+    expect(src).toContain('rayDistance += min(stepSize, maxStepSize);')
+  })
+
+  it('glslang：含 god rays 封顶完整 shader 真编译', () => {
+    compileOrFail(buildStandaloneCloudsShaderForValidation(M2_OPTIONS), 'shadow length step cap')
+  })
+})
