@@ -297,11 +297,11 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   hitStepMipBoost?: number
   /**
-   * 【2026-09-04 B3 相机态自适应 upscale】甲内+近水平视角自动切 upscaleDivisor=2
-   * （march RT 面积 ÷4：1259m 贴甲底 1080p 实测 45 FPS→满帧；静止 diff 4.87% 亚显著），
-   * 出域回 1（云外观测逐位不变）。判据=高度带 [900,7300]m + 俯角滞回（>-35° 进 / <-40° 出）
-   * + 连续 20 帧防抖；切换=impl 重建（atlas 重烘 ~200-500ms 单次卡顿）。缺省开；
-   * 用户显式 options.upscaleDivisor 时禁用（显式 > 自适应）。demo `?cloudsAdaptive=0` 关。
+   * 【2026-09-04 B3 相机态自适应 upscale；同日缺省回退为关】甲内+近水平 / 云下仰视
+   * （两个成本爆炸域）自动切 upscaleDivisor=2（march RT 面积 ÷4），出域回 1。
+   * **缺省 false（关）**：N=2 低分 march 的空间采样上限产生可见马赛克/噪点，用户真机
+   * 验收否决——质量优先。需帧率的场景显式传 true / demo `?cloudsAdaptive=1`。
+   * 用户显式 options.upscaleDivisor 时亦禁用（显式 > 自适应）。
    */
   adaptiveUpscale?: boolean
   /**
@@ -1104,8 +1104,11 @@ export function createCloudsStage(
   // BSM 已非大头，专家组三路共同首推）。自适应=相机进「甲内+近水平」域时切
   // upscaleDivisor=2（march RT 面积 ÷4，实测满帧+静止 diff 4.87% 亚显著），出域回 1
   // （云外观测逐位不变）。用户显式 options.upscaleDivisor 时自适应禁用（显式 > 自适应）。
+  // 【2026-09-04 缺省回退为关（用户真机验收否决 N=2 画质）】N=2 低分 march 的空间采样
+  // 上限产生可见马赛克/噪点（1259m 云墙目检确认）——质量优先原则下自适应缺省关闭，
+  // 恢复 N=1 全分画质；需要帧率的场景 URL ?cloudsAdaptive=1 显式开。
   const adaptiveEnabled =
-    options.adaptiveUpscale !== false && options.upscaleDivisor == null
+    options.adaptiveUpscale === true && options.upscaleDivisor == null
   // effectiveOptions：自适应切换写 upscaleDivisor 后供重建；copy 防改调用者对象。
   // 后续全部重建（setQuality/自适应）统一走它——保持自适应态跨 quality 换档。
   const effectiveOptions: CloudsStageOptions = { ...options }

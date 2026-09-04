@@ -1699,7 +1699,8 @@ describe('B3 相机态自适应 upscale', () => {
     const scene = createMockScene()
     Object.assign(scene.camera, cameraOverrides)
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
-      clouds: true
+      clouds: true,
+      adaptiveUpscale: true // 2026-09-04 缺省回退为关——B3 用例显式开
     })
     const cb = scene._listeners.preRender[0]
     const calls = () => (createCloudsPass as any).mock.calls
@@ -1745,6 +1746,7 @@ describe('B3 相机态自适应 upscale', () => {
     Object.assign(scene.camera, { pitch: 0, positionCartographic: { height: 1259 } })
     createCloudsStage(scene, createMockLuts(), createMockWeather(), {
       clouds: true,
+      adaptiveUpscale: true, // 显式开（验证「显式 upscale > 自适应」而非缺省关）
       upscaleDivisor: 2
     })
     const n0 = (createCloudsPass as any).mock.calls.length
@@ -1759,6 +1761,18 @@ describe('B3 相机态自适应 upscale', () => {
     const n0 = calls().length
     for (let i = 0; i < 25; i++) cb(scene, t)
     expect(calls().length).toBe(n0)
+  })
+
+  it('缺省关（2026-09-04 回退）：不传 adaptiveUpscale 时甲内近水平不触发重建', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    Object.assign(scene.camera, { pitch: 0, positionCartographic: { height: 1259 } })
+    createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
+    const n0 = (createCloudsPass as any).mock.calls.length
+    const cb2 = scene._listeners.preRender[0]
+    const t = JulianDate.now()
+    for (let i = 0; i < 25; i++) cb2(scene, t)
+    expect((createCloudsPass as any).mock.calls.length).toBe(n0)
   })
 
   it('云下仰视域（2026-09-04 扩展）：20m+仰角触发，云下俯视不触发', () => {
