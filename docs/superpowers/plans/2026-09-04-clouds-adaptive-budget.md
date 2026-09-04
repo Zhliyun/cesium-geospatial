@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **2026-09-04 执行修订**：Task 4/5 已随 B 弃案取消（Phase 0 探针否决，见 spec r3 §4）；Task 2/6 修剪为 A-only。实际执行=Task 1/2/3/6。
+
 **Goal:** 贴地掠射+黄昏场景下，按太阳仰角/视线仰角连续收缩云 march 预算（BSM 生成端 + 主 march 段长），显著降帧成本且域外逐位零回归。
 
 **Architecture:** 方案 1「运行时 uniform 预算自适应」——A 在 JS 侧每帧算当地太阳仰角→连续乘数→BSM 生成端 `maxIterationCount` 闭包；B 在主 march GLSL 侧按逐像素视线仰角收紧局部段长（参数由 JS uniform 注入）。两者都是月光门控（7d525fc）的连续化推广，零 shader 编译分支。

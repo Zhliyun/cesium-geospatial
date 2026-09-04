@@ -3,13 +3,13 @@
 // 云预算自适应曲线——A 太阳角影子预算（spec
 // docs/superpowers/specs/2026-09-04-clouds-adaptive-budget-design.md §3（r3，B 已弃案））。
 // 月光门控的连续化推广，方案 1 开环确定性。纯函数模块：全部 JS 侧数学。
-// 常数=起草值（Phase 0 定稿回填）。
+// 常数已定稿（Phase 0 2026-09-04 实测回填）。
 import { Cartesian3 } from 'cesium'
 
-/** 自适应预算常数（spec §2 起草常数表；定稿后回填并删「起草」注）。 */
+/** 自适应预算常数（spec §2 常数表，已定稿回填）。 */
 export const ADAPTIVE_BUDGET_CONSTANTS = {
   /** A：乘数=1 的太阳仰角下界（零回归域边界；硬上限 30°——spec §8）。 */
-  SUN_ELEV_FULL_DEG: 20, // 起草值，Phase 0 定稿
+  SUN_ELEV_FULL_DEG: 20, // 定稿 20°（Phase 0 2026-09-04 实测；硬上限 30°）
   /** A：乘数=FLOOR 的太阳仰角上界。 */
   SUN_ELEV_FLOOR_DEG: 5,
   /** A：影子预算乘数下限（硬下界 0.5——spec §3 覆盖约束+§8 红线）。 */

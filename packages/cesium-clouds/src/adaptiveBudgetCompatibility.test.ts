@@ -61,6 +61,8 @@ const SCENES = [
 
 describe('自适应预算消费域守卫（spec §6.5）', () => {
   it('hardcode 仰角与 localSunElevationDeg 实算一致（±1.5°——红队手算精度口径）', () => {
+    // 本断言守卫「几何链路不漂移」（localSunElevationDeg 实现+构造器数学），不验证
+    // hardcode 值的天文正确性（后者 NOAA 独立公式+同源实算交叉验证）
     for (const s of SCENES) {
       const elev = localSunElevationDeg(sunDirAt(s.lon, s.lat, s.elevDeg), camAt(s.lon, s.lat, s.heightM))
       expect(Math.abs(elev - s.elevDeg)).toBeLessThan(1.5)
