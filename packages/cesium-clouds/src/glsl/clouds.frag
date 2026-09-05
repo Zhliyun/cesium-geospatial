@@ -603,27 +603,38 @@ vec4 marchClouds(
         * smoothstep(-0.05, 0.02, dot(surfaceNormal, moonDirection));
 
       // March optical depth to the sun for finer details, which BSM lacks.
+      // 【2026-09-05 P0 夜晚太阳侧门控】sunIrradiance 三通道全 0 时（ACCURATE LUT / 桥接
+      // varying 两路径在太阳当地沉没 >5° 后均精确归零——夜间环境底光调查实证），下方
+      // toSun march（≤maxIterationCountToSun 次 3D 采样）+ BSM 光深采样的结果只被乘 0：
+      // 0×AMS(OD)=0×AMS(0)=+0（AMS 对有限 OD 恒有限；唯一语义差异=病态 NaN 输入被
+      // 消毒为 0，nan-probe 已证全链 NaN=0 不可达）——跳过与原式逐位等价。晨昏带
+      //（任意小的非零分量）照跑=A1 月光门控同款纪律；夜间全零/白天全非零 → 分支取向
+      // 全屏一致无 warp 发散（晨昏过渡带内可能逐像素分叉，仅影响该带收益不影响结果）。
+      // 甲内夜实测这两项白烧 ~15-20ms/33ms（2026-09-05 性能台账）。
       float sunRayDistance = 0.0;
-      float opticalDepth = marchOpticalDepth(
-        position,
-        sunDirection,
-        maxIterationCountToSun,
-        mipLevel,
-        jitter,
-        sunRayDistance
-      );
-
-      if (height < shadowTopHeight) {
-        // Obtain the optical depth from BSM at the ray position.
-        opticalDepth += sampleShadowOpticalDepth(
+      float opticalDepth = 0.0;
+      if (any(notEqual(sunIrradiance, vec3(0.0)))) {
+        opticalDepth = marchOpticalDepth(
           position,
-          // Take account of only positions further than the marched ray
-          // distance.
-          sunRayDistance,
-          // Apply PCF only when the sun is close to the horizon.
-          maxShadowFilterRadius * remapClamped(dot(sunDirection, surfaceNormal), 0.1, 0.0),
-          jitter
+          sunDirection,
+          maxIterationCountToSun,
+          mipLevel,
+          jitter,
+          sunRayDistance
         );
+
+        if (height < shadowTopHeight) {
+          // Obtain the optical depth from BSM at the ray position.
+          opticalDepth += sampleShadowOpticalDepth(
+            position,
+            // Take account of only positions further than the marched ray
+            // distance.
+            sunRayDistance,
+            // Apply PCF only when the sun is close to the horizon.
+            maxShadowFilterRadius * remapClamped(dot(sunDirection, surfaceNormal), 0.1, 0.0),
+            jitter
+          );
+        }
       }
 
       vec3 radiance = sunIrradiance * approximateMultipleScattering(opticalDepth, cosTheta);
