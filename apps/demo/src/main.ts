@@ -594,6 +594,9 @@ async function main(): Promise<void> {
             ? { maxIterationCountToSun: getNumber('cloudsToSunIter')! } : {}),
           ...(getNumber('cloudsMaxStep') != null
             ? { maxStepSize: getNumber('cloudsMaxStep')! } : {}),
+          // 【2026-09-05 P1 光柱 march 步长标定旋钮】?cloudsShaftStep=<米> shadowLength march
+          // 起始步长（库缺省 100=BSM texel 过采样修正；=50 回 three 上游原值 A/B 验收用）。
+          // 经下方 parameters 直通块注入（同块唯一 parameters 键，防对象字面量重复键覆盖）。
           // ── 云分布重设计（spec §6）URL 全集 ──
           // 天气预设创建期注入（白名单守卫已解析；运行期热切走 handle.setWeatherPreset，demo 暂无 UI）。
           // spec §6.1「显式标量优先于预设」：URL 显式给 ?cloudsCoverage= 时跳过预设
@@ -659,9 +662,14 @@ async function main(): Promise<void> {
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
-          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null
+          ...(getNumber('cloudsNightAmbient') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null || getNumber('cloudsShaftStep') != null
             ? {
                 parameters: {
+                  // 【2026-09-05 P1 光柱 march 步长】?cloudsShaftStep=<米>（缺省 100；
+                  // =50 回 three 上游原值，A/B 验收标定用）
+                  ...(getNumber('cloudsShaftStep') != null
+                    ? { minShadowLengthStepSize: getNumber('cloudsShaftStep')! }
+                    : {}),
                   // 云密度覆盖（云分布重设计 spec §6：默认 0.3）；与 ?cloudsWeather= 同传时
                   // 显式优先——上方 weatherPreset 展开已让位（spec §6.1 显式标量优先于预设）
                   ...(getNumber('cloudsCoverage') != null

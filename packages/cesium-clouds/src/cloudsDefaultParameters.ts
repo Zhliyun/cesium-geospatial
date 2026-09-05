@@ -127,7 +127,11 @@ export interface CloudsParameters {
   //    defaults.clouds 逐字）──
   /** shadowLength march 最大步数（three：500）。 */
   maxShadowLengthIterationCount: number
-  /** shadowLength march 最小步长（米，three：50）。 */
+  /** shadowLength march 最小步长（米，three：50）。【2026-09-05 P1 降采样】缺省 50→100：
+   *  BSM 三级联 texel 实际足迹 L0≈62m/L1≈131m/L2≈375m（mapSize 512），50m 步长对 BSM
+   *  实际携带信息本就过采样（上游注释自认 "sample resolution can be much lower"）——
+   *  100m 起步对近级联 texel 仅 1.6× 欠采样，迭代 ~146→~96（-34%）。标定旋钮
+   *  ?cloudsShaftStep=（50=上游原值，真机目验光柱形态后拍板定稿）。 */
   minShadowLengthStepSize: number
   /** shadowLength march 最大距离（米，three：2e5——主 march maxRayDistance 同域）。 */
   maxShadowLengthRayDistance: number
@@ -295,7 +299,7 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 远端光柱贡献被大气散射主导）+ 步数 500→150（50×1.01^n 走满 16km 需 146 步，自洽）
     // + shader 侧步长封顶 min(stepSize, maxStepSize)。god rays 场景验收后定稿。
     maxShadowLengthIterationCount: 150,
-    minShadowLengthStepSize: 50,
+    minShadowLengthStepSize: 100,
     maxShadowLengthRayDistance: 16000,
 
     // scatter 视觉（CloudsMaterial.ts:212-215）

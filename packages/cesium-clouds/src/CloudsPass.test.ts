@@ -678,8 +678,10 @@ describe('M5 T2 SHADOW_LENGTH MRT/参数', () => {
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     // 【2026-09-04 god rays march 改造（专家组 A2）】500→150 / 2e5→16000（段长 clamp+步数
     // 与 50×1.01^n 封顶 1000m 自洽：146 步走满 16km）
+    // 【2026-09-05 P1 降采样】minShadowLengthStepSize 50→100（BSM texel 62-375m，50m 过采样；
+    // 标定旋钮 ?cloudsShaftStep=）
     expect(um.maxShadowLengthIterationCount()).toBe(150)
-    expect(um.minShadowLengthStepSize()).toBe(50)
+    expect(um.minShadowLengthStepSize()).toBe(100)
     expect(um.maxShadowLengthRayDistance()).toBe(16000)
     pass.destroy()
   })
