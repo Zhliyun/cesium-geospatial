@@ -670,7 +670,7 @@ async function main(): Promise<void> {
                   ...(getNumber('cloudsShaftStep') != null
                     ? { minShadowLengthStepSize: getNumber('cloudsShaftStep')! }
                     : {}),
-                  // 云密度覆盖（云分布重设计 spec §6：默认 0.3）；与 ?cloudsWeather= 同传时
+                  // 云密度覆盖（云分布重设计 spec §6：默认 0.4，2026-09-05 拍板 0.3→0.4）；与 ?cloudsWeather= 同传时
                   // 显式优先——上方 weatherPreset 展开已让位（spec §6.1 显式标量优先于预设）
                   ...(getNumber('cloudsCoverage') != null
                     ? { coverage: getNumber('cloudsCoverage')! }

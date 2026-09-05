@@ -365,7 +365,7 @@ export interface CloudsStageHandle {
    * T6 天气预设热切（spec §6.1）：写当前 impl 的 params.coverage / coverageFilterWidths
    * （闭包引用改值即生效，nightAmbient 同款）+ state.climateBandsFloor（spec §5.4 组合语义：
    * 预设激活 0.6，防「阴天」×副热带谷退化为近晴空）。**undefined = 清除预设**：恢复创建时
-   * 基线（用户显式 parameters 优先于默认 0.3/(0.6,0.6,0.5,0.6)）+ floor 0.2。
+   * 基线（用户显式 parameters 优先于默认 0.4/(0.6,0.6,0.5,0.6)）+ floor 0.2。
    *
    * - 与参考库 setter 语义同款（spec §5）：直接改值，不重建资源；帧间/帧内均可（纯 CPU 写）。
    * - **跨 setQuality 保持**：激活中的预设记在 handle 侧，换档重建后自动重放到新 impl。
@@ -1019,7 +1019,7 @@ function buildCloudsStageImpl(
 
     // ── T6 天气预设热切（spec §6.1 + §5.4 组合语义）──
     // 基线 = 档位/用户显式合并后的 params 值（本 impl 装配时刻快照）——清除预设恢复它，
-    // 用户显式 parameters.coverage 优先于默认 0.3 的语义由此保留。filterScale 缩放基线
+    // 用户显式 parameters.coverage 优先于默认 0.4 的语义由此保留。filterScale 缩放基线
     // coverageFilterWidths（overcast 0.6 收窄 → 连片）；激活同时抬 state.climateBandsFloor
     // 至 0.6（shader clamp(band, u_climateBandsFloor, 1.3)——「阴天」×副热带谷不退化近晴空）。
     const presetBaseline = {

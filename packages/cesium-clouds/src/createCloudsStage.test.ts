@@ -1385,7 +1385,7 @@ describe('T6 WeatherAtlas 集成（spec §6）', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })
     expect(paramsOf(handle!).minHeight).toBe(1500)
-    expect(paramsOf(handle!).coverage).toBe(0.3)
+    expect(paramsOf(handle!).coverage).toBe(0.4)
     handle!.destroy()
   })
 

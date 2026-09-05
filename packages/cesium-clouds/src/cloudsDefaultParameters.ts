@@ -324,7 +324,9 @@ export function defaultCloudsParameters(): CloudsParameters {
     moonLightScale: 25000, // 2026-08-31 偏亮反馈三档拍板减半（50000→25000，中景云 −36%）
 
     // weather/shape（uniforms.ts:54 + CloudsEffect.ts:180-186）
-    coverage: 0.3,
+    // coverage 缺省 0.3→0.4（2026-09-05 用户拍板「云量很少，增加一些」——目验 0.6 过密、
+    // 0.3 过稀，0.4 定档；?cloudsCoverage= 旋钮不受影响）
+    coverage: 0.4,
     // 气候带强度（T6，spec §5.4）：1=默认全带（ITCZ 峰/副热带谷/风暴带/极地衰减）；0=关
     climateBands: 1.0,
     // 经纬域 repeat（face 缝根治 2026-09-03 方案 A）：x=经向瓦数（赤道瓦宽 40075/400
