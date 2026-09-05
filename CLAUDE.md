@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-把 **three-geospatial** 的 Bruneton 大气渲染移植进 **Cesium**（原生注入，非替换 Globe）。渲染通过 Cesium `PostProcessStage` 后处理实现，复用 Cesium 内置的 `czm_*` automatic uniforms、对数深度、`depthTexture`。当前阶段：phase1（B 路径大气透视）已合并到 `main`；phase2a（HDR 浮点后处理链基建）设计中。
+把 **three-geospatial** 的 Bruneton 大气渲染移植进 **Cesium**（原生注入，非替换 Globe）。渲染通过 Cesium `PostProcessStage` 后处理实现，复用 Cesium 内置的 `czm_*` automatic uniforms、对数深度、`depthTexture`。当前阶段：**大气（phase1）与体积云全线已合并 `main`**——体积云 M1-M5、分布重设计、月光/月盘、性能优化（贴地掠射调查→A 太阳角影子预算→P0 夜晚太阳侧门控+P1 光柱降采样，2026-09-05 收官）均已落地；下一大项=**M6 云影重做**（已立项未实施，基于最新 main 重新开始）；phase2a（HDR 浮点后处理链基建）设计中。
 
 **参考库定位（关键）**：`three-geospatial`（`/Users/zhangliyun/Documents/Ayvods/Web3D/three-geospatial`）与 `navara`（`/Users/zhangliyun/Documents/Ayvods/Web3D/navara`，Rust/WASM GIS 核心 + Three.js 渲染的 3D 地图引擎，含完整动态体积云方案 examples/weather/clouds）并列算法/技术**主参考**（2026-09-03 用户拍板：navara 地位与 three-geospatial 一致，方案可能更完整）。
 
@@ -21,8 +21,13 @@ pnpm --filter @cesium-geospatial/core exec vitest run src/cesium/AtmosphereStage
 pnpm --filter @cesium-geospatial/core exec vitest run -t "动态曝光"                        # 按用例名过滤
 pnpm --filter @cesium-geospatial/core exec vitest                                          # watch 模式
 
-# 类型检查（仓库无 lint/typecheck 脚本，显式跑 tsc）
+# 体积云库测试（@cesium-geospatial/clouds）——须包目录直跑（--filter 有假绿坑，见开发流程）
+pnpm --filter @cesium-geospatial/clouds test
+pnpm --filter @cesium-geospatial/clouds exec vitest run src/cloudsMain.compile.test.ts     # GLSL 编译测试
+
+# 类型检查（仓库无 lint/typecheck 脚本，显式跑 tsc；须包目录内跑，-p 从根跑丢 tsconfig 上下文）
 pnpm --filter @cesium-geospatial/core exec tsc --noEmit
+pnpm --filter @cesium-geospatial/clouds exec tsc --noEmit
 ```
 
 **GLSL 编译测试**（`aerialPerspective.compile.test.ts`）依赖 `glslangValidator`：优先用系统 PATH 中的，否则用 `glslang-validator-prebuilt-predownloaded` 包内 x86_64 二进制（Apple Silicon 经 Rosetta 2 透明执行）。两者都缺时测试以清晰报错失败——装 `brew install glslang` 解决。
@@ -34,7 +39,8 @@ pnpm --filter @cesium-geospatial/core exec tsc --noEmit
 ### Monorepo 布局（pnpm workspace）
 
 - `packages/cesium-core`（`@cesium-geospatial/core`）：核心库。`cesium` 为 peerDependency（消费者自带）。导出 shader 组装器、LUT 加载、`createAtmosphereStage`。
-- `apps/demo`：Vite + 原生 Cesium `Viewer` 的验收 demo，URL 参数化（见下）。依赖 `core` via `workspace:*`。
+- `packages/cesium-clouds`（`@cesium-geospatial/clouds`）：体积云库。raymarch 主 march + 级联 BSM（世界锚定）+ god rays 光柱 + 时序重建 + 质量档位（low/medium/high/ultra）+ 天气图烘焙/演化/平流。导出 `createCloudsStage`（返回 `overlayStage`，**不自动 add**——消费者插到 atmosphere 与 lensFlare 之间，见 README）。
+- `apps/demo`：Vite + 原生 Cesium `Viewer` 的验收 demo，URL 参数化（见下）。依赖 `core`/`clouds` via `workspace:*`。
 
 ### GLSL 管线（本仓库最核心、跨多文件的理解点）
 
@@ -54,6 +60,12 @@ GLSL 以 `.glsl` 文本经 Vite `?raw` 导入，在 TS 里字符串拼装成最�
 核心式（`aerialPerspective.frag.ts` main 末端）：`finalColor = originalColor·transmittance·u_groundDim + inscatter`。**不重算照明、不碰屏幕法线**（A 路径已弃——重算 irradiance 需 exposure≈15，放大 half-float LUT 灾消致山体透明）。`exposure≈1.5` 即可。末端 `tonemapDisplay` = ACES filmic + gamma 1/2.2 + display triangular dithering（±1.5 LSB）。
 
 phase2a 方向：把末端内联 ACES 拆为「atmosphere stage 输出线性 HDR（HalfFloat）+ 链尾独立 ToneMappingStage」，为 image-based LensFlare（phase2b）留线性域消费点。详见 `docs/superpowers/specs/2026-08-04-phase2a-hdr-pipeline-design.md`。
+
+### 体积云管线（packages/cesium-clouds）
+
+- 云主 shader `src/glsl/clouds.frag`（three-geospatial 同源移植 + 本仓库手术桥接，`CloudsMaterial.surgeryCloudsFrag`）：**三条 march 是云成本三大件**（2026-09-05 性能台账）——主 march `marchClouds`、朝太阳次级 march `marchOpticalDepth` + BSM 光深采样 `sampleShadowOpticalDepth`（夜晚已门控：sunIrradiance 精确零时跳过，逐位等价）、god rays 第二 march `marchShadowLength`（SHADOW_LENGTH define，步长缺省 100m=`?cloudsShaftStep=`）。
+- 编排 `createCloudsStage.ts`：preRender 内 BSM 级联 update/render（world 锚定、静止帧跳过重画）+ A 太阳角影子预算乘数（`shadowBudgetAdaptation.ts` 纯函数，`?cloudsShadowAdaptive=0` 逃生门）；渲染链 `CloudsPass`（march RT）→`CloudsResolvePass`（时序重建）→顶层 overlay stage（线性域合成）。
+- 改云 shader 的验证闭环：`cloudsMain.compile.test.ts` 等 glslang 编译测试 + 全量单测 + 真机 A/B（性能/画质协议见「开发流程」）。
 
 ### Cesium 集成关键点
 
@@ -82,13 +94,14 @@ phase2a 方向：把末端内联 ACES 拆为「atmosphere stage 输出线性 HDR
 - `mode=atmosphere|sky|depth`（**默认 atmosphere** = B 路径主分支；sky/depth 为回归对照）
 - `clouds` **默认开启**（atmosphere 模式自动建云；`clouds=0` 关闭）；`fps` **默认关闭**（`fps=1` 开右上角帧率角标）
 - `play` **默认开、正常流速**（`play=0` 冻结；`speed=N` 调倍率）；`time=ISO8601`（钉初值）、`camera=lon,lat,height,heading,pitch`（角度制）——**确定性验收须 `?time=` + `?play=0` 成对**（时间默认流动后单 `?time=` 不再冻结）
-- `debug=N`（u_debugMode：1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——**排查 artifact 的主手段**
-- `exposureDay`/`exposureNight`/`groundDim`/`tileCache`/`lighting=0`/`atmo=0`（诊断基线，跳过大气后处理）
+- `debug=N`（u_debugMode：1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——**排查 artifact 的主手段**；云侧 `cloudsDebug=1-8`/`cloudsOverlayDebug=1-2`（天气 UV/采样数/BSM/级联等）
+- `exposureDay`/`exposureNight`/`groundDim`/`tileCache`/`lighting=0`/`atmo=0`（诊断基线，跳过大气后处理）；云性能旋钮 `cloudsQuality=low|medium|high|ultra`（质量整档）、`cloudsShaftStep=`（god rays march 步长，缺省 100，=50 上游原值）、`cloudsShadowAdaptive=0`（太阳角影子预算逃生门）、`cloudsLightShafts=0`/`cloudsShadow=0`（关光柱/关自阴影对照）——完整参数表见 README
 - 相机停稳后地址栏 `#camera=...` 自动更新为当前视角，复制即可精确复现问题视角。
 
 ## 开发流程（本项目惯例）
 
 - **spec → plan → results**：`docs/superpowers/specs/<date>-<topic>-design.md`（设计，常经多专家 workflow 评审）→ `docs/superpowers/plans/<date>-<topic>.md`（实现计划）→ `plans/<date>-<topic>-results.md`（结果）。`.superpowers/sdd/` 存任务 brief/report 与评审 diff。动手前先看对应 spec。
 - **调试方法论**：递进式编号 debug-probe shader（`u_debugMode` 1→2→3→5→6）隔离单个失效物理量，而非盲改。
+- **性能测量纪律**（2026-09-05，违反必得假数据）：**跨版本 A/B 前双方 server 全部清 `.vite` 缓存重启**（陈旧缓存制造过 15.4% 像素假差异）；等价性判定用像素级 maxΔ/超差占比对照「同代码对照组噪声地板」——**PNG 字节比对无效**（dither ±1LSB 随加载变）；**120Hz vsync 量化+GPU 频率漂移使 <3ms 帧时 delta 不可分辨**（同配置跨加载 p50 可摆 8↔16ms），大 delta 必须同扫描内成对+首尾锚点；FPS/rAF 数据必须 headed 真 Chrome（headless SwiftShader 云崩坏）；`profile=1` GPU timer 有饱和污染不可拆分，用 URL 开关阶梯差分代替。
 - **渲染异常先清 vite 缓存再排查**：vite 对 workspace 包（symlink）的模块级编译产物缓存（`apps/demo/node_modules/.vite`）在多次改代码+HMR 后会与源码不一致（重启也可能不生效）——曾把缓存不一致导致的「云球壳 91km 高空偏移」误判为渲染 bug（2026-08-17 假警报，`pickEllipsoid` 实测云几何本正确、清缓存即恢复）。**看到渲染/行为异常先 `pkill -f vite && rm -rf apps/demo/node_modules/.vite && pnpm dev`，清缓存后仍在的异常才是真 bug。** 另：低对比画面（高空云海/均匀天空）上像素拟合与 AI 目测都不可靠，几何位置判断须用 `camera.pickEllipsoid` 等 Cesium 精确投影佐证。
 - 所有代码注释、文档、对话用**中文**（遵循全局规范）。
