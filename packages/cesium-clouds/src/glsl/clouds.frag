@@ -118,6 +118,12 @@ uniform float maxShadowFilterRadius;
 uniform int maxShadowLengthIterationCount;
 uniform float minShadowLengthStepSize;
 uniform float maxShadowLengthRayDistance;
+// 【2026-09-05 兜底 march 大步幅】!hitClouds 像素（云 miss 天空/打地）的 marchShadowLength
+// 是全屏成本大头（实测白天贴地 6.6ms，与画面云量无关）。该分支的 shadowLength 只调制
+// 云前大气散射（GetSkyRadianceToPoint higher-order 只遮 single）。倍率定标（真机 A/B）：
+// ×4 白天逐位零差，但朝太阳日落场景海面散射显著发灰（meanΔ13/超差 48%——低太阳角视线
+// 云影光深大，粗步幅积分系统性偏差）→ 定稿 ×2。
+#define SHADOW_FALLBACK_STEP_SCALE 2.0
 #endif // SHADOW_LENGTH
 
 in vec2 vUv;
@@ -747,11 +753,12 @@ float marchShadowLength(
   const vec3 rayOrigin,
   const vec3 rayDirection,
   const vec2 rayNearFar,
-  const float jitter
+  const float jitter,
+  const float startStepSize
 ) {
   float shadowLength = 0.0;
   float maxRayDistance = rayNearFar.y - rayNearFar.x;
-  float stepSize = minShadowLengthStepSize;
+  float stepSize = startStepSize;
   float rayDistance = stepSize * jitter;
   const float attenuationFactor = 1.0 - 5e-4;
   float attenuation = 1.0;
@@ -1074,7 +1081,8 @@ void main() {
           shadowRayNearFar.x * rayDirection + cameraPosition,
           rayDirection,
           shadowRayNearFar,
-          stbn
+          stbn,
+          minShadowLengthStepSize
         );
       }
       #endif // SHADOW_LENGTH
@@ -1105,11 +1113,14 @@ void main() {
   if (!hitClouds) {
     #ifdef SHADOW_LENGTH
     if (all(greaterThanEqual(shadowRayNearFar, vec2(0.0)))) {
+      // 【2026-09-05 兜底大步幅】无云像素的满段 march=全屏成本大头（白天贴地实测 6.6ms）；
+      // 调制项为 km 级云影特征，×4 起步步幅（~35 步走完 16km）画质保真（见 define 处注）。
       shadowLength = marchShadowLength(
         shadowRayNearFar.x * rayDirection + cameraPosition,
         rayDirection,
         shadowRayNearFar,
-        stbn
+        stbn,
+        minShadowLengthStepSize * SHADOW_FALLBACK_STEP_SCALE
       );
     }
     #endif // SHADOW_LENGTH
