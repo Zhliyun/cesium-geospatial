@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-把 **three-geospatial** 的 Bruneton 大气渲染移植进 **Cesium**（原生注入，非替换 Globe）。渲染通过 Cesium `PostProcessStage` 后处理实现，复用 Cesium 内置的 `czm_*` automatic uniforms、对数深度、`depthTexture`。当前阶段：**大气（phase1）与体积云全线已合并 `main`**——体积云 M1-M5、分布重设计、月光/月盘、性能优化（贴地掠射调查→A 太阳角影子预算→P0 夜晚太阳侧门控+P1 光柱降采样，2026-09-05 收官）均已落地；下一大项=**M6 云影重做**（已立项未实施，基于最新 main 重新开始）；phase2a（HDR 浮点后处理链基建）设计中。
+把 **three-geospatial** 的 Bruneton 大气渲染移植进 **Cesium**（原生注入，非替换 Globe）。渲染通过 Cesium `PostProcessStage` 后处理实现，复用 Cesium 内置的 `czm_*` automatic uniforms、对数深度、`depthTexture`。当前阶段：**大气（phase1）与体积云全线已合并 `main`**——体积云 M1-M5、分布重设计、月光/月盘、性能优化（贴地掠射调查→A 太阳角影子预算→P0 夜晚太阳侧门控+P1 光柱降采样，2026-09-05 收官）均已落地；下一大项=**M6 云影重做**（2026-09-04 旧立项已随分支撤销删除，待基于最新 main 重新立项）；phase2a（HDR 浮点后处理链基建）已落地。
 
 **参考库定位（关键）**：`three-geospatial`（`/Users/zhangliyun/Documents/Ayvods/Web3D/three-geospatial`）与 `navara`（`/Users/zhangliyun/Documents/Ayvods/Web3D/navara`，Rust/WASM GIS 核心 + Three.js 渲染的 3D 地图引擎，含完整动态体积云方案 examples/weather/clouds）并列算法/技术**主参考**（2026-09-03 用户拍板：navara 地位与 three-geospatial 一致，方案可能更完整）。
 
@@ -57,9 +57,9 @@ GLSL 以 `.glsl` 文本经 Vite `?raw` 导入，在 TS 里字符串拼装成最�
 
 ### 大气合成（B 路径，phase1 成果）
 
-核心式（`aerialPerspective.frag.ts` main 末端）：`finalColor = originalColor·transmittance·u_groundDim + inscatter`。**不重算照明、不碰屏幕法线**（A 路径已弃——重算 irradiance 需 exposure≈15，放大 half-float LUT 灾消致山体透明）。`exposure≈1.5` 即可。末端 `tonemapDisplay` = ACES filmic + gamma 1/2.2 + display triangular dithering（±1.5 LSB）。
+核心式（`aerialPerspective.frag.ts` main 末端）：`finalColor = originalColor·transmittance·u_groundDim + inscatter`。**不重算照明、不碰屏幕法线**（A 路径已弃——重算 irradiance 需 exposure≈15，放大 half-float LUT 灾消致山体透明）。`exposure≈1.5` 即可。phase2a 后 atmosphere 末端输出**线性 HDR**（HalfFloat RT）；ACES filmic + gamma 1/2.2 + display triangular dithering（±1.5 LSB）移至链尾独立 `tonemap.frag.ts`（`?hdr=0` 时回退内联 `tonemapDisplay` 兜底）。
 
-phase2a 方向：把末端内联 ACES 拆为「atmosphere stage 输出线性 HDR（HalfFloat）+ 链尾独立 ToneMappingStage」，为 image-based LensFlare（phase2b）留线性域消费点。详见 `docs/superpowers/specs/2026-08-04-phase2a-hdr-pipeline-design.md`。
+phase2a 已落地（2026-08-04 验收合入）：把末端内联 ACES 拆为「atmosphere stage 输出线性 HDR（HalfFloat）+ 链尾独立 ToneMappingStage」，为 image-based LensFlare（phase2b）留线性域消费点——当前渲染链 atmo→clouds→lensFlare→tonemap。详见 `docs/superpowers/specs/2026-08-04-phase2a-hdr-pipeline-design.md` 与 `docs/superpowers/plans/2026-08-04-phase2a-results.md`。
 
 ### 体积云管线（packages/cesium-clouds）
 
