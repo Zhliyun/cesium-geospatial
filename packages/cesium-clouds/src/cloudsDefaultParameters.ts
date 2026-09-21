@@ -146,6 +146,11 @@ export interface CloudsParameters {
    *  ACES+gamma 暗部放大，见 clouds.frag 注释）。
    *  0 = 关闭（回退纯黑夜间云）。不进质量档位（视觉参数，与 march 档无关）。 */
   nightAmbient: number
+  /** 月光地板退让上限（2026-09-21，nightAmbient 注 L65 遗留候选落地）：底光乘
+   *  mix(1, 本值, moonFactor)——moonFactor=月相×月高度门。月光（非物理底光的
+   *  真实照明）主导时底光让位，满月夜云亮度交月光主导。1=关（新月/月落/白天
+   *  零回归）。demo ?cloudsNightRetreat=。不进质量档位（视觉参数）。 */
+  nightAmbientMoonRetreat: number
   /** 夜间云色调乘子（线性 RGB，乘底光+月光两项；2026-09-01 云偏蓝二轮反馈 uniform 化）。
    *  沿革：冷蓝 (0.72,1,1.32)（2026-08-31 泛红修复对冲远景 transmittance 红化）→(0.72,1,1.15)
    *  →(0.88,1,1.0)（三档拍板 C 档）。demo ?cloudsTint=r,g,b。 */
@@ -312,6 +317,10 @@ export function defaultCloudsParameters(): CloudsParameters {
     // （线性×255≈18/255 误当 display，实际 ~86/255，且月光落地后叠加从未整体验收——
     // 深夜云带 avg 147 vs 夜空底光实测 ~5）。headed 扫描定标 0.03：无月夜云带 61/>120 清零。
     nightAmbient: 0.03,
+    // 月光地板退让上限（2026-09-21）：满月（moonFactor=1）时底光剩此比例，让位月光主导。
+    // 缺省 0.25（满月夜地板贡献 ×1/4——84f3306 后满月夜仍偏亮 >120 像素 24% 的遗留候选；
+    // 待满月夜真机定档，?cloudsNightRetreat= 即调，1=关零回归）
+    nightAmbientMoonRetreat: 0.25,
     // 暮光天光补偿（2026-09-01 黄昏云过黑 A 案）：6=用户拍板物理档（实测云/天空显示比 80%，
     // 接近物理目标 85-90%；档位沿革 3 温和=51%/6 物理=80%，?cloudsTwilightBoost= URL 即调）
     twilightSkyBoost: 6.0,

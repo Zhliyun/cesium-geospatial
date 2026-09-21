@@ -569,6 +569,8 @@ export function createCloudsPass(
     // 夜间环境底光（方向 B）：march 专有——shadow.frag 生成端不声明不消费
     //（shared 段不注入，Cesium 对未声明 uniform 静默忽略的同理反向）
     nightAmbient: () => params.nightAmbient,
+    // 【2026-09-21 月光地板退让】底光按 moonFactor 退让的上限（1=关零回归）
+    u_nightAmbientRetreat: () => params.nightAmbientMoonRetreat,
     // 夜间云色调乘子（乘底光+月光；2026-09-01 uniform 化，?cloudsTint= URL 调）
     u_nightTint: () => params.nightTint,
     // 暮光天光补偿倍率（2026-09-01 黄昏云过黑 A 案；?cloudsTwilightBoost= URL 调，1=关）

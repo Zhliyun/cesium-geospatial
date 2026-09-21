@@ -362,13 +362,14 @@ describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
 // 修复 = skyIrradiance 抬 nightAmbient 地板，当地太阳仰角 -5°→-12° 淡入（白天 0 零回归）。
 // ─────────────────────────────────────────────────────────────────────────────
 describe('夜间环境底光 nightAmbient（方向 B）', () => {
-  it('uniform 声明 + 光照循环抬地板：skyIrradiance += u_nightTint * (nightAmbient * nightFactor)', () => {
+  it('uniform 声明 + 光照循环抬地板（2026-09-21 起含月光退让因子）', () => {
     const src = buildCloudsMainFragmentShader({})
     expect(src).toContain('uniform float nightAmbient;')
     // 淡入区间 sin(-12°)=-0.2079 / sin(-5°)=-0.0872（LUT -5° 归零线 → 天文夜满值）
     expect(src).toContain('1.0 - smoothstep(-0.1045, -0.0175, muSunLocal)')
-    // 抬在 skyIrradiance 上（经 skyGradient × scattering × 能量积分传播 → 云保有形体梯度）
-    expect(src).toContain('skyIrradiance += u_nightTint * (nightAmbient * nightFactor);')
+    // 抬在 skyIrradiance 上（经 skyGradient × scattering × 能量积分传播 → 云保有形体梯度）；
+    // 【2026-09-21 月光退让】再乘 mix(1, u_nightAmbientRetreat, moonFactor)——见下方 describe
+    expect(src).toContain('skyIrradiance += u_nightTint * (nightAmbient * nightFactor\n        * mix(1.0, u_nightAmbientRetreat, moonFactor));')
     // 夜间云色调 uniform 化（2026-09-01 云偏蓝二轮反馈——每轮改常量成本高，?cloudsTint= URL 即调；
     // 值由 cloudsDefaultParameters.nightTint 提供，沿革 (0.72,1,1.32)→(0.72,1,1.15)→三档拍板定稿）
     expect(src).toContain('uniform vec3 u_nightTint;')
@@ -409,6 +410,38 @@ describe('暮光天光补偿 twilightSkyBoost', () => {
   })
 
   it('glslang：含 twilightBoost 的完整 shader 真编译', () => {
+    const src = buildStandaloneCloudsShaderForValidation({})
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(
+        `glslang 编译失败:\n${output}\n` +
+          src.split('\n').slice(0, 60).map((l, i) => `${i + 1}: ${l}`).join('\n')
+      )
+    }
+    expect(ok).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-21 月光地板退让】nightAmbient 注 L65 遗留候选落地：底光乘 mix(1, 上限, moonFactor)
+// （moonFactor 上移复用：月相×月高度门——新月/月落/白天 moonFactor=0 或 nightFactor=0 零回归）
+// ─────────────────────────────────────────────────────────────────────────────
+describe('月光地板退让 nightAmbientMoonRetreat', () => {
+  it('uniform 声明 + 退让式乘底光项（moonFactor 在地板项前已声明，无重复声明）', () => {
+    const src = buildCloudsMainFragmentShader({})
+    expect(src).toContain('uniform float u_nightAmbientRetreat;')
+    expect(src).toContain(
+      'skyIrradiance += u_nightTint * (nightAmbient * nightFactor\n        * mix(1.0, u_nightAmbientRetreat, moonFactor));'
+    )
+    // moonFactor 声明上移到地板项之前，且全文仅一次声明（重复声明=编译错）
+    expect(src.match(/float moonFactor = moonIlluminatedFraction/g)?.length).toBe(1)
+    const declIdx = src.indexOf('float moonFactor = moonIlluminatedFraction')
+    const useIdx = src.indexOf('mix(1.0, u_nightAmbientRetreat, moonFactor)')
+    expect(declIdx).toBeGreaterThan(-1)
+    expect(useIdx).toBeGreaterThan(declIdx)
+  })
+
+  it('glslang：含 retreat 的完整 shader 真编译', () => {
     const src = buildStandaloneCloudsShaderForValidation({})
     const { ok, output } = compileFragment(src)
     if (!ok) {

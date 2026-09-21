@@ -68,6 +68,11 @@ uniform float powderExponent;
 // （实测 R/G=1.23，近景不红 0.99；moon=0 隔离排月光、nightAmbient=0 隔离定根因）。
 // 底光本身给冷蓝（模拟夜空散射的蓝移谱），中距对冲红化、远景残余暖色大幅减弱。
 uniform float nightAmbient;
+// 月光地板退让上限（2026-09-21，nightAmbient 注 L65 遗留候选落地）：底光乘
+// mix(1, 本值, moonFactor)——moonFactor=月相×月高度门（0 新月/月落，1 满月+月高）。
+// 1=关（零回归域：新月/月落/白天）；<1=月光强时底光让位（非物理底光不该在月光
+// 主导时还全额叠加）。URL ?cloudsNightRetreat= 即调；缺省见 cloudsDefaultParameters。
+uniform float u_nightAmbientRetreat;
 // 夜间云色调乘子（线性域；乘底光+月光两项）。uniform 化（2026-09-01 云偏蓝二轮反馈——
 // 每轮改常量成本高，?cloudsTint= URL 即调）。沿革：冷蓝 (0.72,1,1.32)（2026-08-31 泛红修复
 // 对冲远景 transmittance 红化）→ B 1.32→1.15（「偏蓝」一轮）→ 三档拍板后定稿。
@@ -602,14 +607,19 @@ vec4 marchClouds(
       // GetSunAndSkyIrradiance 内 mu_s 同源。
       float muSunLocal = dot(surfaceNormal, sunDirection);
       float nightFactor = 1.0 - smoothstep(-0.1045, -0.0175, muSunLocal);
-      skyIrradiance += u_nightTint * (nightAmbient * nightFactor);
-
       // 月光门 2：月升落（spec §6.2）——月落后 moonDirection 在地平线下，无此门云被
       // 「地下来的光」照亮、云底亮反转（弦月下半夜必现）。窗口 -0.05..0.02 ≈
       // sin(-2.87°)..sin(+1.15°)：下沿 ≈8km 云层顶的地平俯角。门 1（昼夜分账）复用
       // 上方 nightFactor——白天精确 0（云侧零回归）、晨昏带与底光同曲线淡入。
+      // 【2026-09-21 上移】月光地板退让（原 L611）——地板项先算 retreat 需要它。
       float moonFactor = moonIlluminatedFraction
         * smoothstep(-0.05, 0.02, dot(surfaceNormal, moonDirection));
+      // 【2026-09-21 月光地板退让】nightAmbient 是非物理环境底光（防纯黑，0.03 定稿）——
+      // 月光照明主导时（满月 ≈地板×1.5）底光叠加上仍偏亮（满月夜 >120 像素 24%，84f3306）。
+      // 地板按 moonFactor 线性退让到 u_nightAmbientRetreat（1=关=零回归；新月 moonFactor=0
+      // 逐位回归；白天 nightFactor=0 本就无地板）。物理语义：底光让位给真实月光照明。
+      skyIrradiance += u_nightTint * (nightAmbient * nightFactor
+        * mix(1.0, u_nightAmbientRetreat, moonFactor));
 
       // March optical depth to the sun for finer details, which BSM lacks.
       // 【2026-09-05 P0 夜晚太阳侧门控】sunIrradiance 三通道全 0 时（ACCURATE LUT / 桥接
