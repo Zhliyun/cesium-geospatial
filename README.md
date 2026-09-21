@@ -136,6 +136,7 @@ http://localhost:5173/?time=2026-08-28T17:30:00Z&camera=-80.6057,64.5197,7852,68
 | `cloudsShadowTemporal=1` | 关 | BSM 时序累积 |
 | `cloudsShadowAdaptive=0` | 开 | 太阳角影子预算（2026-09-04）：BSM 生成端 march 步数随当地太阳仰角平滑收缩（≥20° 满档逐位原值，≤5° 收缩至一半），低太阳角运动帧省成本；`0`=恒满档逐位回退（逃生门） |
 | `cloudsShaftStep=` | 100 | god rays shadowLength march 起始步长（米，2026-09-05 P1）：BSM 纹理 texel 实际足迹 62-375m，50m 本就过采样；100=缺省（迭代 -34%，贴地夜 17→9.4ms，黄昏光柱画面数值不可见级）；`50`=three 上游原值（光柱形态 A/B 对照）；`150`=更省（近级联 texel 2.4× 欠采样，慎用）。另：夜晚（太阳当地沉没 >5°）云照明自动跳过朝太阳次级采样（辐照精确为零，逐位等价，无参数）——云甲内夜视角实测 30→60FPS |
+| `cloudsShaftFallbackScale=` | 自适应 | 兜底光柱步幅倍率（2026-09-21 P4）：无云像素（!hitClouds）的 shadowLength march 起步步长 = `cloudsShaftStep` × 本倍率。缺省按当地太阳仰角自适应 2→4（≤5°=×2 低角零回归域，≥20°=×4 白天逐位零差域，smoothstep 中间带）——兜底成本 ∝ 无云像素占比随时刻/天气漂移，高太阳角放开倍率对冲（实测某上午时刻 25.7→17ms 满帧）；`2`=恒 P3 静态行为；`cloudsShadowAdaptive=0` 时恒回 2 |
 | `cloudsTemporal=0` | 开 | 云时序重建开关（`0` 回退全分 march 无 resolve）：march 低分辨率 + resolve 时域重建（帧率↑）。默认开对齐源库；含静止冻结——相机静止时相位冻结逐位稳定 |
 | `cloudsUpscale` | 1 | march 降采样分母 `4`/`2`/`1`：1=全分 march + resolve 切 TAA 分支（**默认**，画质最佳、静止最稳；实测 60FPS）；2=半分（RT 面积 ×4，涂抹感约减半）；4=1/4 分（源库原行为，低端 GPU 余量）。用户显式 > 质量档位（ultra 档默认 2） |
 | `cloudsMotionAlpha` | 0.4 | 运动中混合比上限：相机移动/旋转超阈值时 resolve 的新帧占比从 0.1 平滑升至此值（拖影/错位换细颗粒，防移动抖动；停止自动回落收敛）。= temporalAlpha 时等效禁用 |

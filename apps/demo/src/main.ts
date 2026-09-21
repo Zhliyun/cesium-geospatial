@@ -643,6 +643,11 @@ async function main(): Promise<void> {
           // A 太阳角自适应影子预算（spec 2026-09-04 §3）：缺省启用（乘数随当地太阳仰角
           // 缩放 BSM 生成端步数），?cloudsShadowAdaptive=0 显式关（逐位回退逃生门）
           ...(getString('cloudsShadowAdaptive') === '0' ? { shadowAdaptive: false } : {}),
+          // 【2026-09-21 P4】兜底光柱步幅倍率固定覆盖：?cloudsShaftFallbackScale=N 恒用 N
+          // （缺省按太阳仰角自适应 2→4；cloudsShadowAdaptive=0 时恒回 P3 常量 2）
+          ...(getNumber('cloudsShaftFallbackScale') != null
+            ? { shadowFallbackScale: getNumber('cloudsShaftFallbackScale')! }
+            : {}),
           // world 模式 radii×N（E1' 归因实验）：?cloudsShadowScale=5 → {80,168,480}km
           // 膨胀层覆盖全程航迹（缺省 WORLD_RADII_DEFAULT {16,33.6,96}km 单源于 clouds 包）
           ...(getNumber('cloudsShadowScale') != null

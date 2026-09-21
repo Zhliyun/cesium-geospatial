@@ -1749,3 +1749,50 @@ describe('T-adaptive A：太阳角影子预算（spec 2026-09-04 §3）', () => 
     handle!.destroy()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T-adaptive P4：兜底光柱步幅自适应（2026-09-21）——preRender 写 state
+// shadowFallbackStepScale（clouds.frag u_shadowFallbackStepScale 消费）+固定覆盖+逃生门
+// ─────────────────────────────────────────────────────────────────────────────
+describe('T-adaptive P4：兜底光柱步幅自适应（2026-09-21）', () => {
+  it('缺省：preRender 写 state 值域 [2,4]（mock 时刻太阳仰角不定；创建期缺省=2 静态行为）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true
+    })
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    expect(stateArg.shadowFallbackStepScale).toBe(2) // 创建期缺省=P3 定稿
+    firePreRender(scene)
+    expect(stateArg.shadowFallbackStepScale).toBeGreaterThanOrEqual(2)
+    expect(stateArg.shadowFallbackStepScale).toBeLessThanOrEqual(4)
+    handle!.destroy()
+  })
+
+  it('options.shadowAdaptive=false → 恒 2（「回到 2026-09-05 P3 静态行为」语义，fixed 覆盖被忽略）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      shadowAdaptive: false,
+      shadowFallbackScale: 4
+    })
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    firePreRender(scene)
+    expect(stateArg.shadowFallbackStepScale).toBe(2)
+    handle!.destroy()
+  })
+
+  it('options.shadowFallbackScale 固定覆盖（demo ?cloudsShaftFallbackScale=）：preRender 后恒该值', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      shadowFallbackScale: 3.5
+    })
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    firePreRender(scene)
+    expect(stateArg.shadowFallbackStepScale).toBe(3.5)
+    handle!.destroy()
+  })
+})

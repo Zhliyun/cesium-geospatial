@@ -59,3 +59,26 @@ export function shadowBudgetMultiplier(
 export function scaledShadowMaxIterations(baseMaxIterations: number, mult: number): number {
   return Math.max(1, Math.round(baseMaxIterations * mult))
 }
+
+// ── P4 兜底光柱步幅自适应（2026-09-21）──
+// 兜底分支（!hitClouds）marchShadowLength 成本 ∝ 无云像素占比，随时刻/天气漂移
+// （2026-09-21 实测：同机位当前时刻兜底 ~10ms vs 2026-09-05 定标场景 ~3.3ms——
+// 该日午后远云排占满天空、09-21 上午天空开阔无云像素多）。倍率上限据 2026-09-05
+// 真机定标：×4 白天（高太阳角）逐位零差，仅低太阳角日落海面伤画质（meanΔ13）——
+// 与 A 预算同构：高角受益域放开到 MAX，低角保守域守 P3 定稿值 MIN。
+export const SHADOW_FALLBACK_SCALE_MIN = 2.0
+export const SHADOW_FALLBACK_SCALE_MAX = 4.0
+
+/**
+ * P4 兜底步幅乘数：elev≤floor → MIN（P3 定稿 ×2，低角零回归域）；elev≥full → MAX
+ * （×4 白天逐位零差域）；中间 smoothstep（复用 A 预算 5°/20° 同曲线）。低角端输出恒
+ * =P3 define 2.0，故 ?cloudsShadowAdaptive=0 回退语义=「回到 2026-09-05 静态行为」。
+ */
+export function shadowFallbackStepScale(
+  sunElevDeg: number, fullDeg: number, floorDeg: number
+): number {
+  return (
+    SHADOW_FALLBACK_SCALE_MIN +
+    (SHADOW_FALLBACK_SCALE_MAX - SHADOW_FALLBACK_SCALE_MIN) * smoothstep(floorDeg, fullDeg, sunElevDeg)
+  )
+}

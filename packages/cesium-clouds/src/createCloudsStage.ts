@@ -120,9 +120,11 @@ import { createShadowPass, type ShadowPass } from './ShadowPass'
 import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
 import {
   ADAPTIVE_BUDGET_CONSTANTS,
+  SHADOW_FALLBACK_SCALE_MIN,
   localSunElevationDeg,
   scaledShadowMaxIterations,
-  shadowBudgetMultiplier
+  shadowBudgetMultiplier,
+  shadowFallbackStepScale
 } from './shadowBudgetAdaptation'
 import {
   CLIMATE_BANDS_FLOOR_DEFAULT,
@@ -246,6 +248,12 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * false=乘数恒 1（demo `?cloudsShadowAdaptive=0` 逃生门，逐位回退）。
    */
   shadowAdaptive?: boolean
+  /**
+   * P4 兜底光柱步幅倍率固定覆盖（2026-09-21；demo `?cloudsShaftFallbackScale=N`）。缺省
+   * undefined=按太阳仰角自适应（shadowFallbackStepScale，elev≤5°→2 / ≥20°→4 smoothstep）；
+   * 显式设定则恒用该值（定标/调试用）。`?cloudsShadowAdaptive=0` 时无论本项恒回 P3 常量 2。
+   */
+  shadowFallbackScale?: number
   /**
    * 诊断：冻结 cascade 矩阵（首帧 update 后不再更新，BSM 在冻结网格上每帧重 march）。
    * 噪声分解实验用——「冻结矩阵 + 相机移动」录屏差分 = 非矩阵噪声地板（层切换/jitter/
@@ -541,6 +549,8 @@ function buildCloudsStageImpl(
     moonDirection: new Cartesian3(0, 0, 1),
     moonIlluminatedFraction: 0,
     shadowBudgetMult: 1, // A 乘数（preRender 每帧按当地太阳仰角更新；缺省 1=无缩放）
+    // P4 兜底步幅乘数（preRender 每帧更新；缺省 2=P3 静态行为，首帧前 uniform 也有安全值）
+    shadowFallbackStepScale: SHADOW_FALLBACK_SCALE_MIN,
     altitudeCorrection: new Cartesian3(),
     atlasTexture: undefined,
     windOffset: new Cartesian2(),
@@ -850,15 +860,28 @@ function buildCloudsStageImpl(
       // ── A 太阳角自适应影子预算（spec 2026-09-04 §3）：乘数 preRender 算好存 state，
       // shadowUniformMap 闭包读取（params 源不回写——复利污染防线）。放太阳段条件外：
       // fallback 帧（ICRF 缺失）也用 state.sunDirection 现值重算，乘数不滞留旧帧值。
+      const sunElevDeg = localSunElevationDeg(state.sunDirection, camera.positionWC)
       state.shadowBudgetMult =
         options.shadowAdaptive === false
           ? 1
           : shadowBudgetMultiplier(
-              localSunElevationDeg(state.sunDirection, camera.positionWC),
+              sunElevDeg,
               ADAPTIVE_BUDGET_CONSTANTS.SUN_ELEV_FULL_DEG,
               ADAPTIVE_BUDGET_CONSTANTS.SUN_ELEV_FLOOR_DEG,
               ADAPTIVE_BUDGET_CONSTANTS.BUDGET_FLOOR
             )
+      // ── P4 兜底光柱步幅乘数（2026-09-21）：同仰角自适应 2→4（成本 ∝ 无云像素占比随
+      // 时刻/天气漂移）；options.shadowFallbackScale 固定覆盖（URL ?cloudsShaftFallbackScale=
+      // 定标/调试用）；shadowAdaptive=0 恒回 P3 常量 MIN=「2026-09-05 静态行为」语义。
+      state.shadowFallbackStepScale =
+        options.shadowAdaptive === false
+          ? SHADOW_FALLBACK_SCALE_MIN
+          : (options.shadowFallbackScale ??
+            shadowFallbackStepScale(
+              sunElevDeg,
+              ADAPTIVE_BUDGET_CONSTANTS.SUN_ELEV_FULL_DEG,
+              ADAPTIVE_BUDGET_CONSTANTS.SUN_ELEV_FLOOR_DEG
+            ))
 
       // ── T6 云图时间轴（spec §4.1）：CPU float64 mod 后传 uniform（T1 纯函数，同机多 Viewer
       //    clock 同刻 ⇒ 同分布）——evolutionPhaseS 调试钩子仅偏移演化/平流输入，不动太阳 ──

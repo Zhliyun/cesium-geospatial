@@ -316,6 +316,10 @@ describe('M5 T1 SHADOW_LENGTH（lightShafts）编译分支', () => {
     expect(src).toContain('uniform int maxShadowLengthIterationCount;')
     expect(src).toContain('uniform float minShadowLengthStepSize;')
     expect(src).toContain('uniform float maxShadowLengthRayDistance;')
+    // 【2026-09-21 P4】兜底步幅倍率 define→uniform（JS 按太阳仰角自适应 2→4）
+    expect(src).toContain('uniform float u_shadowFallbackStepScale;')
+    expect(src).toContain('minShadowLengthStepSize * u_shadowFallbackStepScale')
+    expect(src).not.toContain('SHADOW_FALLBACK_STEP_SCALE')
     // applyAerialPerspective 消费 shadowLength（GetSkyRadianceToPoint 3 参——higher-order 分支）
     expect(src).toContain('applyAerialPerspective(cameraPosition, frontPosition, shadowLength, color);')
   })

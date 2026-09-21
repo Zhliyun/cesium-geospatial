@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest'
 import { Cartesian3 } from 'cesium'
 import {
   ADAPTIVE_BUDGET_CONSTANTS,
-  localSunElevationDeg, scaledShadowMaxIterations, shadowBudgetMultiplier
+  SHADOW_FALLBACK_SCALE_MAX,
+  SHADOW_FALLBACK_SCALE_MIN,
+  localSunElevationDeg, scaledShadowMaxIterations, shadowBudgetMultiplier,
+  shadowFallbackStepScale
 } from './shadowBudgetAdaptation'
 
 const C = ADAPTIVE_BUDGET_CONSTANTS
@@ -50,6 +53,28 @@ describe('scaledShadowMaxIterations（spec §3：闭包返回值层，源对象�
     expect(scaledShadowMaxIterations(50, 1)).toBe(50)
     expect(scaledShadowMaxIterations(25, 0.5)).toBe(13)  // Math.round(12.5)=13（half-up）
     expect(scaledShadowMaxIterations(1, 0.1)).toBe(1)
+  })
+})
+
+describe('shadowFallbackStepScale（P4 2026-09-21：高角=MAX 白天零差域、低角=MIN P3 定稿域）', () => {
+  it('端点与域内（方向与 A 预算相反——这里是高角受益放大倍率）', () => {
+    expect(shadowFallbackStepScale(-10, 20, 5)).toBe(2)   // 低角=P3 定稿
+    expect(shadowFallbackStepScale(5, 20, 5)).toBe(2)     // =FLOOR 边界
+    expect(shadowFallbackStepScale(20, 20, 5)).toBe(4)    // =FULL
+    expect(shadowFallbackStepScale(60, 20, 5)).toBe(4)    // 高角封顶
+    const m12 = shadowFallbackStepScale(12.5, 20, 5)
+    expect(m12).toBeGreaterThan(SHADOW_FALLBACK_SCALE_MIN)
+    expect(m12).toBeLessThan(SHADOW_FALLBACK_SCALE_MAX)
+    expect(shadowFallbackStepScale(16, 20, 5)).toBeGreaterThan(m12) // 单调升
+  })
+  it('低角全域输出恒=MIN=2（P3 define 值——cloudsShadowAdaptive=0 回退逐位一致）', () => {
+    for (const e of [-30, -5, 0, 3, 4.9]) {
+      expect(shadowFallbackStepScale(e, 20, 5)).toBe(SHADOW_FALLBACK_SCALE_MIN)
+    }
+  })
+  it('常数红线：MIN=P3 定稿 2.0、MAX=白天逐位零差上限 4.0（2026-09-05 定标）', () => {
+    expect(SHADOW_FALLBACK_SCALE_MIN).toBe(2)
+    expect(SHADOW_FALLBACK_SCALE_MAX).toBe(4)
   })
 })
 

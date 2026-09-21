@@ -133,6 +133,12 @@ export interface CloudsFrameState {
    * 闭包读取做 BSM 生成端步数缩放（standalone CloudsPass 无此编排，可选=既有缺省语义）。
    */
   shadowBudgetMult?: number
+  /**
+   * P4 兜底光柱步幅乘数（2026-09-21；createCloudsStage preRender 每帧按当地太阳仰角更新，
+   * 缺省 2=P3 静态行为）。clouds.frag 兜底分支 u_shadowFallbackStepScale 消费
+   * （CloudsPass.ts uniform map 闭包读取；standalone CloudsPass 未设时走同值 fallback）。
+   */
+  shadowFallbackStepScale?: number
   altitudeCorrection: Cartesian3
   /**
    * M3 BSM 状态（T5 createCloudsStage preRender 填：CascadedShadowMaps.update + ShadowPass.render）。
@@ -540,6 +546,9 @@ export function createCloudsPass(
     maxShadowLengthIterationCount: () => params.maxShadowLengthIterationCount,
     minShadowLengthStepSize: () => params.minShadowLengthStepSize,
     maxShadowLengthRayDistance: () => params.maxShadowLengthRayDistance,
+    // 【2026-09-21 P4】兜底分支（!hitClouds）起步步幅倍率：preRender 按太阳仰角算
+    // （shadowBudgetAdaptation.shadowFallbackStepScale，2→4），未编排时 fallback=P3 定稿 2
+    u_shadowFallbackStepScale: () => state.shadowFallbackStepScale ?? 2,
 
     // BSM（M3：state.shadow 由 createCloudsStage preRender 填；未就绪 fallback 全 0 dummy → Beer=1）
     shadowBuffer: () => state.shadow?.bsm ?? dummyShadowBuffer,

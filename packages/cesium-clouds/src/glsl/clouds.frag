@@ -118,12 +118,15 @@ uniform float maxShadowFilterRadius;
 uniform int maxShadowLengthIterationCount;
 uniform float minShadowLengthStepSize;
 uniform float maxShadowLengthRayDistance;
-// 【2026-09-05 兜底 march 大步幅】!hitClouds 像素（云 miss 天空/打地）的 marchShadowLength
-// 是全屏成本大头（实测白天贴地 6.6ms，与画面云量无关）。该分支的 shadowLength 只调制
-// 云前大气散射（GetSkyRadianceToPoint higher-order 只遮 single）。倍率定标（真机 A/B）：
-// ×4 白天逐位零差，但朝太阳日落场景海面散射显著发灰（meanΔ13/超差 48%——低太阳角视线
-// 云影光深大，粗步幅积分系统性偏差）→ 定稿 ×2。
-#define SHADOW_FALLBACK_STEP_SCALE 2.0
+// 【2026-09-05 兜底 march 大步幅 / 2026-09-21 P4 太阳角自适应】!hitClouds 像素（云 miss
+// 天空/打地）的 marchShadowLength 是全屏成本大头（实测白天贴地 6.6ms，与画面云量无关）。
+// 该分支的 shadowLength 只调制云前大气散射（GetSkyRadianceToPoint higher-order 只遮
+// single）。倍率定标（真机 A/B）：×4 白天逐位零差，但朝太阳日落场景海面散射显著发灰
+// （meanΔ13/超差 48%——低太阳角视线云影光深大，粗步幅积分系统性偏差）→ P3 定稿 ×2。
+// P4：兜底成本 ∝ 无云像素占比，随时刻/天气漂移（2026-09-21 实测同机位某时刻兜底
+// ~10ms vs 09-05 定标 ~3.3ms）→ JS 按太阳仰角自适应 2→4（elev≤5°=P3 定稿 2 零回归域；
+// ≥20°=4 白天零差域；smoothstep 中间带，A 预算同曲线）——低角端与 P3 define 逐位一致。
+uniform float u_shadowFallbackStepScale;
 #endif // SHADOW_LENGTH
 
 in vec2 vUv;
@@ -1113,14 +1116,15 @@ void main() {
   if (!hitClouds) {
     #ifdef SHADOW_LENGTH
     if (all(greaterThanEqual(shadowRayNearFar, vec2(0.0)))) {
-      // 【2026-09-05 兜底大步幅】无云像素的满段 march=全屏成本大头（白天贴地实测 6.6ms）；
-      // 调制项为 km 级云影特征，×4 起步步幅（~35 步走完 16km）画质保真（见 define 处注）。
+      // 【2026-09-05 兜底大步幅 / 09-21 P4 自适应】无云像素的满段 march=全屏成本大头
+      // （白天贴地实测 6.6ms；且 ∝ 无云像素占比随时随天气漂移）；调制项为 km 级云影
+      // 特征，大步幅画质保真（白天 ×4 逐位零差、低角守 ×2——见 uniform 处注）。
       shadowLength = marchShadowLength(
         shadowRayNearFar.x * rayDirection + cameraPosition,
         rayDirection,
         shadowRayNearFar,
         stbn,
-        minShadowLengthStepSize * SHADOW_FALLBACK_STEP_SCALE
+        minShadowLengthStepSize * u_shadowFallbackStepScale
       );
     }
     #endif // SHADOW_LENGTH
