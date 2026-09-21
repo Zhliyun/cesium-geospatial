@@ -132,6 +132,11 @@ uniform float maxShadowLengthRayDistance;
 // ~10ms vs 09-05 定标 ~3.3ms）→ JS 按太阳仰角自适应 2→4（elev≤5°=P3 定稿 2 零回归域；
 // ≥20°=4 白天零差域；smoothstep 中间带，A 预算同曲线）——低角端与 P3 define 逐位一致。
 uniform float u_shadowFallbackStepScale;
+// 【2026-09-21 P5 运动帧光柱降载】相机运动时光柱 march 步幅再乘此系数（JS 每帧按
+// 运动标量算，静止精确 1=零回归）。旋转卡顿排查（2026-09-21）：光柱是旋转最大单项
+// （关断 -6ms p50），25-68ms 帧时在 60Hz vsync 下呈现段不均=周期性卡顿体感；运动中
+// temporal rejection 高、光柱形态本在抖，粗化低感。hitClouds/兜底两调用同乘。
+uniform float u_shaftMotionScale;
 #endif // SHADOW_LENGTH
 
 in vec2 vUv;
@@ -1095,7 +1100,8 @@ void main() {
           rayDirection,
           shadowRayNearFar,
           stbn,
-          minShadowLengthStepSize
+          // 【2026-09-21 P5】运动帧粗化（u_shaftMotionScale 静止=1 逐位）
+          minShadowLengthStepSize * u_shaftMotionScale
         );
       }
       #endif // SHADOW_LENGTH
@@ -1134,7 +1140,7 @@ void main() {
         rayDirection,
         shadowRayNearFar,
         stbn,
-        minShadowLengthStepSize * u_shadowFallbackStepScale
+        minShadowLengthStepSize * u_shadowFallbackStepScale * u_shaftMotionScale
       );
     }
     #endif // SHADOW_LENGTH

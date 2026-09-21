@@ -667,7 +667,7 @@ async function main(): Promise<void> {
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
-          ...(getNumber('cloudsNightAmbient') != null || getNumber('cloudsNightRetreat') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null || getNumber('cloudsShaftStep') != null
+          ...(getNumber('cloudsNightAmbient') != null || getNumber('cloudsNightRetreat') != null || getNumber('cloudsMotionShaft') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null || getNumber('cloudsShaftStep') != null
             ? {
                 parameters: {
                   // 【2026-09-05 P1 光柱 march 步长】?cloudsShaftStep=<米>（缺省 100；
@@ -686,6 +686,12 @@ async function main(): Promise<void> {
                     : {}),
                   ...(getNumber('cloudsNightAmbient') != null
                     ? { nightAmbient: getNumber('cloudsNightAmbient')! }
+                    : {}),
+                  // 【2026-09-21 P5】运动帧光柱步幅上限：?cloudsMotionShaft=N（缺省 4；1=关
+                  // 零回归）。相机运动时光柱步幅乘 shaftMotionScale∈[1,N]，压旋转帧时
+                  // （60Hz vsync 呈现不均=「周期性卡顿」体感）
+                  ...(getNumber('cloudsMotionShaft') != null
+                    ? { shaftMotionBoost: getNumber('cloudsMotionShaft')! }
                     : {}),
                   // ?cloudsNightRetreat= 月光地板退让上限（2026-09-21）：满月（moonFactor=1）
                   // 时底光剩此比例，缺省 0.25，1=关零回归

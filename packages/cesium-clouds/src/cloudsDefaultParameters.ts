@@ -151,6 +151,12 @@ export interface CloudsParameters {
    *  真实照明）主导时底光让位，满月夜云亮度交月光主导。1=关（新月/月落/白天
    *  零回归）。demo ?cloudsNightRetreat=。不进质量档位（视觉参数）。 */
   nightAmbientMoonRetreat: number
+  /** 运动帧光柱步幅上限（2026-09-21 P5 旋转卡顿排查）：相机运动时光柱 march 步幅乘
+   *  shaftMotionScale∈[1, 本值]（运动标量 0-50m smoothstep 渐入，静止精确 1 零回归；
+   *  temporal 块内计算）。光柱=旋转最大单项（关断 -6ms p50），运动帧粗化低感
+   *  （temporal rejection 高、光柱本在抖）。demo ?cloudsMotionShaft=（1=关）。
+   *  不进质量档位（性能×运动参数）。 */
+  shaftMotionBoost: number
   /** 夜间云色调乘子（线性 RGB，乘底光+月光两项；2026-09-01 云偏蓝二轮反馈 uniform 化）。
    *  沿革：冷蓝 (0.72,1,1.32)（2026-08-31 泛红修复对冲远景 transmittance 红化）→(0.72,1,1.15)
    *  →(0.88,1,1.0)（三档拍板 C 档）。demo ?cloudsTint=r,g,b。 */
@@ -321,6 +327,9 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 缺省 0.25（满月夜地板贡献 ×1/4——84f3306 后满月夜仍偏亮 >120 像素 24% 的遗留候选；
     // 待满月夜真机定档，?cloudsNightRetreat= 即调，1=关零回归）
     nightAmbientMoonRetreat: 0.25,
+    // 运动帧光柱步幅上限（2026-09-21 P5）：4=满运动步幅 ×4（步数 ≈÷4，旋转 -6ms p50
+    // 关断收益的大部分）；静止精确 1 零回归。?cloudsMotionShaft= 即调，1=关
+    shaftMotionBoost: 4,
     // 暮光天光补偿（2026-09-01 黄昏云过黑 A 案）：6=用户拍板物理档（实测云/天空显示比 80%，
     // 接近物理目标 85-90%；档位沿革 3 温和=51%/6 物理=80%，?cloudsTwilightBoost= URL 即调）
     twilightSkyBoost: 6.0,

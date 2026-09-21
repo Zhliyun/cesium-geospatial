@@ -423,6 +423,38 @@ describe('暮光天光补偿 twilightSkyBoost', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 【2026-09-21 P5 运动帧光柱降载】相机运动时光柱 march（hitClouds+兜底）步幅乘
+// u_shaftMotionScale（JS 按运动标量算 ∈[1, shaftMotionBoost]，静止精确 1=零回归）——
+// 光柱=旋转最大单项（关断 -6ms p50），25-68ms 波动在 60Hz vsync 下呈现不均=「周期性卡顿」
+// ─────────────────────────────────────────────────────────────────────────────
+describe('运动帧光柱降载 shaftMotionScale', () => {
+  it('uniform 声明 + 两处 marchShadowLength 调用步幅同乘', () => {
+    const src = buildCloudsMainFragmentShader({})
+    expect(src).toContain('uniform float u_shaftMotionScale;')
+    // hitClouds 调用（云隙光柱主体）：原 minShadowLengthStepSize → 乘 motion scale
+    expect(src).toContain('minShadowLengthStepSize * u_shaftMotionScale')
+    // 兜底调用：P4 倍率链上再乘 motion scale
+    expect(src).toContain(
+      'minShadowLengthStepSize * u_shadowFallbackStepScale * u_shaftMotionScale'
+    )
+    // uniform 仅声明一次
+    expect(src.match(/uniform float u_shaftMotionScale;/g)?.length).toBe(1)
+  })
+
+  it('glslang：含 shaftMotionScale 的完整 shader 真编译', () => {
+    const src = buildStandaloneCloudsShaderForValidation({})
+    const { ok, output } = compileFragment(src)
+    if (!ok) {
+      throw new Error(
+        `glslang 编译失败:\n${output}\n` +
+          src.split('\n').slice(0, 60).map((l, i) => `${i + 1}: ${l}`).join('\n')
+      )
+    }
+    expect(ok).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 【2026-09-21 月光地板退让】nightAmbient 注 L65 遗留候选落地：底光乘 mix(1, 上限, moonFactor)
 // （moonFactor 上移复用：月相×月高度门——新月/月落/白天 moonFactor=0 或 nightFactor=0 零回归）
 // ─────────────────────────────────────────────────────────────────────────────

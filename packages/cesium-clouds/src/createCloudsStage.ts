@@ -551,6 +551,8 @@ function buildCloudsStageImpl(
     shadowBudgetMult: 1, // A 乘数（preRender 每帧按当地太阳仰角更新；缺省 1=无缩放）
     // P4 兜底步幅乘数（preRender 每帧更新；缺省 2=P3 静态行为，首帧前 uniform 也有安全值）
     shadowFallbackStepScale: SHADOW_FALLBACK_SCALE_MIN,
+    // P5 运动帧光柱步幅乘数（preRender 每帧更新；缺省 1=静止零回归）
+    shaftMotionScale: 1,
     altitudeCorrection: new Cartesian3(),
     atlasTexture: undefined,
     windOffset: new Cartesian2(),
@@ -947,6 +949,15 @@ function buildCloudsStageImpl(
           motionAlphaCurrent ?? params.temporalAlpha
         )
         resolvePass?.setTemporalAlpha(motionAlphaCurrent)
+
+        // ── P5 运动帧光柱降载（2026-09-21 旋转卡顿排查）：运动标量（平移+旋转×等效半径，
+        // 与上方 α 同源）→ u_shaftMotionScale ∈ [1, params.shaftMotionBoost]，0-50m 线性
+        // 渐入、静止精确 1=零回归。光柱 march 是旋转最大单项（关断 -6ms p50——60Hz vsync
+        // 下 25-68ms 波动呈现段不均=「周期性卡顿」体感）；运动中 temporal rejection 高、
+        // 光柱形态本在抖，步幅粗化低感。60s 长旋转实测无固定周期尖峰（125ms 群=瞬态）。
+        const motionM = transM + dirAngle * MOTION_EQUIV_RADIUS_M
+        state.shaftMotionScale =
+          1 + (params.shaftMotionBoost - 1) * Math.min(1, Math.max(0, motionM / 50))
 
         // 静止冻结判定（2026-09-02）：存上帧相机位置 + T2 上帧 look 方向（块末统一更新）
         prevCameraPos = Cartesian3.clone(camera.positionWC, prevCameraPos ?? new Cartesian3())
