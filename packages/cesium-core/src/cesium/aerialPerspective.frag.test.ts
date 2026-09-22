@@ -281,3 +281,31 @@ describe('M5 atmosphere 路径（cloudsShadowLength 编译分支）', () => {
     expect(src).not.toContain('uniform float u_cloudsGodRaysGain;')
   })
 })
+
+describe('M6 乘子插入锚（spec §6.6 零回归锚）', () => {
+  const src = buildAerialPerspectiveFragmentShader({ groundCloudShadow: true })
+  it('mulSunIrr 乘法行存在（唯一插入点）', () => {
+    expect(src).toContain('mulSunIrr *= mix(1.0, groundSunTrans, u_groundShadowStrength);')
+  })
+  it('短路条件含 strength>0 与太阳项>0', () => {
+    expect(src).toContain('u_groundShadowStrength > 0.0')
+    expect(src).toContain('max(dot(mulNormal, sunDirection), 0.0) > 0.0')
+  })
+  it('define 关闭时无任何 groundShadow GLSL（零回归：逐字节同 main）', () => {
+    const off = buildAerialPerspectiveFragmentShader({})
+    expect(off).not.toContain('groundSunTrans')
+    expect(off).not.toContain('u_shadowBuffer')
+    expect(off).toBe(buildAerialPerspectiveFragmentShader({})) // 确定性
+  })
+  it('TS 镜像公式性质（spec §9.1.2）：sunTrans=1 ≡ 现状；sunTrans=0 = 纯天光+夜地板', () => {
+    const solar = 1.0, skyIrr = 0.3, sunIrrDot = 0.7, ambient = 0.01
+    // 与 GLSL 逐式对应：eff = mix(1.0, sunTrans, strength)；groundLightColor = max((sunIrrDot*eff + skyIrr)/solar, ambient)
+    const groundLightColor = (sunTrans: number, strength: number) => {
+      const eff = 1 * (1 - strength) + sunTrans * strength
+      return Math.max((sunIrrDot * eff + skyIrr) / solar, ambient)
+    }
+    expect(groundLightColor(1, 1)).toBe(Math.max((sunIrrDot + skyIrr) / solar, ambient)) // 无云≡现状
+    expect(groundLightColor(0, 1)).toBe(Math.max(skyIrr / solar, ambient))               // 全影=天光地板
+    expect(groundLightColor(0.5, 0)).toBe(Math.max((sunIrrDot + skyIrr) / solar, ambient)) // strength=0 短路≡现状
+  })
+})

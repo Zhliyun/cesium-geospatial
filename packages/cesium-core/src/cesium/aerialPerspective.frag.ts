@@ -700,7 +700,11 @@ void main() {
   // sky/ground 主分类**——分类用 lookingAtGround（平滑），避免 depthTexture 不抗锯齿在掠射地平线处逐像素
   // 硬翻转的条纹。hasScene/sceneDist 只在 foreInscatter（近处 mask>0）被消费；远处/掠射 sceneDist 大
   // → mask=0 不读它 → 无条纹。
-  bool hasScene = false;
+${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
+  // M6：depth 重建的 raw ECEF 米制位置（§6.2 posM 主路径；hasScene=false 时由 tHitG 兜底覆盖）
+  vec3 sceneWorldPosM = vec3(0.0);
+#endif
+` : ''}  bool hasScene = false;
   float sceneDist = 0.0;
   if (hasSceneDepth < 1.0) {  // Bug6：中心 tap 判定（防 5-tap far-plane 排除翻转边缘 hasScene）
     vec4 eyePos = czm_windowToEyeCoordinates(vec4(gl_FragCoord.xy, depth, 1.0));  // sceneDist 用 5-tap 平均 depth
@@ -708,7 +712,10 @@ void main() {
       eyePos /= eyePos.w;
       if (eyePos.z < -1e-4) {
         vec4 worldPos4 = czm_inverseView * eyePos;
-        vec3 sceneWorldPosKm = worldPos4.xyz * METER_TO_LENGTH_UNIT
+${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
+        sceneWorldPosM = worldPos4.xyz; // raw ECEF 米（altCorr 加之前的原始值）
+#endif
+` : ''}        vec3 sceneWorldPosKm = worldPos4.xyz * METER_TO_LENGTH_UNIT
           + altitudeCorrection * METER_TO_LENGTH_UNIT;
         float sceneR = length(sceneWorldPosKm);
         // 反演点在大气层内（容 5km 反演误差）= 真实地形；far plane 反演点 r 巨大被排除。
@@ -769,7 +776,11 @@ void main() {
   // mul 锚点统一、分支前计算：discG>0 用椭球交点、discG<0（打山/天空视线）用径向脚点——
   // 贴地场景两者太阳角差 <0.5°，mul 全屏连续，直线消失。真天空像素 original≈clearColor≈0，
   // 乘 mul 无影响；打山像素乘 mul=暮光暗照山体（物理正确）。
-  vec3 groundLightColor;
+${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
+  // M6 地面云影透射率（debug=11 直显；初始 1=无影，采样后 exp(-光深)）
+  float groundSunTrans = 1.0;
+#endif
+` : ''}  vec3 groundLightColor;
   {
     vec3 mulAnchorKm = discG > 0.0
       ? cameraPosition + rayDirection * tHitG
@@ -779,7 +790,36 @@ void main() {
     vec3 mulSunIrr = ATMOSPHERE.solar_irradiance
       * GetTransmittanceToSun(ATMOSPHERE, transmittance_texture, length(mulAnchorKm), mulMuS)
       * max(dot(mulNormal, sunDirection), 0.0);
-    vec3 mulSkyIrr = GetIrradiance(
+${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
+    // —— M6 地面云影（spec §6.2/§6.6）——
+    // 采样点：hasScene → depth 重建 raw ECEF 米；瓦片流送缺失（discG>0）→ tHitG 椭球兜底
+    //（继承 fore fallback 语义，防流送边界「影有/无」直线——mul 直线/depth 灰膜同型前科）；
+    // 真天空（discG<0）不采样恒 1。距离量 km×1000 转米。
+    vec3 groundShadowPosM = hasScene
+      ? sceneWorldPosM
+      : czm_viewerPositionWC + rayDirection * (tHitG * 1000.0);
+    // 双域：distToTop 在密切球局部系求交（米；altitudeCorrection FRAME uniform 为米制）；
+    // 级联/UV 用 raw posM。distToTop<=0（太阳沉没等）→ 级联 -1 路径。
+    float groundDistToTopM = raySphereSecondIntersection(
+      groundShadowPosM + altitudeCorrection, sunDirection, vec3(0.0), u_shellTopRadius);
+    int groundCascade = -1;
+    float groundRadius = 0.0;
+    if (groundDistToTopM > 0.0) {
+      groundCascade = getGroundCascadeIndex(groundShadowPosM, interleavedGradientNoise(gl_FragCoord.xy));
+      groundRadius = getGroundShadowRadius(groundShadowPosM);
+    }
+    // 短路（spec §6.7，逐位等价）：strength=0 / 夜晚背阳（太阳项=0，mulSunIrr 太阳分量恒 0）/ 级联外
+    if (u_groundShadowStrength > 0.0
+        && max(dot(mulNormal, sunDirection), 0.0) > 0.0
+        && groundCascade >= 0) {
+      float groundOd = sampleGroundShadowOpticalDepthPCF(
+        groundShadowPosM, groundDistToTopM, groundRadius, groundCascade);
+      groundSunTrans = exp(-groundOd);
+    }
+    // 零回归锚：strength=0 或 sunTrans=1 时 mix 结果恒 1.0，×1.0 IEEE 精确
+    mulSunIrr *= mix(1.0, groundSunTrans, u_groundShadowStrength);
+#endif
+` : ''}    vec3 mulSkyIrr = GetIrradiance(
       ATMOSPHERE,
       irradiance_texture,
       length(mulAnchorKm),
@@ -897,7 +937,16 @@ ${o.moon ? '    moonDisc *= limbFade; // 与太阳盘行为一致（太空视角
   // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。8/9/10 同理外置（>7.5）。
   if (u_debugMode < 6.5 || u_debugMode > 7.5) {
     if (u_debugMode > 7.5) {
-      if (u_debugMode > 9.5) {
+${o.groundCloudShadow ? `      if (u_debugMode > 10.5) {
+        // 11：M6 地面云影透射率灰度（R=groundSunTrans；无 define 恒白）
+#ifdef HAS_GROUND_SHADOW
+        out_FragColor = vec4(groundSunTrans, 0.0, 0.0, 1.0);
+#else
+        out_FragColor = vec4(1.0);
+#endif
+        return;
+      }
+` : ''}      if (u_debugMode > 9.5) {
         out_FragColor = vec4(clamp(inscatter * 50.0, 0.0, 1.0), 1.0);
         return;
       }
