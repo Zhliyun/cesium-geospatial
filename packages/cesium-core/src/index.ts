@@ -40,7 +40,8 @@ export type {
   AtmosphereStageOptions,
   ResolvedAtmosphereStageOptions,
   AtmosphereStageHandle,
-  AtmosphereFrameState
+  AtmosphereFrameState,
+  CloudsShadowBridgeData
 } from './cesium/AtmosphereStage'
 // phase2b LensFlare 默认值常量（demo URL 参数 fallback 用，spec §5.10）
 export {

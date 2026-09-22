@@ -52,6 +52,12 @@ export interface AerialPerspectiveFragOptions {
    */
   cloudsGodRaysGain?: number
   /**
+   * M6 地面云影 define 开关（spec §5）：由 AtmosphereStage 依 cloudsShadowBridge 存在开启
+   * （buildAtmosphereStage 注入，非用户 option）。默认 false 零回归——define 关闭时本 shader
+   * 产物与 main 逐字节一致（Task 4 消费：HAS_GROUND_SHADOW 分支 + uniform 族声明）。
+   */
+  groundCloudShadow?: boolean
+  /**
    * 月盘（2026-08-30 夜间光照 spec r2 §5）：sky 分支物理月盘——Oren-Nayar 月面（月相从
    * 几何涌现）× 视星等 2.5e-6 × 视线 transmittance（大气透视），走 getSkyRadiance out
    * 通道独立于 u_inscatterScale（不吃雾旋钮），同受 hasScene 前景雾（山遮月）与 limbFade。
@@ -823,6 +829,7 @@ export function buildAerialPerspectiveFragmentShader(
     hdrDepthTemporal: false,
     cloudsShadowLength: false,
     cloudsGodRaysGain: 1.0,
+    groundCloudShadow: false, // M6 地面云影 define（默认 false 零回归；AtmosphereStage 依桥存在注入）
     moon: true,
     ...options
   }

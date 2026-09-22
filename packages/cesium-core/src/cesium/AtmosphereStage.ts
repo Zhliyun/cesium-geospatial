@@ -15,6 +15,7 @@ import {
   PostProcessStage,
   PostProcessStageComposite,
   PostProcessStageSampleMode,
+  Cartesian2,
   Cartesian3,
   Matrix3,
   Matrix4,
@@ -25,6 +26,7 @@ import {
   PixelDatatype,
   PixelFormat,
   Texture,
+  Texture3D,
   Sampler,
   TextureWrap,
   DeveloperError,
@@ -69,6 +71,21 @@ import {
 } from './depthTemporal/historyBlit'
 import { computeTemporalAlpha, computeMaxDelta } from './depthTemporal/temporalAlpha'
 import { DEPTH_THRESHOLD_DEFAULT, HIGH_ALPHA, LOW_ALPHA } from './depthTemporal/depthTemporalConstants'
+
+/** M6 地面云影桥数据（spec §5）：clouds handle.getGroundShadowBridgeData() 产物，demo 编排层组装。
+ *  数组恒 4 槽（实际级联数见 cascadeCount；空槽 intervals=(0,0) → 级联 -1 无影）。 */
+export interface CloudsShadowBridgeData {
+  /** ShadowPass.bsmTexture；首帧 render 前 undefined → u_shadowBuffer 落 dummy Texture3D。 */
+  bsm: Texture3D | undefined
+  matrices: Matrix4[]         // raw ECEF 米→light clip ×4 槽
+  inverseMatrices: Matrix4[]  // clip→raw ECEF 米 ×4 槽（PCF 半径换算）
+  intervals: Cartesian2[]     // ×4 槽；world 锚定=绝对视深/far 归一化
+  cameraNear: number          // 透传 state.shadow.cameraNear（world 缺省 0）——禁自取 camera.frustum
+  far: number                 // 透传 state.shadow.far（world=cascades.far）
+  shellTopRadius: number      // 云壳顶球半径米（CascadedShadowMaps.shellTopRadius，缺省 6362200）——shader 零加法防 km/m 陷阱
+  cascadeCount: number        // 实际级联数（low=2 其余=3）
+  sampleCount: number         // PCF 样本数（档位，≤16）
+}
 
 // B 路径 options：天空/日盘宏开关 + 动态曝光参数。
 export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
@@ -135,6 +152,11 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
    * premultiplied 输出（.a=覆盖率）。不传（云未开）→ occlusion 不编译云采样（零回归）。
    */
   cloudsOcclusionBridge?: () => { _texture: unknown; _target: number } | undefined
+  /** M6 地面云影桥（spec §5）：非空时 aerial shader 开 HAS_GROUND_SHADOW define。
+   *  ?cloudsShadow=0（关自阴影）时地面云影连带消失（README 标注）。 */
+  cloudsShadowBridge?: () => CloudsShadowBridgeData | undefined
+  /** 地面云影强度（spec §7，0-1 缺省 1）；0 时采样短路（逐位等价）。 */
+  groundShadowStrength?: number
   // ── 月盘（2026-08-30 夜间光照 spec r2 §5）──
   // moon?: boolean 继承自 AerialPerspectiveFragOptions（默认 true；创建期语义：切换=重建 stage，
   // 同 sun/sky 惯例，运行时切换不在范围）。
@@ -171,9 +193,11 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
 }
 
 // 校验后的完整 options（hdrDepthTemporal 排除：runtime 基于 stageCreated 决定，非用户 option；buildAtmosphereStage 时注入）。
-// cloudsShadowLength 排除同 hdrDepthTemporal：runtime 由 cloudsShadowLengthBridge 存在决定（buildAtmosphereStage 注入）。
+// cloudsShadowLength/groundCloudShadow 排除同 hdrDepthTemporal：runtime 由对应桥存在决定（buildAtmosphereStage 注入）。
 export interface ResolvedAtmosphereStageOptions
-  extends Required<Omit<AerialPerspectiveFragOptions, 'hdrDepthTemporal' | 'cloudsShadowLength'>> {
+  extends Required<
+    Omit<AerialPerspectiveFragOptions, 'hdrDepthTemporal' | 'cloudsShadowLength' | 'groundCloudShadow'>
+  > {
   exposureFollowTimeline: boolean
   exposureDay: number
   exposureNight: number
@@ -211,6 +235,8 @@ export interface ResolvedAtmosphereStageOptions
   moonTint: Cartesian3
   // 月晕 resolved（月光天空散射倍率；0=关）
   moonSkyGlowScale: number
+  // M6 地面云影强度 resolved（spec §7，0-1 缺省 1；0=采样短路逐位等价零回归）
+  groundShadowStrength: number
 }
 
 // 每帧可变状态：preRender 原地更新，uniform 闭包持引用读取。
@@ -339,6 +365,8 @@ export function validateAtmosphereOptions(
     // 月晕默认 200000（2026-09-01 用户定稿：75000 微光克制/125000 柔光清晰/150000「再稍微强烈」
     // /200000✓饱满（接受夜空微灰）；满月深夜实测 200000 紧邻盘缘峰值≈33/255）
     moonSkyGlowScale: options.moonSkyGlowScale ?? 200000,
+    // M6 地面云影强度（spec §7）：0-1 缺省 1；0 时 shader 采样短路（逐位等价零回归）
+    groundShadowStrength: options.groundShadowStrength ?? 1,
     // depthTemporal temporal* 默认（Task 12）：透传 depthTemporalConstants 标定值。
     temporalEma: options.temporalEma !== false, // 默认 true（!== false 让 undefined 也 true；仅显式 false 关闭 EMA）
     temporalLowAlpha: options.temporalLowAlpha ?? LOW_ALPHA,
@@ -451,6 +479,45 @@ function appendCloudsShadowLengthUniform(
   }
 }
 
+// M6 地面云影：groundShadowBridge → atmosphere uniform 表增量（10 键）。
+// ⚠️ 与 cloudsShadowLength 同款约束：uniformMap 闭包返回 undefined 会崩帧（Cesium _setUniforms
+// 不检查返回值，UniformArrayMat4.set 读 undefined.length）——data() 恒返回完整 bundle。
+// 空槽约定（spec §8.1）：intervals (0,0) 区间测试恒假 → -1；matrices identity（-1 路径不消费——
+// NaN uv 前提：-1 早退在 getGroundShadowUv 之前，shader 侧保持）。
+export function appendGroundShadowUniforms(
+  uniforms: Record<string, unknown>,
+  bridge: (() => CloudsShadowBridgeData | undefined) | undefined,
+  groundShadowStrength: number,
+  makeDummyTexture3D: () => Texture3D
+): void {
+  if (bridge == null) return
+  const dummyMatrices = Array.from({ length: 4 }, () => Matrix4.clone(Matrix4.IDENTITY)) // 可变副本（防写冻结对象）
+  const dummyIntervals = Array.from({ length: 4 }, () => new Cartesian2(0, 0))
+  const data = (): CloudsShadowBridgeData =>
+    bridge() ?? {
+      bsm: undefined,
+      matrices: dummyMatrices,
+      inverseMatrices: dummyMatrices, // identity 同族可共享
+      intervals: dummyIntervals,
+      cameraNear: 0,
+      far: 1,
+      shellTopRadius: 6362200,
+      cascadeCount: 0,
+      sampleCount: 1
+    }
+  uniforms.u_shadowBuffer = () => data().bsm ?? makeDummyTexture3D()
+  uniforms.u_shadowMatrices = () => data().matrices
+  uniforms.u_shadowInverseMatrices = () => data().inverseMatrices
+  uniforms.u_shadowIntervals = () => data().intervals
+  uniforms.u_shadowCameraNear = () => data().cameraNear
+  uniforms.u_shadowFar = () => data().far
+  uniforms.u_shellTopRadius = () => data().shellTopRadius
+  uniforms.u_cascadeCount = () => data().cascadeCount
+  uniforms.u_sampleCount = () => data().sampleCount
+  // 强度静态值（0-1；shader 侧 0 → 采样短路逐位等价）。define 关时 shader 无此声明，Cesium 静默忽略。
+  uniforms.u_groundShadowStrength = groundShadowStrength
+}
+
 export interface AtmosphereStageHandle {
   readonly atmosphereStage: PostProcessStage
   /**
@@ -534,7 +601,8 @@ export function createAtmosphereStage(
       fragmentShader: buildAerialPerspectiveFragmentShader({
         ...resolved,
         hdrDepthTemporal: false,
-        cloudsShadowLength: options.cloudsShadowLengthBridge != null
+        cloudsShadowLength: options.cloudsShadowLengthBridge != null,
+        groundCloudShadow: options.cloudsShadowBridge != null
       }),
       uniforms: (() => {
         const u = buildAtmosphereUniforms(luts, resolved, state)
@@ -550,6 +618,29 @@ export function createAtmosphereStage(
           })
           return cloudsShadowDummy as unknown as { _texture: unknown; _target: number }
         })
+        // M6 地面云影（spec §5/§8.1）：惰性 dummy 走 append helper（桥 undefined/首帧 bsm 缺 → 无影零回归）。
+        // dummy 语义：intervals (0,0) 区间测试恒假 → 级联 -1；cascadeCount=0 → 循环不执行。
+        let groundShadowDummyTex: Texture3D | undefined
+        appendGroundShadowUniforms(
+          u,
+          options.cloudsShadowBridge,
+          resolved.groundShadowStrength,
+          () => {
+            groundShadowDummyTex ??= new Texture3D({
+              context: (scene as unknown as { context: Context }).context,
+              source: {
+                width: 1,
+                height: 1,
+                depth: 1,
+                arrayBufferView: new Uint8Array(4) // 全 0
+              },
+              pixelFormat: PixelFormat.RGBA,
+              pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+              flipY: false
+            })
+            return groundShadowDummyTex
+          }
+        )
         // 月面纹理白 dummy（albedo=1）：moonSurfaceTexture 未传时的零回归路径（均匀月面=数值等价
         // 无纹理版）。惰性构造同上（node 测试不调闭包）。
         if (options.moonSurfaceTexture == null) {

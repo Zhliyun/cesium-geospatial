@@ -21,6 +21,8 @@ import {
   buildAtmosphereUniforms,
   getEffectiveAtmosphereExposure,
   resolvePostHdrDatatype,
+  appendGroundShadowUniforms,
+  type CloudsShadowBridgeData,
   type AtmosphereFrameState
 } from './AtmosphereStage'
 import { SUN_ANGULAR_RADIUS } from '../math/atmosphereParameters'
@@ -310,6 +312,7 @@ describe('validateAtmosphereOptions', () => {
       moonAngularRadius: 0.014, // 物理×3.1（2026-09-01 验收档位后定稿：沿革 0.0135→0.03→0.02→0.0045→0.0099→0.014）
       moonTint: new Cartesian3(0.72, 1.0, 1.32), // 冷蓝默认（2026-08-31 月盘偏暖反馈，三档拍板）
       moonSkyGlowScale: 200000, // 月晕默认（2026-09-01 用户定稿饱满档：沿革 125000→150000→200000）
+      groundShadowStrength: 1, // M6 地面云影强度缺省（0-1；0=采样短路逐位等价零回归）
       lensFlare: true,
       lensFlareIntensity: INTENSITY_DEFAULT,
       lensFlareThreshold: THRESHOLD_LEVEL_DEFAULT,
@@ -943,5 +946,53 @@ describe('月光 options/state/uniforms（spec r2 §5.4）', () => {
     expect(Math.abs(Cartesian3.magnitude(after) - 1)).toBeLessThan(1e-6)
     // 单位化后必非初始占位方向（月不会恰在地球北极天顶）
     expect(after).not.toEqual(new Cartesian3(0, 0, 1))
+  })
+})
+
+describe('M6 地面云影桥接（spec §5/§8.1）', () => {
+  // 桥数据形状（经 createAtmosphereStage 的 uniforms 组装路径间接验证不可行——node 无 GL 上下文，
+  // 直接测 validate/append 纯逻辑部分）
+  it('validateAtmosphereOptions：groundShadowStrength 缺省 1，显式值透传', () => {
+    const resolved = validateAtmosphereOptions({ groundShadowStrength: 0.5 })
+    expect(resolved.groundShadowStrength).toBe(0.5)
+    expect(validateAtmosphereOptions({}).groundShadowStrength).toBe(1)
+  })
+})
+
+describe('appendGroundShadowUniforms（spec §8.1 dummy 表）', () => {
+  it('bridge=null 时不加任何键', () => {
+    const u: Record<string, unknown> = {}
+    appendGroundShadowUniforms(u, undefined, 1, () => ({}) as never)
+    expect(Object.keys(u)).toHaveLength(0)
+  })
+  it('bridge 在场：10 键齐；bridge()=undefined 时 bundle 完整（intervals 4×(0,0)、cascadeCount=0）', () => {
+    const u: Record<string, unknown> = {}
+    const dummyTex = { _texture: 'd' } as never
+    appendGroundShadowUniforms(
+      u,
+      () => undefined,
+      1,
+      () => dummyTex
+    )
+    const keys = ['u_shadowBuffer', 'u_shadowMatrices', 'u_shadowInverseMatrices', 'u_shadowIntervals',
+      'u_shadowCameraNear', 'u_shadowFar', 'u_shellTopRadius', 'u_cascadeCount', 'u_sampleCount',
+      'u_groundShadowStrength']
+    for (const k of keys) expect(u[k], k).toBeDefined()
+    expect((u.u_shadowIntervals as () => unknown)()).toHaveLength(4)
+    expect((u.u_cascadeCount as () => number)()).toBe(0)
+    expect((u.u_groundShadowStrength as unknown) as number).toBe(1)
+  })
+  it('bridge 返回数据：字段透传；bsm=undefined 时 u_shadowBuffer 落 dummy', () => {
+    const u: Record<string, unknown> = {}
+    const dummyTex = { _texture: 'd' } as never
+    const live: CloudsShadowBridgeData = {
+      bsm: undefined, matrices: [], inverseMatrices: [], intervals: [],
+      cameraNear: 0, far: 6e4, shellTopRadius: 6362200, cascadeCount: 3, sampleCount: 16
+    }
+    appendGroundShadowUniforms(u, () => live, 0.5, () => dummyTex)
+    expect((u.u_shadowBuffer as () => unknown)()).toBe(dummyTex)
+    expect((u.u_shadowFar as () => number)()).toBe(6e4)
+    expect((u.u_cascadeCount as () => number)()).toBe(3)
+    expect((u.u_groundShadowStrength as unknown) as number).toBe(0.5)
   })
 })
