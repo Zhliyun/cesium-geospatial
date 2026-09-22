@@ -137,6 +137,23 @@ uniform float u_limbGlowIntensity;  // limb outer glow 强度（太空视角大�
 uniform float u_limbGlowDecayKm;  // limb glow 向外指数衰减距离（km；~20-40 控制扩散范围）
 `
 
+// M6 地面云影 uniform 块（GROUND_CLOUD_SHADOW define 时拼入；命名 spec §5）。
+// 数组恒 [4] 槽（GLSL 编译期定长；实际级联数 u_cascadeCount 运行期界，空槽值由桥侧 dummy 约定保证无消费）。
+const GROUND_SHADOW_UNIFORMS_GLSL = `
+uniform sampler3D u_shadowBuffer;
+uniform mat4 u_shadowMatrices[4];
+uniform mat4 u_shadowInverseMatrices[4];
+uniform vec2 u_shadowIntervals[4];
+uniform float u_shadowCameraNear;
+uniform float u_shadowFar;
+uniform float u_shellTopRadius;
+uniform float u_cascadeCount;
+uniform float u_sampleCount;
+uniform float u_groundShadowStrength;
+`
+// u_groundShadowStrength 属 FRAME_UNIFORMS 语义（静态标量，A/B 旋钮）——并入本块尾部声明：
+//（保持单块好裁剪；define 关时整块不进 shader，Cesium 对 uniformMap 多余键静默忽略）
+
 // [SKY && SUN] cos(SUN_ANGULAR_RADIUS)，SUN 日盘角半径阈值。
 const COS_SUN_ANGULAR_RADIUS_UNIFORM_GLSL = `
 uniform float cosSunAngularRadius;
@@ -317,6 +334,115 @@ vec3 GetSkyRadianceToPointScaled(
   return (scattering * RayleighPhaseFunction(nu) + single_mie_scattering *
       MiePhaseFunction(ATMOSPHERE.mie_phase_function_g, nu)) *
       SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+}
+`
+
+// M6 地面云影函数族（three aerialPerspectiveEffect.frag HAS_SHADOW 段移植 + 本仓库双域手术，spec §6）。
+// 依赖：interleavedGradientNoise（本文件 HELPERS_GLSL 已有）、core/raySphereIntersection、core/vogelDisk
+//（resolveIncludes 表扩展见 buildAerialPerspectiveFragmentShader）。sunDirection/altitudeCorrection 为既有 FRAME uniform。
+const GROUND_SHADOW_FUNCTIONS_GLSL = `
+#include "core/raySphereIntersection"
+#include "core/vogelDisk"
+
+// —— 级联选择：core chunk getFadedCascadeIndex 的运行期变体（spec §6.3）——
+// 不逐字 include chunk：其 #error 宏守卫 + #pragma unroll_loop 预处理（core resolveIncludes 无此 pass）
+// + viewZToOrthographicDepth 等 clouds 侧依赖在 aerial 语境不可用。语义逐行复刻：
+// 区间匹配 + margin dithered fade + 末层远端上界 depth<1.0（云侧 2026-08-28 修复同款）。
+float groundViewZToOrthographicDepth(const float viewZ, const float near, const float far) {
+  return (viewZ + near) / (near - far);
+}
+float groundSaturate(const float x) { return clamp(x, 0.0, 1.0); }
+
+int getGroundCascadeIndex(const vec3 posM, const float jitter) {
+  vec4 viewPosition = czm_view * vec4(posM, 1.0);
+  float depth = groundViewZToOrthographicDepth(viewPosition.z, u_shadowCameraNear, u_shadowFar);
+  int count = int(u_cascadeCount);
+  int nextIndex = -1;
+  int prevIndex = -1;
+  float alpha = 0.0;
+  for (int i = 0; i < count; ++i) {
+    vec2 interval = u_shadowIntervals[i];
+    float intervalCenter = (interval.x + interval.y) * 0.5;
+    float closestEdge = depth < intervalCenter ? interval.x : interval.y;
+    float margin = closestEdge * closestEdge * 0.5;
+    interval += margin * vec2(-0.5, 0.5);
+    if (i < count - 1) {
+      if (depth >= interval.x && depth < interval.y) {
+        prevIndex = nextIndex;
+        nextIndex = i;
+        alpha = groundSaturate(min(depth - interval.x, interval.y - depth) / margin);
+      }
+    } else {
+      // 末层：远端上界 depth < 1.0（=u_shadowFar）+ 远端 fade-out（alpha 含 1.0-depth 项）
+      if (depth >= interval.x && depth < 1.0) {
+        prevIndex = nextIndex;
+        nextIndex = i;
+        alpha = groundSaturate(min(depth - interval.x, 1.0 - depth) / margin);
+      }
+    }
+  }
+  return jitter <= alpha ? nextIndex : prevIndex;
+}
+
+// BSM UV：raw ECEF 米 → cascade light clip（矩阵 JS 侧从 raw positionWC 构建——域分工 §6.2）。
+vec2 getGroundShadowUv(const vec3 posM, const int cascadeIndex) {
+  vec4 clip = u_shadowMatrices[cascadeIndex] * vec4(posM, 1.0);
+  clip /= clip.w;
+  return clip.xy * 0.5 + 0.5;
+}
+
+// 光深（three 逐字移植，米制零换算）：r=frontDepth g=meanExtinction(1/m) b=maxOpticalDepth a=tail。
+// 尾项 a 不加（three 注释：地面影会被 inscatter 衰减，加尾项反而锯齿明显）。
+float readGroundShadowOpticalDepth(const vec2 uv, const float distToTopM, const int cascadeIndex) {
+  vec4 s = texture(u_shadowBuffer, vec3(uv, (float(cascadeIndex) + 0.5) / u_cascadeCount));
+  return min(s.b, s.g * max(0.0, distToTopM - s.r));
+}
+
+// vogel disk PCF + IGN 旋转（不引 STBN——16 样本+IGN=three 原版域内画质；uv 越界守卫防
+// CLAMP_TO_EDGE 边缘 texel 条纹，three aerial L192 同款）。
+float sampleGroundShadowOpticalDepthPCF(
+  const vec3 posM,
+  const float distToTopM,
+  const float radius,
+  const int cascadeIndex
+) {
+  vec2 uv = getGroundShadowUv(posM, cascadeIndex);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+    return 0.0;
+  }
+  vec2 texelSize = vec2(1.0) / vec2(textureSize(u_shadowBuffer, 0).xy);
+  float sum = 0.0;
+  float rot = interleavedGradientNoise(gl_FragCoord.xy) * 6.283185307179586;
+  int n = int(u_sampleCount);
+  for (int i = 0; i < n; ++i) {
+    vec2 offset = vogelDisk(i, n, rot);
+    sum += readGroundShadowOpticalDepth(uv + offset * radius * texelSize, distToTopM, cascadeIndex);
+  }
+  return sum / float(n);
+}
+
+// PCF 半径随屏幕像素密度自适应（three getShadowRadius 逐字移植，r2 核验 czm_view/projection/viewport
+// automatic uniform 可用）：BSM clip 空间 2px 反投影测像素尺寸 → remap 10-50px → 0-3 texel。
+float getGroundShadowRadius(const vec3 posM) {
+  vec4 clip = u_shadowMatrices[0] * vec4(posM, 1.0);
+  clip /= clip.w;
+  vec2 shadowSize = vec2(textureSize(u_shadowBuffer, 0));
+  vec3 offset = vec3(2.0 / shadowSize, 0.0);
+  vec4 worldX = u_shadowInverseMatrices[0] * (clip + offset.xzzz);
+  vec4 worldY = u_shadowInverseMatrices[0] * (clip + offset.zyzz);
+  mat4 viewProjectionMatrix = czm_projection * czm_view;
+  vec4 projected = viewProjectionMatrix * vec4(posM, 1.0);
+  vec4 projectedX = viewProjectionMatrix * worldX;
+  vec4 projectedY = viewProjectionMatrix * worldY;
+  projected /= projected.w;
+  projectedX /= projectedX.w;
+  projectedY /= projectedY.w;
+  vec2 center = (projected.xy * 0.5 + 0.5) * czm_viewport.zw;
+  vec2 offsetX = (projectedX.xy * 0.5 + 0.5) * czm_viewport.zw;
+  vec2 offsetY = (projectedY.xy * 0.5 + 0.5) * czm_viewport.zw;
+  float size = max(length(offsetX - center), length(offsetY - center));
+  float t = clamp((size - 10.0) / 40.0, 0.0, 1.0); // remapClamped(size, 10, 50, 0, 3)
+  return t * 3.0;
 }
 `
 
@@ -839,6 +965,7 @@ export function buildAerialPerspectiveFragmentShader(
   if (o.sky) defines.push('#define SKY')
   if (o.hdrDepthTemporal) defines.push('#define DEPTH_TEMPORAL_EMA') // Bug3：HDR 读 depthTemporal .a
   if (o.cloudsShadowLength) defines.push('#define CLOUDS_SHADOW_LENGTH') // M5 atmosphere 路径
+  if (o.groundCloudShadow) defines.push('#define HAS_GROUND_SHADOW') // M6 地面云影
 
   const uniforms: string[] = [POST_PROCESS_TEXTURES_GLSL, LUT_UNIFORMS_GLSL, FRAME_UNIFORMS_GLSL]
   if (o.sky && o.sun) uniforms.push(COS_SUN_ANGULAR_RADIUS_UNIFORM_GLSL)
@@ -847,10 +974,13 @@ export function buildAerialPerspectiveFragmentShader(
     uniforms.push('uniform sampler2D u_cloudsShadowLength;')
     uniforms.push('uniform float u_cloudsGodRaysGain;') // M5 光柱艺术增益（1=物理精确）
   }
+  // M6 地面云影 uniform（spec §5；值由 AtmosphereStage appendGroundShadowUniforms 注入）
+  if (o.groundCloudShadow) uniforms.push(GROUND_SHADOW_UNIFORMS_GLSL)
   if (o.moon) uniforms.push(MOON_UNIFORMS_GLSL)
 
   // LOG_DEPTH_GLSL：czm_reverseLogDepthWindow（main depth 反演用）+ 配套反演辅助（logDepth.ts）。
   const functions: string[] = [HELPERS_GLSL, LOG_DEPTH_GLSL]
+  if (o.groundCloudShadow) functions.push(GROUND_SHADOW_FUNCTIONS_GLSL) // M6（在 HELPERS 后——用其 IGN）
   if (o.sky) functions.push(buildSkyRadianceFn(o.sun, o.moon))
 
   const body = resolveIncludes(
@@ -864,6 +994,10 @@ export function buildAerialPerspectiveFragmentShader(
       bruneton: {
         common: glslIndex.bruneton.common,
         runtime: glslIndex.bruneton.runtime
+      },
+      core: {
+        raySphereIntersection: glslIndex.core.raySphereIntersection,
+        vogelDisk: glslIndex.core.vogelDisk
       }
     }
   )
@@ -879,6 +1013,9 @@ uniform mat4 czm_inverseView;
 uniform mat4 czm_inverseProjection;
 uniform vec3 czm_viewerPositionWC;
 uniform vec2 czm_currentFrustum;  // near(.x)/far(.y)，czm_reverseLogDepthWindow 用
+uniform mat4 czm_view;  // M6 地面云影函数族（getGroundCascadeIndex/getGroundShadowRadius）消费
+uniform mat4 czm_projection;
+uniform vec4 czm_viewport;
 vec4 czm_windowToEyeCoordinates(vec4 p) { return p; }
 float czm_readDepth(sampler2D t, vec2 uv) { return 0.5; }
 out vec4 out_FragColor;

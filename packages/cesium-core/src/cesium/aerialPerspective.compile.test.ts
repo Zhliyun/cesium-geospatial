@@ -26,7 +26,9 @@ import { compileFragment } from './glslangUtil'
 const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
   ['默认（SKY+SUN 全开）', {}],
   ['无日盘（SUN 关，SKY 开）', { sun: false }],
-  ['无天空分支（SKY+SUN 关，远平面直通）', { sun: false, sky: false }]
+  ['无天空分支（SKY+SUN 关，远平面直通）', { sun: false, sky: false }],
+  ['M6 地面云影（GROUND_CLOUD_SHADOW define 全函数族）', { groundCloudShadow: true }],
+  ['M6 地面云影+光柱组合（双云 uniform 块共存）', { groundCloudShadow: true, cloudsShadowLength: true }]
 ]
 
 describe('GLSL 编译验证（glslangValidator，全合法宏组合）', () => {
@@ -101,6 +103,69 @@ describe('M5 CLOUDS_SHADOW_LENGTH 编译', () => {
       throw new Error(`glslang 编译失败（cloudsShadowLength=true）:\n${output}\n` + src.split('\n').slice(0, 40).map((l, i) => `${i + 1}: ${l}`).join('\n'))
     }
     expect(ok).toBe(true)
+  })
+})
+
+// ── M6 地面云影（spec 2026-09-21 r2 §5/§6）：aerial 侧 uniform 块 + 级联变体 + vogel PCF 函数族 ──
+// 注：option 字段与 resolved default（groundCloudShadow: false）已由 T1 落地——编译 combo 在实现前
+// 也会绿（option 被忽略时 shader 不变仍编译过），故本组 RED 证据=「开关生效断言」：
+// define/uniform 块/五函数族必须真进产物，关态必须零残留（零回归锚）。
+describe('M6 地面云影 HAS_GROUND_SHADOW（uniform 块 + 函数族）', () => {
+  const build = () => buildAerialPerspectiveFragmentShader({ groundCloudShadow: true })
+  const buildOff = () => buildAerialPerspectiveFragmentShader({})
+
+  it('开：HAS_GROUND_SHADOW define + GROUND_SHADOW uniform 块全键（含 u_groundShadowStrength）', () => {
+    const src = build()
+    expect(src).toMatch(/^#define HAS_GROUND_SHADOW$/m)
+    for (const u of [
+      'uniform sampler3D u_shadowBuffer;',
+      'uniform mat4 u_shadowMatrices[4];',
+      'uniform mat4 u_shadowInverseMatrices[4];',
+      'uniform vec2 u_shadowIntervals[4];',
+      'uniform float u_shadowCameraNear;',
+      'uniform float u_shadowFar;',
+      'uniform float u_shellTopRadius;',
+      'uniform float u_cascadeCount;',
+      'uniform float u_sampleCount;',
+      'uniform float u_groundShadowStrength;'
+    ]) {
+      expect(src).toContain(u)
+    }
+  })
+
+  it('开：五函数族齐备（T5 main 消费的确切名字）+ core include 已解析 + 消费 HELPERS 的 IGN', () => {
+    const src = build()
+    for (const fn of [
+      'int getGroundCascadeIndex(const vec3 posM, const float jitter)',
+      'vec2 getGroundShadowUv(const vec3 posM, const int cascadeIndex)',
+      'float readGroundShadowOpticalDepth(const vec2 uv, const float distToTopM, const int cascadeIndex)',
+      'float sampleGroundShadowOpticalDepthPCF(',
+      'float getGroundShadowRadius(const vec3 posM)'
+    ]) {
+      expect(src).toContain(fn)
+    }
+    // #include 已被 resolveIncludes 展开（core chunk 函数真进了产物，不再残留 include 指令）
+    expect(src).toContain('float raySphereFirstIntersection(')
+    expect(src).toContain('vec2 vogelDisk(const int index, const int sampleCount, const float phi)')
+    expect(src).not.toContain('#include "core/')
+    // PCF 的 IGN 旋转依赖 HELPERS_GLSL（函数序：HELPERS 在前）
+    expect(src).toContain('interleavedGradientNoise(gl_FragCoord.xy) * 6.283185307179586')
+  })
+
+  it('关（默认）：define/uniform/函数族全不进产物（零回归锚；frag.test golden snapshot 另守全量）', () => {
+    const src = buildOff()
+    expect(src).not.toContain('HAS_GROUND_SHADOW')
+    expect(src).not.toContain('u_shadowBuffer')
+    expect(src).not.toContain('u_groundShadowStrength')
+    expect(src).not.toContain('getGroundCascadeIndex')
+    expect(src).not.toContain('vogelDisk')
+  })
+
+  it('standalone 桩：czm_view/czm_projection/czm_viewport（函数族消费的 automatic uniform）', () => {
+    const src = buildStandaloneShaderForValidation({ groundCloudShadow: true })
+    expect(src).toContain('uniform mat4 czm_view;')
+    expect(src).toContain('uniform mat4 czm_projection;')
+    expect(src).toContain('uniform vec4 czm_viewport;')
   })
 })
 
