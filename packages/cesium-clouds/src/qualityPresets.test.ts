@@ -60,6 +60,19 @@ describe('cloudsQualityPresets 档位表（spec §3 逐字对齐）', () => {
   })
 })
 
+describe('M6 groundShadowSamples 档位（spec §7：three 缺省 8/上限 16，medium=three 缺省档）', () => {
+  it('四档映射 low4/medium8/high16/ultra16', () => {
+    expect(cloudsQualityPresets.low.groundShadowSamples).toBe(4)
+    expect(cloudsQualityPresets.medium.groundShadowSamples).toBe(8)
+    expect(cloudsQualityPresets.high.groundShadowSamples).toBe(16)
+    expect(cloudsQualityPresets.ultra.groundShadowSamples).toBe(16)
+  })
+  it('applyQualityPreset 产物透传', () => {
+    expect(applyQualityPreset('low', {}).groundShadowSamples).toBe(4)
+    expect(applyQualityPreset('high', {}).groundShadowSamples).toBe(16)
+  })
+})
+
 describe('applyQualityPreset 合并语义（spec §5）', () => {
   it('high + 无用户输入：params 与 defaultCloudsParameters() 逐字段全等（含 shadowMarch 深比较）', () => {
     const d = defaultCloudsParameters()

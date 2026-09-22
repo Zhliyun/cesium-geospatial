@@ -32,6 +32,9 @@ export interface ResolvedCloudsQuality {
   /** BSM 结构 + 生成端 march（spec §3 BSM 表；march 含恒定量 opticalDepthTailScale=2，
    *  来源参考库 ShadowMaterial.ts:104 而非 qualityPresets.ts——spec §3 表注）。 */
   shadow: { cascadeCount: number; mapSize: number; march: CloudsShadowMarchParameters }
+  /** M6 地面云影 PCF 样本数（spec §7）：low4/medium8/high16/ultra16。medium=three 缺省档
+   *  （shadowSampleCount=8），16=其 define 上限（high/ultra 画质取向，实测超预算可下调）。 */
+  groundShadowSamples: number
   /**
    * temporal upscale 降采样分母（涂抹修复 T1，2026-09-02）：2 = 半分 march（RT 面积 ×4，
    * 涂抹感约减半、帧率代价需实测）。可选——未设的档位继承缺省 1（2026-09-02 用户定稿
@@ -58,20 +61,23 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
       maxIterationCountToSun: 1, maxIterationCountToGround: 0,
       shadowCascadeCount: 2
     },
-    shadow: { cascadeCount: 2, mapSize: 256, march: { ...HIGH_MARCH, maxIterationCount: 25, minDensity: 1e-4, minExtinction: 1e-4, minTransmittance: 1e-2 } }
+    shadow: { cascadeCount: 2, mapSize: 256, march: { ...HIGH_MARCH, maxIterationCount: 25, minDensity: 1e-4, minExtinction: 1e-4, minTransmittance: 1e-2 } },
+    groundShadowSamples: 4
   },
   // medium：仅 shapeDetail 开；阈值放宽；次 march 2/1；BSM 3 级联 256
   //（minTransmittance 1e-2 / maxIterationCount 500 / toSun 2 = 继承 defaults，不显式列）
   medium: {
     main: { lightShafts: false, shapeDetail: true, turbulence: false, accurateSunSkyLight: false },
     params: { minDensity: 1e-4, minExtinction: 1e-4, maxIterationCountToGround: 1, shadowCascadeCount: 3 },
-    shadow: { cascadeCount: 3, mapSize: 256, march: { ...HIGH_MARCH, minDensity: 1e-4, minExtinction: 1e-4 } }
+    shadow: { cascadeCount: 3, mapSize: 256, march: { ...HIGH_MARCH, minDensity: 1e-4, minExtinction: 1e-4 } },
+    groundShadowSamples: 8
   },
   // high = defaults（零回归基线；params 仅投影 shadowCascadeCount）
   high: {
     main: { ...HIGH_MAIN },
     params: { shadowCascadeCount: 3 },
-    shadow: { cascadeCount: 3, mapSize: 512, march: { ...HIGH_MARCH } }
+    shadow: { cascadeCount: 3, mapSize: 512, march: { ...HIGH_MARCH } },
+    groundShadowSamples: 16
   },
   // ultra：仅 minStepSize 50→10 + mapSize 512→1024
   // ultra：minStepSize 50→10 + mapSize 512→1024 + march 半分（upscaleDivisor=2，涂抹修复 T1）
@@ -79,7 +85,8 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
     main: { ...HIGH_MAIN },
     params: { minStepSize: 10, shadowCascadeCount: 3 },
     shadow: { cascadeCount: 3, mapSize: 1024, march: { ...HIGH_MARCH } },
-    upscaleDivisor: 2
+    upscaleDivisor: 2,
+    groundShadowSamples: 16
   }
 }
 
@@ -91,6 +98,8 @@ export interface AppliedCloudsQuality {
   params: CloudsParameters
   /** BSM 结构（mapSize 此时尚未消费——Task 4 buildImpl 接线）。 */
   shadow: { cascadeCount: number; mapSize: number }
+  /** M6 地面云影样本数（恒档位源，无用户覆盖——逃生门 ?groundShadow=0 整体关）。 */
+  groundShadowSamples: number
   /** upscale 降采样分母（解析后必有值：用户显式 > 档位 > 缺省 1=全分 TAA；2026-09-02 定稿）。 */
   upscaleDivisor: 1 | 2 | 4
 }
@@ -151,5 +160,5 @@ export function applyQualityPreset(quality: CloudsQualityPreset, options: Clouds
   // T1 合并时缺省 4=three 原文零回归，ultra 档显式 2 沿用）
   const upscaleDivisor: 1 | 2 | 4 = options.upscaleDivisor ?? preset.upscaleDivisor ?? 1
 
-  return { main, params, shadow: { cascadeCount: n, mapSize: preset.shadow.mapSize }, upscaleDivisor }
+  return { main, params, shadow: { cascadeCount: n, mapSize: preset.shadow.mapSize }, groundShadowSamples: preset.groundShadowSamples, upscaleDivisor }
 }
