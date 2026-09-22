@@ -27,7 +27,8 @@ import {
   HALO_AMOUNT_DEFAULT,
   TEMPORAL_QUALITY_PRESETS,
   type AtmosphereStageOptions,
-  type AtmosphereStageHandle
+  type AtmosphereStageHandle,
+  type CloudsShadowBridgeData
 } from '@cesium-geospatial/core'
 import {
   loadWeatherTextures,
@@ -427,6 +428,9 @@ async function main(): Promise<void> {
     let cloudsOcclusionBridge:
       | (() => { _texture: unknown; _target: number } | undefined)
       | undefined = undefined
+    // M6 地面云影桥（spec §5）：clouds 建后赋值（惰性闭包后补引用——atmosphere 先建零编排改动）；
+    // ?groundShadow=0 → atmosphere options 不带 cloudsShadowBridge → define 不开 → 完全零回归。
+    let groundShadowBridge: (() => CloudsShadowBridgeData | undefined) | undefined
     // #3 profile 可重入 wrap（lf×云 2026-08-30）：clouds 块 insertStageBeforeLensFlare 会 remove→重建
     // lf→re-add tm——新实例若不补 wrap，?profile=1 输出缺 lf*/tonemap 键。启动 wrap 后 clouds 块
     // insert 成功调 rewrapStages?.() 补 wrap（WeakSet 防重；同名 wrap 覆盖 timer query，旧实例已
@@ -441,7 +445,14 @@ async function main(): Promise<void> {
       atmosphereHandle = createAtmosphereStage(scene, luts, {
         ...options,
         cloudsShadowLengthBridge: () => cloudsShadowBridge?.(),
-        cloudsOcclusionBridge: () => cloudsOcclusionBridge?.()
+        cloudsOcclusionBridge: () => cloudsOcclusionBridge?.(),
+        // M6 地面云影（spec §5）：?groundShadow=0 时整段不传（define 不开 → 完全零回归）
+        ...(getString('groundShadow') !== '0'
+          ? { cloudsShadowBridge: () => groundShadowBridge?.() }
+          : {}),
+        ...(getNumber('groundShadowStrength') != null
+          ? { groundShadowStrength: getNumber('groundShadowStrength')! }
+          : {})
       })
 
       // 性能 profiling（Phase 0）：?profile=1 逐 stage GPU 计时（EXT_disjoint_timer_query_webgl2）。
@@ -747,6 +758,10 @@ async function main(): Promise<void> {
         cloudsShadowBridge = cloudsHandle != null
           ? () => cloudsHandle.cloudsPass.getShadowLengthBridge()
           : undefined
+        // M6 地面云影桥（spec §5）：闭包读 handle（内部读顶层 impl——setQuality 自动切换）
+        groundShadowBridge = cloudsHandle != null
+          ? () => cloudsHandle.getGroundShadowBridgeData()
+          : undefined
         // lf×云 #1：云覆盖率 bridge（march att0 premultiplied，.a=覆盖率）→ lf occlusion
         cloudsOcclusionBridge = cloudsHandle != null
           ? () => cloudsHandle.cloudsPass.getColorBridge()
@@ -768,6 +783,7 @@ async function main(): Promise<void> {
               cloudsHandle.destroy()
               cloudsShadowBridge = undefined
               cloudsOcclusionBridge = undefined
+              groundShadowBridge = undefined
             }
           } else {
             scene.postProcessStages.add(cloudsHandle.overlayStage) // 独立消费者 fallback（demo 不可达，防御）

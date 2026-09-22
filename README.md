@@ -135,6 +135,8 @@ http://localhost:5173/?time=2026-08-28T17:30:00Z&camera=-80.6057,64.5197,7852,68
 | `cloudsShadowScale=N` | 1 | world 锚定 radii × N（诊断用，N=5 → {80,168,480}km 膨胀层） |
 | `cloudsShadowFreeze=1` | – | 冻结 BSM 矩阵（首帧后不更新，噪声分解诊断） |
 | `cloudsShadowTemporal=1` | 关 | BSM 时序累积 |
+| `groundShadow` | `1` | M6 地面云影总开关；`0`=桥不注入（define 不开，与 main 逐位零回归）。注意 `cloudsShadow=0`（关自阴影）时地面云影连带关闭（无 BSM）。 |
+| `groundShadowStrength` | `1` | 地面云影强度 0-1；`0` 时采样短路（与 `groundShadow=0` 像素等价，便宜逐位门）。 |
 | `cloudsShadowAdaptive=0` | 开 | 太阳角影子预算（2026-09-04）：BSM 生成端 march 步数随当地太阳仰角平滑收缩（≥20° 满档逐位原值，≤5° 收缩至一半），低太阳角运动帧省成本；`0`=恒满档逐位回退（逃生门） |
 | `cloudsShaftStep=` | 100 | god rays shadowLength march 起始步长（米，2026-09-05 P1）：BSM 纹理 texel 实际足迹 62-375m，50m 本就过采样；100=缺省（迭代 -34%，贴地夜 17→9.4ms，黄昏光柱画面数值不可见级）；`50`=three 上游原值（光柱形态 A/B 对照）；`150`=更省（近级联 texel 2.4× 欠采样，慎用）。另：夜晚（太阳当地沉没 >5°）云照明自动跳过朝太阳次级采样（辐照精确为零，逐位等价，无参数）——云甲内夜视角实测 30→60FPS |
 | `cloudsShaftFallbackScale=` | 自适应 | 兜底光柱步幅倍率（2026-09-21 P4）：无云像素（!hitClouds）的 shadowLength march 起步步长 = `cloudsShaftStep` × 本倍率。缺省按当地太阳仰角自适应 2→4（≤5°=×2 低角零回归域，≥20°=×4 白天逐位零差域，smoothstep 中间带）——兜底成本 ∝ 无云像素占比随时刻/天气漂移，高太阳角放开倍率对冲（实测某上午时刻 25.7→17ms 满帧）；`2`=恒 P3 静态行为；`cloudsShadowAdaptive=0` 时恒回 2 |
@@ -187,7 +189,7 @@ add 时机由消费者编排，否则云不可见：
 
 | 参数 | 说明 |
 |---|---|
-| `debug=N` | 大气调试视图：1=finalColor 量级 / 2=太阳方向 / 3=相机距离量级 / 5=depth / 6=透传输入色 |
+| `debug=N` | 大气调试视图：1=finalColor 量级 / 2=太阳方向 / 3=相机距离量级 / 5=depth / 6=透传输入色 / 11=地面云影透射率灰度直显（R=groundSunTrans，定位采样/级联问题） |
 | `cloudsDebug=N` | 云调试视图：1=天气图 UV / 2=云前深度 / 3=march 采样数 / 4=BSM 阴影图 / 5=级联层 |
 | `tileCache=N` | 瓦片缓存（默认 5000，减少回收引起的深度时序抖动） |
 | `sse=N` | 屏幕空间误差阈值（调高→瓦片更晚细化，减 LOD 抖动；地形更粗） |
