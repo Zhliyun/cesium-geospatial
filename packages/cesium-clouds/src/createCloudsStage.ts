@@ -97,7 +97,8 @@ import {
   ATMOSPHERE_BOTTOM_RADIUS_M,
   computeMoonDirectionECEF,
   computeMoonIlluminatedFractionFromDirections,
-  type AtmosphereLUTs
+  type AtmosphereLUTs,
+  type CloudsShadowBridgeData
 } from '@cesium-geospatial/core'
 import {
   createCloudsPass,
@@ -380,6 +381,15 @@ export interface CloudsStageHandle {
    * - destroy 后 no-op + console.warn（对齐 setQuality 宽容风格）。
    */
   setWeatherPreset(preset: CloudsWeatherPreset | undefined): void
+  /**
+   * M6 地面云影桥数据（spec §5）：供 demo 编排层喂 atmosphere `cloudsShadowBridge`
+   * （CloudsShadowBridgeData——恒 4 槽 padded 数组 + BSM + 档位样本数）。
+   *
+   * - O(1)：只做字段组装返回引用（矩阵 clone 在 preRender changed 分支已完成），逐帧调用无 clone 成本。
+   * - `?cloudsShadow=0`（shadowPass=false）→ 返回 undefined（无 BSM，桥整体关闭）。
+   * - destroy 后返回 undefined（零回归路径）；setQuality 换档自动指向新 impl 的桥数组。
+   */
+  getGroundShadowBridgeData(): CloudsShadowBridgeData | undefined
   /** 释放：摘 preRender listener + impl 完整销毁（CloudsPass/resolvePass/ShadowPass/
    *  turbulence dummy）+ 摘顶层 overlay。幂等。 */
   destroy(): void
@@ -469,6 +479,8 @@ interface CloudsStageImpl {
   readonly atlasFallbackDummy: Texture3D | undefined
   /** T6 天气预设热切（写 params/state 闭包引用；undefined=清除回创建基线）。 */
   setWeatherPreset(preset: CloudsWeatherPreset | undefined): void
+  /** M6 地面云影桥数据（spec §5）：shadowState + inverseMatrices + 档位样本数组装；引用语义零 clone。 */
+  getGroundShadowBridgeData(): CloudsShadowBridgeData | undefined
   onPreRender(time: JulianDate): void
   destroy(): void
 }
@@ -666,6 +678,14 @@ function buildCloudsStageImpl(
       texelSize: new Cartesian2(1 / mapSize, 1 / mapSize),
       bsm: undefined
     }
+
+    // ── M6 地面云影桥（spec §5/§8.1）：恒 4 槽 padded 数组（GLSL uniform 数组编译期定长 [4]，
+    //    实际级联 2-3 槽——不足槽保持 identity/(0,0)，(0,0) 区间测试恒假 → 级联 -1 无影）。
+    //    与 shadowState.matrices（长度=cascadeCount，喂 shadow.frag 的 define 定长 uniform）分列，
+    //    两套数组长度语义不同勿合并。changed 分支同步 clone（下方）。 ──
+    const bridgeMatrices = Array.from({ length: 4 }, () => new Matrix4())
+    const bridgeInverseMatrices = Array.from({ length: 4 }, () => new Matrix4())
+    const bridgeIntervals = Array.from({ length: 4 }, () => new Cartesian2(0, 0))
 
     // ── CloudsPass（custom Primitive pass=VOXELS + MRT + 全 business uniform）──
     // M4 T6：temporal 时 temporalUpscale=true（march 1/4 分 + velocity 写 att1）
@@ -1035,6 +1055,12 @@ function buildCloudsStageImpl(
               Matrix4.clone(cascades.cascades[i].inverseMatrix, inverseMatrices[i])
               shadowIntervals[i].x = cascades.cascades[i].interval.x
               shadowIntervals[i].y = cascades.cascades[i].interval.y
+              // M6 地面云影桥同步（spec §5）：与上方 shadowState 数组分列——clone 已在此分支
+              // 完成，getter 端 O(1) 零 clone（控制器约束）
+              Matrix4.clone(cascades.cascades[i].matrix, bridgeMatrices[i])
+              Matrix4.clone(cascades.cascades[i].inverseMatrix, bridgeInverseMatrices[i])
+              bridgeIntervals[i].x = cascades.cascades[i].interval.x
+              bridgeIntervals[i].y = cascades.cascades[i].interval.y
             }
             // M4：本帧矩阵先登记（render 内部 velocity 用 prevMatrices=上帧、末尾 prev ← 本帧）
             shadowPass.setCurrentMatrices(shadowMatrices)
@@ -1086,6 +1112,21 @@ function buildCloudsStageImpl(
       atlasFallbackDummy,
       setWeatherPreset,
       onPreRender,
+      getGroundShadowBridgeData(): CloudsShadowBridgeData | undefined {
+        // ?cloudsShadow=0（shadowPass=false）→ 无 BSM，桥整体关闭（README 标注连带语义）
+        if (!enableShadow) return undefined
+        return {
+          bsm: shadowState.bsm,
+          matrices: bridgeMatrices,
+          inverseMatrices: bridgeInverseMatrices,
+          intervals: bridgeIntervals,
+          cameraNear: shadowState.cameraNear,
+          far: shadowState.far,
+          shellTopRadius: cascades.shellTopRadius,
+          cascadeCount,
+          sampleCount: applied.groundShadowSamples
+        }
+      },
       destroy(): void {
         // 顺序：先 CloudsPass（消费端，撤 bsm 引用）→ 云 resolve（march 后第二个 VOXELS 实例）→
         // ShadowPass（释放 bsmTexture——T3 concern #4），最后生成端 turbulence dummy。
@@ -1250,6 +1291,10 @@ export function createCloudsStage(
       }
       impl.setWeatherPreset(preset)
       activePreset = preset
+    },
+    // M6 地面云影桥（spec §5）：destroy 后 undefined（零回归路径）；setQuality 换 impl 引用自动切换
+    getGroundShadowBridgeData(): CloudsShadowBridgeData | undefined {
+      return destroyed ? undefined : impl.getGroundShadowBridgeData()
     },
     destroy(): void {
       if (destroyed) return

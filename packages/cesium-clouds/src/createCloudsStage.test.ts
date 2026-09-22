@@ -1796,3 +1796,55 @@ describe('T-adaptive P4：兜底光柱步幅自适应（2026-09-21）', () => {
     handle!.destroy()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M6 getGroundShadowBridgeData（spec §5）：4 槽 padded 桥数组 + handle 委托。
+//   O(1) 契约：getter 只做字段组装返回引用（矩阵 clone 已在 preRender changed 分支完成）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('M6 getGroundShadowBridgeData（spec §5）', () => {
+  it('clouds=false 时不产生 handle（既有行为，防回归锚）', () => {
+    expect(createCloudsStage(createMockScene(), createMockLuts(), createMockWeather(), {})).toBeUndefined()
+  })
+
+  it('handle.getGroundShadowBridgeData：数组恒 4 槽；cascadeCount/增补字段与档位一致', () => {
+    vi.clearAllMocks()
+    const handle = createCloudsStage(createMockScene(), createMockLuts(), createMockWeather(), { clouds: true })
+    const d = handle!.getGroundShadowBridgeData()
+    expect(d).toBeDefined()
+    expect(d!.matrices).toHaveLength(4)
+    expect(d!.inverseMatrices).toHaveLength(4)
+    expect(d!.intervals).toHaveLength(4)
+    expect(d!.cascadeCount).toBe(3) // 缺省 high 档
+    expect(d!.sampleCount).toBe(16)
+    expect(d!.shellTopRadius).toBe(6362200)
+    expect(d!.cameraNear).toBe(0) // world 锚定缺省（spec §5 r2 纠偏）
+    // brief 原断言 toBeUndefined()（「首帧 preRender 前」）与 T4 语义冲突：shadowState.bsm
+    // 在 build 时即赋值（创建即全 0、可直接赋值不必等首次 render——createCloudsStage.ts
+    // T4 concern 注释在案），bridge 透传该值 → 创建期即 defined
+    expect(d!.bsm).toBeDefined()
+    // 引用语义（O(1) 契约）：两次调用返回桥数组同引用，不逐帧 clone
+    const d2 = handle!.getGroundShadowBridgeData()
+    expect(d2!.matrices).toBe(d!.matrices)
+    expect(d2!.intervals).toBe(d!.intervals)
+    handle!.destroy()
+  })
+
+  it('destroy 后返回 undefined', () => {
+    vi.clearAllMocks()
+    const handle = createCloudsStage(createMockScene(), createMockLuts(), createMockWeather(), { clouds: true })!
+    handle.destroy()
+    expect(handle.getGroundShadowBridgeData()).toBeUndefined()
+  })
+
+  it('setQuality 换档后 getter 委托新 impl（sampleCount 随档位 16→4，low 档）', () => {
+    vi.clearAllMocks()
+    const handle = createCloudsStage(createMockScene(), createMockLuts(), createMockWeather(), { clouds: true })!
+    expect(handle.getGroundShadowBridgeData()!.sampleCount).toBe(16) // high
+    handle.setQuality('low')
+    const d = handle.getGroundShadowBridgeData()
+    expect(d!.sampleCount).toBe(4) // low 档
+    expect(d!.cascadeCount).toBe(2)
+    expect(d!.matrices).toHaveLength(4) // padded 恒 4 槽（与 cascadeCount 解耦）
+    handle.destroy()
+  })
+})
