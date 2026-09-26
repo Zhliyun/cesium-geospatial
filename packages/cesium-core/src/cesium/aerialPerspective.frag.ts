@@ -944,6 +944,7 @@ ${o.moon ? '    moonDisc *= limbFade; // 与太阳盘行为一致（太空视角
         // 显恒白，不再静默跌落 debug=10（验收误读陷阱）；开态读数行在下方 define 门内。
 ${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
         out_FragColor = vec4(groundSunTrans, 0.0, 0.0, 1.0);
+        return;
 #endif
 ` : ''}        out_FragColor = vec4(1.0);
         return;
