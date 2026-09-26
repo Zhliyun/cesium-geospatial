@@ -14,6 +14,10 @@
 | `d851581` | T4 aerial GLSL 函数族：运行期级联变体+vogel PCF+半径自适应（glslang 双 combo） |
 | `3ad3997` | T5 乘子插入：mulSunIrr\*=sunTransmittance（三重短路逐位零回归）+debug=11（JS 条件拼入调和，moon 段先例） |
 | `509d8ce` | T6 demo 接线：?groundShadow/?groundShadowStrength+README |
+| `31489fa` | results 文档 |
+| `fdb0a2f`+`23e1d69` | 终审修复波（opus 全分支终审「可合并零 Must-Fix」后顺手修 3 项+注释改写；debug=11 关态恒白/开态读数双契约，复审两轮闭环） |
+
+**终审**：opus 全分支审查判定**可合并、零 Must-Fix**——契约链三端逐字符串一致、双域分工全消费点一致、零回归锚全边界闭环（含新论证：首帧 far=0→级联恒 -1 封死 NaN-uv 通道）。留档项：F2 半径计算先于三重短路（夜晚小额未测成本，最小修法=挪进短路块）、14 条 deferred minors（详见 SDD ledger）。
 
 ## 验收摘要（详细取证：.superpowers/sdd/2026-09-21-m6-ground-cloud-shadows/task-7-report.md，84 份截图/raw 资产可复核）
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-把 **three-geospatial** 的 Bruneton 大气渲染移植进 **Cesium**（原生注入，非替换 Globe）。渲染通过 Cesium `PostProcessStage` 后处理实现，复用 Cesium 内置的 `czm_*` automatic uniforms、对数深度、`depthTexture`。当前阶段：**大气（phase1）与体积云全线已合并 `main`**——体积云 M1-M5、分布重设计、月光/月盘、性能优化（贴地掠射调查→A 太阳角影子预算→P0 夜晚太阳侧门控+P1 光柱降采样，2026-09-05 收官）均已落地；下一大项=**M6 云影重做**（2026-09-04 旧立项已随分支撤销删除，待基于最新 main 重新立项）；phase2a（HDR 浮点后处理链基建）已落地。
+把 **three-geospatial** 的 Bruneton 大气渲染移植进 **Cesium**（原生注入，非替换 Globe）。渲染通过 Cesium `PostProcessStage` 后处理实现，复用 Cesium 内置的 `czm_*` automatic uniforms、对数深度、`depthTexture`。当前阶段：**大气（phase1）与体积云全线已合并 `main`**——体积云 M1-M5、分布重设计、月光/月盘、性能优化（贴地掠射调查→A 太阳角影子预算→P0 夜晚太阳侧门控+P1 光柱降采样，2026-09-05 收官）均已落地；**M6 地面云影已落地**（2026-09-26：aerial fragment 直采 BSM→`mulSunIrr *= exp(-光深)` 乘地表太阳直射份额，双域分工 distToTop=密切球局部系/级联=raw ECEF，?groundShadow/?groundShadowStrength 逃生门，档位样本数 low4/medium8/high16/ultra16；spec r2 经 4 路专家评审，SDD 7 任务+opus 终审+修复波 2 轮，真机 10 场景 0 异常）；phase2a（HDR 浮点后处理链基建）已落地。
 
 **参考库定位（关键）**：`three-geospatial`（`/Users/zhangliyun/Documents/Ayvods/Web3D/three-geospatial`）与 `navara`（`/Users/zhangliyun/Documents/Ayvods/Web3D/navara`，Rust/WASM GIS 核心 + Three.js 渲染的 3D 地图引擎，含完整动态体积云方案 examples/weather/clouds）并列算法/技术**主参考**（2026-09-03 用户拍板：navara 地位与 three-geospatial 一致，方案可能更完整）。
 
