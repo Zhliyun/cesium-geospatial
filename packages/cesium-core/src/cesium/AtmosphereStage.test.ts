@@ -979,6 +979,8 @@ describe('appendGroundShadowUniforms（spec §8.1 dummy 表）', () => {
       'u_groundShadowStrength']
     for (const k of keys) expect(u[k], k).toBeDefined()
     expect((u.u_shadowIntervals as () => unknown)()).toHaveLength(4)
+    // dummy matrices 恒 4 槽——长度错只在运行时爆，一行测试锁住
+    expect(((u.u_shadowMatrices as () => unknown)()) as unknown[]).toHaveLength(4)
     expect((u.u_cascadeCount as () => number)()).toBe(0)
     expect((u.u_groundShadowStrength as unknown) as number).toBe(1)
   })

@@ -794,7 +794,8 @@ ${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
     // —— M6 地面云影（spec §6.2/§6.6）——
     // 采样点：hasScene → depth 重建 raw ECEF 米；瓦片流送缺失（discG>0）→ tHitG 椭球兜底
     //（继承 fore fallback 语义，防流送边界「影有/无」直线——mul 直线/depth 灰膜同型前科）；
-    // 真天空（discG<0）不采样恒 1。距离量 km×1000 转米。
+    // 天像素不消费（originalColor≈0，finalColor 不见此项）；!hasScene 恒走 tHitG 兜底（含负值），
+    // 可能白付少量计算。距离量 km×1000 转米。
     vec3 groundShadowPosM = hasScene
       ? sceneWorldPosM
       : czm_viewerPositionWC + rayDirection * (tHitG * 1000.0);
@@ -930,23 +931,24 @@ ${o.moon ? '    moonDisc *= limbFade; // 与太阳盘行为一致（太空视角
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化；
-  //    8=ground/sky 分支+foreMask 9=transmittance 10=inscatter(×50 clamp)——2026-09-02 地平线直线定位）——
+  //    8=ground/sky 分支+foreMask 9=transmittance 10=inscatter(×50 clamp) 11=地面云影透射率灰度
+  //    ——2026-09-02 地平线直线定位）——
   // 整个级联被 if (u_debugMode < 6.5) 包裹：debug=7（>6.5）跳过所有可视化分支，直接落到末端线性输出
   //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
   // 归一化验证 HDR 承载 >1（spec §5.2/§6.3）。曾因降序级联无统一上限，debug=7 被 >4.5 分支截断输出
   // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。8/9/10 同理外置（>7.5）。
   if (u_debugMode < 6.5 || u_debugMode > 7.5) {
     if (u_debugMode > 7.5) {
-${o.groundCloudShadow ? `      if (u_debugMode > 10.5) {
-        // 11：M6 地面云影透射率灰度（R=groundSunTrans；无 define 恒白）
-#ifdef HAS_GROUND_SHADOW
+      if (u_debugMode > 10.5) {
+        // 11：M6 地面云影透射率灰度。分支外壳+恒白兜底恒常存在——关态（M6 define 关）debug=11
+        // 显恒白，不再静默跌落 debug=10（验收误读陷阱）；开态读数行在下方 define 门内。
+${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
         out_FragColor = vec4(groundSunTrans, 0.0, 0.0, 1.0);
-#else
-        out_FragColor = vec4(1.0);
 #endif
+` : ''}        out_FragColor = vec4(1.0);
         return;
       }
-` : ''}      if (u_debugMode > 9.5) {
+      if (u_debugMode > 9.5) {
         out_FragColor = vec4(clamp(inscatter * 50.0, 0.0, 1.0), 1.0);
         return;
       }

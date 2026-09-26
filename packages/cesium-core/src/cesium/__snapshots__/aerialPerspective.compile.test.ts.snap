@@ -1492,13 +1492,20 @@ void main() {
 
   // —— 诊断（1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor；
   //    7=线性输出 HDR 链验证，由链尾 tonemap 归一化；
-  //    8=ground/sky 分支+foreMask 9=transmittance 10=inscatter(×50 clamp)——2026-09-02 地平线直线定位）——
+  //    8=ground/sky 分支+foreMask 9=transmittance 10=inscatter(×50 clamp) 11=地面云影透射率灰度
+  //    ——2026-09-02 地平线直线定位）——
   // 整个级联被 if (u_debugMode < 6.5) 包裹：debug=7（>6.5）跳过所有可视化分支，直接落到末端线性输出
   //（finalColor*exposure，>1 原样写 HalfFloat），由链尾 tonemap stage 的 >6.5 分支做 clamp(/5,0,1)
   // 归一化验证 HDR 承载 >1（spec §5.2/§6.3）。曾因降序级联无统一上限，debug=7 被 >4.5 分支截断输出
   // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。8/9/10 同理外置（>7.5）。
   if (u_debugMode < 6.5 || u_debugMode > 7.5) {
     if (u_debugMode > 7.5) {
+      if (u_debugMode > 10.5) {
+        // 11：M6 地面云影透射率灰度。分支外壳+恒白兜底恒常存在——关态（M6 define 关）debug=11
+        // 显恒白，不再静默跌落 debug=10（验收误读陷阱）；开态读数行在下方 define 门内。
+        out_FragColor = vec4(1.0);
+        return;
+      }
       if (u_debugMode > 9.5) {
         out_FragColor = vec4(clamp(inscatter * 50.0, 0.0, 1.0), 1.0);
         return;
