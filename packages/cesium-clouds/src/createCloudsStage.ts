@@ -216,12 +216,13 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   /** 渐隐终止高度（米，缺省 3e5=300km）：以上全隐。 */
   heightFadeEnd?: number
   /**
-   * 【2026-09-28 层内渐隐】相机进入云壳带（minHeight<相机<maxHeight）时云 overlay 整体
-   * 隐藏（×0 透传地形）。缺省 true。动机：层内（甲内）视角在层高度重定（2026-09-04）
-   * 后存在两个未根治缺陷——①密集底板视角=首采样支配+alpha 钳 1 的均匀不透明白板；
+   * 【2026-09-28 层内渐隐】相机进入最低稠密层 L0 带内（shadowBottomHeight<相机<maxLayerHeights.x，
+   * 即 1500-2150）时云 overlay 整体隐藏（×0 透传地形）。缺省 true。动机：L0 带内视角存在
+   * 两个未根治缺陷——①密集底板视角=首采样支配+alpha 钳 1 的均匀不透明白板/糊状；
    * ②Mac ANGLE→Metal 编译器敏感的方向相关黑楔（2026-09-28 排查：与 20+ uniform 无关、
    * 对 shader 代码扰动敏感、三次等价重构无效）。「修不动时按高度退化是正当 LOD 解」
-   * （2026-09-03 太空俯视渐隐同款先例）：带内隐藏云、带外零影响。
+   * （2026-09-03 太空俯视渐隐同款先例）。带外零影响——L1 带内（2500 均匀雾=层内厚柱
+   * 物理观感、3084 云顶视野）与贴地/高空全部正常（2026-09-28 实测定界）。
    * demo `?cloudsInLayerFade=0` 关闭（逃生门，看层内原貌）。
    */
   inLayerFade?: boolean
@@ -1256,13 +1257,14 @@ export function createCloudsStage(
           options.heightFadeEnd ?? CLOUDS_HEIGHT_FADE_END_DEFAULT
         )
         if (options.inLayerFade !== false) {
-          // 带边界=稠密低云带 [shadowBottomHeight, shadowTopHeight]（shadow=true 的 L0/L1
-          // =1500-3200）——不能用壳 [minHeight, maxHeight]（含 7500-8000 卷云，会把
-          // 5500m 等正常航高全部误隐藏，2026-09-28 首版实测回归已纠）。
+          // 带边界=最低稠密层 L0 的 [底, 顶]（shadowBottomHeight=1500 / maxLayerHeights.x=2150）。
+          // 缺陷域实测（2026-09-28，coverage 0.5 波河平原）：L0 带内=白板/糊状/黑楔；L1 带内
+          // （2500 均匀雾=层内厚柱物理观感、3084 云顶视野精美）与带外全部正常——首版误用
+          // 壳 [minHeight,maxHeight]（含卷云顶 8000）把 3084/5500 航高全隐藏，已按实测收窄。
           fade *= computeCloudsInLayerFade(
             carto.height,
             impl.params.shadowBottomHeight,
-            impl.params.shadowTopHeight
+            impl.params.maxLayerHeights.x
           )
         }
         return fade

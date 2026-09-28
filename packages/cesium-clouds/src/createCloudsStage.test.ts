@@ -1695,22 +1695,23 @@ describe('高空云层渐隐：computeCloudsHeightFade', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 层内渐隐（2026-09-28）：相机进入云壳带 (minHeight, maxHeight) 时 overlay 隐藏——
-// 层内视角存在未根治缺陷（密集底板白板 + Mac ANGLE→Metal 编译器敏感黑楔），按
-// 「修不动按高度退化」LOD 先例处理（太空渐隐同款）。带外零影响：层底下方（1450m
-// 目验域）、贴地、高空全部保持原渲染。
+// 层内渐隐（2026-09-28）：相机进入最低稠密层 L0 带内时 overlay 隐藏——L0 带内存在
+// 未根治缺陷（密集底板白板/糊状 + Mac ANGLE→Metal 编译器敏感黑楔），按「修不动按
+// 高度退化」LOD 先例处理（太空渐隐同款）。带外零影响：L1 带内（2500/3084 实测正常）、
+// 层底下方（1450 目验域）、贴地、高空全部保持原渲染。
 // ─────────────────────────────────────────────────────────────────────────────
 describe('层内渐隐：computeCloudsInLayerFade', () => {
-  it('带开区间内 0（隐藏）；带外 1（全显）', () => {
-    expect(computeCloudsInLayerFade(1536, 1500, 3200)).toBe(0) // 用户异常机位
-    expect(computeCloudsInLayerFade(2500, 1500, 3200)).toBe(0)
-    expect(computeCloudsInLayerFade(1450, 1500, 3200)).toBe(1) // 层底下方目验域
-    expect(computeCloudsInLayerFade(0, 1500, 3200)).toBe(1)
-    expect(computeCloudsInLayerFade(5500, 1500, 3200)).toBe(1)
+  it('带开区间内 0（隐藏）；带外 1（全显）——实接线 L0 带 [1500, 2150]', () => {
+    expect(computeCloudsInLayerFade(1536, 1500, 2150)).toBe(0) // 用户异常机位
+    expect(computeCloudsInLayerFade(1800, 1500, 2150)).toBe(0) // 实测糊状域
+    expect(computeCloudsInLayerFade(2500, 1500, 2150)).toBe(1) // L1 带内实测正常
+    expect(computeCloudsInLayerFade(3084, 1500, 2150)).toBe(1) // 用户期望可见（云顶视野）
+    expect(computeCloudsInLayerFade(1450, 1500, 2150)).toBe(1) // 层底下方目验域
+    expect(computeCloudsInLayerFade(5500, 1500, 2150)).toBe(1)
   })
   it('边界取 1（开区间语义：恰在层底/层顶不隐藏）', () => {
-    expect(computeCloudsInLayerFade(1500, 1500, 3200)).toBe(1)
-    expect(computeCloudsInLayerFade(3200, 1500, 3200)).toBe(1)
+    expect(computeCloudsInLayerFade(1500, 1500, 2150)).toBe(1)
+    expect(computeCloudsInLayerFade(2150, 1500, 2150)).toBe(1)
   })
   it('病态区间防御：minHeight≥maxHeight 恒 1（不隐藏）', () => {
     expect(computeCloudsInLayerFade(2000, 3200, 1500)).toBe(1)
