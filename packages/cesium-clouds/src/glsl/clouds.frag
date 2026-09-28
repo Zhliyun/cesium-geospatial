@@ -597,7 +597,13 @@ vec4 marchClouds(
     camHeightLocal > minLayerHeights.y && camHeightLocal < maxLayerHeights.y,
     camHeightLocal > minLayerHeights.z && camHeightLocal < maxLayerHeights.z,
     camHeightLocal > minLayerHeights.w && camHeightLocal < maxLayerHeights.w);
-  float inLayerCam = u_inLayerFog * (any(camInLayer) ? 1.0 : 0.0);
+  // 【段长上限 2026-09-28 用户反馈 3187m 近水平云变平面】雾化语义=「扎在云里的近场短段」
+  // （步长=段长/12 保证 12 步铺满）；层带内近水平视角段长可达几 km-几十 km（L1 带内 3187m
+  // -4.6° 俯角段 ~21km → 步长 1.75km，12 个采样点跨 21km → 体积结构完全欠采样=平面云）。
+  // 长段=「在云层高度看远处云墙」应走原路径（mip LOD 大步+早退，体积感由几十步采样呈现，
+  // 实测正常）。2000m=步长上限 ~167m（1692 最坏段 590m/1536 薄段 117m 均不受影响）。
+  float shortInLayer = any(camInLayer) && maxRayDistance < 2000.0 ? 1.0 : 0.0;
+  float inLayerCam = u_inLayerFog * shortInLayer;
   stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam);
   marchJitter = mix(marchJitter, 0.0, inLayerCam);
   startJitter = mix(startJitter, 0.0, inLayerCam);
