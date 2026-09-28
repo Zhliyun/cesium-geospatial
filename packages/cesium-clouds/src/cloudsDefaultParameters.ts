@@ -166,6 +166,11 @@ export interface CloudsParameters {
    *  白天（>+2°）精确 1 零回归；<-6° LUT 天光归零后自然无效（nightAmbient 接管）。
    *  demo ?cloudsTwilightBoost=（1=关）。不进质量档位（视觉参数）。 */
   twilightSkyBoost: number
+  /** 层内雾化总开关（2026-09-28 方案 A，用户拍板）：相机在云层带内时 march 启用专用
+   *  路径（步长细化段长/12+早退抑制全段积分+radiance 去饱和提亮+出口 alpha×0.88 软化），
+   *  治「层内单点辐射平刷」（1536 白板/1692 蓝板两例同机制）。0=整路径逐位回退
+   *  （门控 mix 恒等，带外本就不受影响）。demo ?cloudsInLayerFog=。不进质量档位。 */
+  inLayerFog: number
   /** 月光倍率（方向 C，2026-08-30）：moonIrradiance = solar_irradiance×2.5e-6×月相×此值×
    *  nightFactor。默认 25000（2026-08-31 用户反馈夜间云偏亮，三档实测拍板减半：中景云 −36%/
    *  地平亮云 −31%，月光仍主导夜间照明；沿革 50000→25000。物理 2.5e-6 不可见）。
@@ -333,6 +338,9 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 暮光天光补偿（2026-09-01 黄昏云过黑 A 案）：6=用户拍板物理档（实测云/天空显示比 80%，
     // 接近物理目标 85-90%；档位沿革 3 温和=51%/6 物理=80%，?cloudsTwilightBoost= URL 即调）
     twilightSkyBoost: 6.0,
+    // 层内雾化总开关（2026-09-28 方案 A）：1=开（缺省，治 1536 白板/1692 蓝板平刷）；
+    // 0=逐位回退。?cloudsInLayerFog= 即调
+    inLayerFog: 1.0,
     // 夜间云色调乘子（线性域，乘底光+月光两项；2026-09-01 uniform 化+三档拍板定稿 C 档——
     // 沿革 (0.72,1,1.32) 泛红对冲→(0.72,1,1.15) 一轮弱蓝→(0.88,1,1.0) 二轮弱蓝拍板：
     // 蓝收干净+红大幅回抬，实测云 B/G=1.06（残余蓝=云介质散射谱依赖的物理蓝移）、

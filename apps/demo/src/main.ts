@@ -718,6 +718,12 @@ async function main(): Promise<void> {
                   ...(getNumber('cloudsTwilightBoost') != null
                     ? { twilightSkyBoost: getNumber('cloudsTwilightBoost')! }
                     : {}),
+                  // ?cloudsInLayerFog= 层内雾化总开关（2026-09-28 方案 A，用户拍板）：相机在
+                  // 云层带内时 march 专用路径（细化+去早退+去饱和+alpha 软化），治 1536 白板/
+                  // 1692 蓝板单点平刷；缺省 1 开，0=逐位回退（排查对照用）
+                  ...(getNumber('cloudsInLayerFog') != null
+                    ? { inLayerFog: getNumber('cloudsInLayerFog')! }
+                    : {}),
                   ...(getNumber('moonLightScale') != null
                     ? { moonLightScale: getNumber('moonLightScale')! }
                     : {}),

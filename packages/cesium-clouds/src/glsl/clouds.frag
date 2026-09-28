@@ -85,6 +85,14 @@ uniform vec3 u_nightTint;
 // 补偿自然无效（nightAmbient 接管）。?cloudsTwilightBoost= URL 即调（1=关）；默认 6=用户
 // 拍板物理档（2026-09-01，云/天空显示比 80%；档位 3 温和=51%）。
 uniform float u_twilightSkyBoost;
+// 层内雾化（2026-09-28 方案 A，用户拍板）：相机在云层带内（1500-2150 等层带）时 march
+// 退化为「首样本即早退的单点辐射平刷」（ext≥0.1/m → exp(-0.1×50)=0.0067<minTransmittance
+// 一步断；且 minStepSize=50m 地板阻止细化）→ 整下半球被近相机体素辐射平刷（稠密柱=白/蓝
+// 板、帄区黑楔暗纱——1692 蓝板/1536 白板两例同机制不同天气纹素形态）。本开关启用层内
+// 专用路径：步长细化铺满段长 + 早退抑制全段积分（多步积累=加权平均光照）+ radiance
+// 去饱和提亮（治深部蓝 ambient）+ 出口 alpha 软化（浓雾透底=雾感非墙感）。
+// 0=整路径逐位回退（门控 uniform 全屏一致，mix 恒等）。?cloudsInLayerFog= 即调。
+uniform float u_inLayerFog;
 
 // 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
 // （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/
@@ -570,6 +578,29 @@ vec4 marchClouds(
   float shortSegment = maxRayDistance < stepSize * 8.0 ? 1.0 : 0.0;
   float marchJitter = mix(jitter, 0.0, shortSegment);
   float startJitter = maxRayDistance < stepSize * 8.0 ? 0.0 : jitter;
+  // 【2026-09-28 层内雾化（方案 A，用户拍板）】门控=相机在层带内（带外逐位不受影响——
+  // 1450 层下 / 2500+ 层上 / 太空全部 inLayerCam=0 走原路径）。1692 蓝板/1536 白板两例
+  // 排查实证：层内相机段被 minStepSize=50m 地板钉死步长 + 首样本 ext≥0.1/m 即
+  // exp(-5)≤minTransmittance 早退 → 单点辐射平刷整下半球。三处修正：
+  // ① 步长细化：段长/12 铺满（1692 段 ~590m 细化后 ≈49m 与原 50m 几乎同——关键在 ③；
+  //    1536 薄段 ~117m 细化到 ~10m，从 2-3 步变 12 步）；
+  // ② 起点 jitter 与逐样本相位归零（确定性延续 f49589b 语义，段短抖动无收益只有闪动）；
+  // ③ 早退抑制见循环内（多步积分=加权平均光照，治首样本单点蓝 ambient）。
+  // 相机在任一云层带内（层带=minLayerHeights/maxLayerHeights 各层 [altitude, altitude+height]，
+  // L0 [1500,2150]/L1 [2000,3200]/L2 卷云带——椭球高语义，与 cameraHeight 同系）。
+  // 【坑 2026-09-28】insideLayerIntervals 是「层间空隙」判定（packIntervalHeights 产出
+  // [0,1500]/[3200,7500] 空域，march 快速跳跃用）——语义=「在空隙里」，与「在云层里」
+  // 恰好相反；首版误用导致门控恒 false（三实验定位）。
+  float camHeightLocal = length(rayOrigin) - bottomRadius;
+  bvec4 camInLayer = bvec4(
+    camHeightLocal > minLayerHeights.x && camHeightLocal < maxLayerHeights.x,
+    camHeightLocal > minLayerHeights.y && camHeightLocal < maxLayerHeights.y,
+    camHeightLocal > minLayerHeights.z && camHeightLocal < maxLayerHeights.z,
+    camHeightLocal > minLayerHeights.w && camHeightLocal < maxLayerHeights.w);
+  float inLayerCam = u_inLayerFog * (any(camInLayer) ? 1.0 : 0.0);
+  stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam);
+  marchJitter = mix(marchJitter, 0.0, inLayerCam);
+  startJitter = mix(startJitter, 0.0, inLayerCam);
   float rayDistance = stepSize * startJitter * 2.0;
 
   for (int i = 0; i < maxIterationCount; ++i) {
@@ -742,6 +773,11 @@ vec4 marchClouds(
       #ifdef POWDER
       radiance *= 1.0 - powderScale * exp(-media.extinction * powderExponent);
       #endif // POWDER
+      // 【层内雾化 ④】radiance 去饱和提亮（1692 蓝板实测观感修正）：层内深部样本直射被
+      // 上方云柱遮断（AMS(深 OD)≈0），只剩天光 ambient——Rayleigh 蓝主导 → 平刷呈饱和蓝。
+      // 真实阴天云雾=白灰：45% 向亮度去饱和 + 15% 提亮（只在层内相机路径生效，带外恒等）。
+      vec3 inLayerLuma = vec3(dot(radiance, vec3(0.33333333)));
+      radiance = mix(radiance, inLayerLuma * 1.15, 0.45 * inLayerCam);
       g_probeRad = dot(radiance, vec3(0.33333333));
 
       #ifdef DEBUG_SHOW_CASCADES
@@ -765,7 +801,10 @@ vec4 marchClouds(
       transmittanceSum += transmittanceIntegral;
     }
 
-    if (transmittanceIntegral <= minTransmittance) {
+    // 【层内雾化 ③】层内相机禁早退：段长有限（≤层厚/sinθ，最长 ~650m），全段积分成本
+    // 有界；收益=多步密度变化进入积分（云隙/浓柱过渡有层次）+ 辐射沿段平均（非首样本
+    // 单点）。带外早退语义原样（maxIterationCount 500 步长段成本无界，不可禁）。
+    if (transmittanceIntegral <= minTransmittance && inLayerCam < 0.5) {
       break; // Early termination
     }
 
@@ -785,7 +824,10 @@ vec4 marchClouds(
   // The final product of 5.9.1 and we'll evaluate this in aerial perspective.
   frontDepth = transmittanceSum > 0.0 ? weightedDistanceSum / transmittanceSum : -1.0;
 
-  return vec4(radianceIntegral, remapClamped(transmittanceIntegral, 1.0, minTransmittance));
+  // 【层内雾化 ⑤】出口 alpha 软化：全段积分后稠密柱 T≈0 → alpha=1 纯墙（透射 0.7% 以下
+  // 全被 remap 钳死）。×0.88 给地面留 12% 可见度=「浓雾」观感而非「墙」。带外恒等。
+  float outAlpha = remapClamped(transmittanceIntegral, 1.0, minTransmittance);
+  return vec4(radianceIntegral, mix(outAlpha, outAlpha * 0.88, inLayerCam));
 }
 
 #ifdef SHADOW_LENGTH
