@@ -562,6 +562,13 @@ vec4 marchClouds(
   // 启用：贴云甲底（minHeight）掠射视角的 march 段可短至十余米（≈2-3 步），±2 步起点抖动
   // 使相位帧间「整段跳过（sampleCount=0 → vec4(0)）/命中」翻转 → resolve 对暗 scene 收敛出
   // alpha 中间稳态 → 扩散黑块（temporal=0 即 jitter=0 时 0/36 黑帧的 A/B 实证）。
+  // 【2026-09-28 层内运动闪屏】上守卫的完整化：短段（<8 步）时【整条 march 全部抖动归零】
+  // （起点+逐样本 STBN相位），不止起点——层内 1-2 采样下逐样本 jitter 逐帧翻转 detail 分支
+  // 门与采样相位 → veil alpha 二值跳变 → 拖拽视角全屏闪动（白板↔见地逐帧翻转，同机位
+  // 冻结时间下密度场静止、物理上不该变——真机连拍实证）。短段本无空间抖动收益
+  // （采样数不足以铺开噪声），确定性优先。
+  float shortSegment = maxRayDistance < stepSize * 8.0 ? 1.0 : 0.0;
+  float marchJitter = mix(jitter, 0.0, shortSegment);
   float startJitter = maxRayDistance < stepSize * 8.0 ? 0.0 : jitter;
   float rayDistance = stepSize * startJitter * 2.0;
 
@@ -600,7 +607,7 @@ vec4 marchClouds(
     }
 
     // Sample detailed participating media.
-    MediaSample media = sampleMedia(weather, position, uv, mipLevel, jitter, sampleCount);
+    MediaSample media = sampleMedia(weather, position, uv, mipLevel, marchJitter, sampleCount);
 
     if (media.extinction > minExtinction) {
       vec3 skyIrradiance;
@@ -651,7 +658,7 @@ vec4 marchClouds(
           sunDirection,
           maxIterationCountToSun,
           mipLevel,
-          jitter,
+          marchJitter,
           sunRayDistance
         );
 
@@ -664,7 +671,7 @@ vec4 marchClouds(
             sunRayDistance,
             // Apply PCF only when the sun is close to the horizon.
             maxShadowFilterRadius * remapClamped(dot(sunDirection, surfaceNormal), 0.1, 0.0),
-            jitter
+            marchJitter
           );
         }
       }
@@ -690,7 +697,7 @@ vec4 marchClouds(
           moonDirection,
           maxIterationCountToSun,
           mipLevel,
-          jitter,
+          marchJitter,
           moonRayDistance
         );
         float cosThetaMoon = dot(moonDirection, rayDirection);
