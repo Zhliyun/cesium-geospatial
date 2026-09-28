@@ -785,11 +785,23 @@ vec4 marchClouds(
       // 【2026-09-28 云底地板（2022m 用户实测黑斑）】重叠带深部（L0∩L1 内深 500m+、段
       // 1-2km 全浓云）样本 radiance 近黑（直射 0 + skyGradient 底部≈0）——去饱和救不了
       // 黑（黑 luma=0）→ 输出纯黑斑块。物理依据：真实云底有地面反照+云内多次散射，
-      // 不会纯黑（阴天云底反照 ~0.3-0.6）。地板=天光直照的 6%（skyGradient 旁路——底部
-      // gradient≈0 正是黑因），浅部（1692 白雾）luma 远高于地板不受影响。
+      // 不会纯黑（阴天云底反照 ~0.3-0.6）。地板=天光的 50%（v2：0.06 经 45% 混合等效
+      // ~2.7% 仍黑——2022 成对 A/B 实测无效提档；旁路 skyGradient——底部 gradient≈0
+      // 正是黑因）。浅部（1692 白雾）luma 远高于地板，max 取 luma 不受影响。
       vec3 inLayerLuma = vec3(dot(radiance, vec3(0.33333333)));
-      vec3 inLayerFloor = skyIrradiance * (RECIPROCAL_PI4 * skyLightScale * 0.06);
+      vec3 inLayerFloor = skyIrradiance * (RECIPROCAL_PI4 * skyLightScale * 0.5);
       radiance = mix(radiance, max(inLayerLuma * 1.15, inLayerFloor), 0.45 * inLayerCam);
+      // 【2026-09-28 2022m 黑斑止血】NaN 样本免疫：2022m（L0∩L1 重叠带深部）雾化路径
+      // readPixels 实证黑斑像素 rgb=NaN（α=0.88 雾化签名、全图 ~29 万 NaN 分量）→
+      // overlay 消毒 → 黑斑。NaN 源头未钉（BSM=0/AMS 简单版/shapeDetail=0/turbulence=0
+      // 四路排除均无效；黑斑区 frontDepth=0.1km + 速度 -1.7 每帧 rejection）。isnan
+      // 防御：NaN 样本按空气步跳过（不进能量积分），53e8bc6 history 消毒同款 defense。
+      // 注意不可写在白化前——NaN 会经 max/mix 传播（Metal max(NaN,x) 未定义）。
+      if (isnan(radiance.x) || isnan(radiance.y) || isnan(radiance.z)) {
+        stepSize *= perspectiveStepScale;
+        rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel));
+        continue;
+      }
       g_probeRad = dot(radiance, vec3(0.33333333));
 
       #ifdef DEBUG_SHOW_CASCADES
@@ -839,6 +851,14 @@ vec4 marchClouds(
   // 【层内雾化 ⑤】出口 alpha 软化：全段积分后稠密柱 T≈0 → alpha=1 纯墙（透射 0.7% 以下
   // 全被 remap 钳死）。×0.88 给地面留 12% 可见度=「浓雾」观感而非「墙」。带外恒等。
   float outAlpha = remapClamped(transmittanceIntegral, 1.0, minTransmittance);
+  // 【2026-09-28 2022m 黑斑出口兜底】readPixels 实证黑斑像素 rgb=NaN（样本级 isnan 拦截
+  // 无效——NaN 产生于能量积分自身/0×NaN 传播，样本级检测点在传播前）。RT 写入前终检：
+  // NaN 像素按无云处理（rgb=0、α=0 透出地面），NaN 源头（重叠带深部雾化路径、区域随
+  // 瓦片/天气状态波动）留专项调查。
+  if (isnan(radianceIntegral.r) || isnan(radianceIntegral.g) || isnan(radianceIntegral.b)) {
+    radianceIntegral = vec3(0.0);
+    outAlpha = 0.0;
+  }
   return vec4(radianceIntegral, mix(outAlpha, outAlpha * 0.88, inLayerCam));
 }
 

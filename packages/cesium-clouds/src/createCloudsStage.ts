@@ -434,6 +434,16 @@ void main() {
   if (!(ca >= 0.0)) ca = 0.0;
   cr = min(cr, vec3(65504.0));
   ca = min(ca, 1.0);
+  // 【2026-09-28 2022m 黑斑修复：NaN 像素 α 一并归零】上述消毒把 NaN rgb→0 但 α 保留
+  // （α 通常有效如 0.88）→ premultiplied 合成 final=scene×(1-α)+0 → 地面被 88% 压黑
+  // =「黑斑块群」（2022m 重叠带深部实测，区域随瓦片/天气状态波动）。NaN（x!=x 自比较，
+  // fast-math 不可优化）= 无效数据 → 整像素按无云处理（rgb 与 α 一并清零，透出地面）。
+  // 负值/inf 的既有处理不变（负值=黑楔暗纱语义，α 保留）。march 侧两级 isnan 拦截均
+  // 未拦到（疑似被 ANGLE→Metal fast-math 优化），消费端自比较是可靠兜底。
+  if (cr.r != cr.r || cr.g != cr.g || cr.b != cr.b || ca != ca) {
+    cr = vec3(0.0);
+    ca = 0.0;
+  }
   if (u_overlayDebug > 1.5) {
     out_FragColor = vec4(cloud.rgb, 1.0);
     return;
