@@ -782,8 +782,14 @@ vec4 marchClouds(
       // 【层内雾化 ④】radiance 去饱和提亮（1692 蓝板实测观感修正）：层内深部样本直射被
       // 上方云柱遮断（AMS(深 OD)≈0），只剩天光 ambient——Rayleigh 蓝主导 → 平刷呈饱和蓝。
       // 真实阴天云雾=白灰：45% 向亮度去饱和 + 15% 提亮（只在层内相机路径生效，带外恒等）。
+      // 【2026-09-28 云底地板（2022m 用户实测黑斑）】重叠带深部（L0∩L1 内深 500m+、段
+      // 1-2km 全浓云）样本 radiance 近黑（直射 0 + skyGradient 底部≈0）——去饱和救不了
+      // 黑（黑 luma=0）→ 输出纯黑斑块。物理依据：真实云底有地面反照+云内多次散射，
+      // 不会纯黑（阴天云底反照 ~0.3-0.6）。地板=天光直照的 6%（skyGradient 旁路——底部
+      // gradient≈0 正是黑因），浅部（1692 白雾）luma 远高于地板不受影响。
       vec3 inLayerLuma = vec3(dot(radiance, vec3(0.33333333)));
-      radiance = mix(radiance, inLayerLuma * 1.15, 0.45 * inLayerCam);
+      vec3 inLayerFloor = skyIrradiance * (RECIPROCAL_PI4 * skyLightScale * 0.06);
+      radiance = mix(radiance, max(inLayerLuma * 1.15, inLayerFloor), 0.45 * inLayerCam);
       g_probeRad = dot(radiance, vec3(0.33333333));
 
       #ifdef DEBUG_SHOW_CASCADES
