@@ -155,7 +155,7 @@ vi.mock('./CloudsResolvePass', () => ({
 }))
 
 import { createCloudsStage, type CloudsStageOptions } from './createCloudsStage'
-import { computeCloudsHeightFade } from './createCloudsStage'
+import { computeCloudsHeightFade, computeCloudsInLayerFade } from './createCloudsStage'
 import { createCloudsPass } from './CloudsPass'
 import { createShadowPass } from './ShadowPass'
 import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
@@ -279,8 +279,14 @@ describe('createCloudsStage', () => {
     expect(handle!.overlayStage.fragmentShader).toContain('colorTexture')
     expect(handle!.overlayStage.fragmentShader).toContain('u_cloudsBuffer')
     // 线性域式在场（spec §4.1；2026-09-03 高空渐隐：rgb/a 同乘 u_heightFade——fade=1 时与原式等价）
-    expect(handle!.overlayStage.fragmentShader).toContain('scene.rgb * (1.0 - cloud.a * u_heightFade)')
-    expect(handle!.overlayStage.fragmentShader).toContain('cloud.rgb * (u_cloudsExposure * u_heightFade)')
+    // 【2026-09-28 层内黑楔 NaN 消毒】合成式改用消毒后的 ca/cr（NaN/负→0、inf→域上界）
+    expect(handle!.overlayStage.fragmentShader).toContain('scene.rgb * (1.0 - ca * u_heightFade)')
+    expect(handle!.overlayStage.fragmentShader).toContain('cr * (u_cloudsExposure * u_heightFade)')
+    // 消毒逻辑在场：NaN 哨兵 (!(x >= 0.0)) → 0 与 +inf 钳制
+    expect(handle!.overlayStage.fragmentShader).toContain('if (!(cr.r >= 0.0)) cr.r = 0.0;')
+    expect(handle!.overlayStage.fragmentShader).toContain('if (!(ca >= 0.0)) ca = 0.0;')
+    expect(handle!.overlayStage.fragmentShader).toContain('cr = min(cr, vec3(65504.0));')
+    expect(handle!.overlayStage.fragmentShader).toContain('ca = min(ca, 1.0);')
     // display 域三件套不在场：ACESFilmic 函数 / unpremultiply / gamma
     expect(handle!.overlayStage.fragmentShader).not.toContain('cloudsOverlay_ACESFilmic')
     expect(handle!.overlayStage.fragmentShader).not.toContain('1.0 / 2.2')
@@ -1685,6 +1691,30 @@ describe('高空云层渐隐：computeCloudsHeightFade', () => {
     // start≥end 的病态区间防御：返回 1（不隐）
     expect(computeCloudsHeightFade(1e6, 3e5, 3e5)).toBe(1)
     expect(computeCloudsHeightFade(1e6, 5e5, 3e5)).toBe(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 层内渐隐（2026-09-28）：相机进入云壳带 (minHeight, maxHeight) 时 overlay 隐藏——
+// 层内视角存在未根治缺陷（密集底板白板 + Mac ANGLE→Metal 编译器敏感黑楔），按
+// 「修不动按高度退化」LOD 先例处理（太空渐隐同款）。带外零影响：层底下方（1450m
+// 目验域）、贴地、高空全部保持原渲染。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('层内渐隐：computeCloudsInLayerFade', () => {
+  it('带开区间内 0（隐藏）；带外 1（全显）', () => {
+    expect(computeCloudsInLayerFade(1536, 1500, 3200)).toBe(0) // 用户异常机位
+    expect(computeCloudsInLayerFade(2500, 1500, 3200)).toBe(0)
+    expect(computeCloudsInLayerFade(1450, 1500, 3200)).toBe(1) // 层底下方目验域
+    expect(computeCloudsInLayerFade(0, 1500, 3200)).toBe(1)
+    expect(computeCloudsInLayerFade(5500, 1500, 3200)).toBe(1)
+  })
+  it('边界取 1（开区间语义：恰在层底/层顶不隐藏）', () => {
+    expect(computeCloudsInLayerFade(1500, 1500, 3200)).toBe(1)
+    expect(computeCloudsInLayerFade(3200, 1500, 3200)).toBe(1)
+  })
+  it('病态区间防御：minHeight≥maxHeight 恒 1（不隐藏）', () => {
+    expect(computeCloudsInLayerFade(2000, 3200, 1500)).toBe(1)
+    expect(computeCloudsInLayerFade(2000, 100, 100)).toBe(1)
   })
 })
 

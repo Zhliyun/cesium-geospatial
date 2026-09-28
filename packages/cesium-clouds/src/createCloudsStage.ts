@@ -216,6 +216,16 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   /** 渐隐终止高度（米，缺省 3e5=300km）：以上全隐。 */
   heightFadeEnd?: number
   /**
+   * 【2026-09-28 层内渐隐】相机进入云壳带（minHeight<相机<maxHeight）时云 overlay 整体
+   * 隐藏（×0 透传地形）。缺省 true。动机：层内（甲内）视角在层高度重定（2026-09-04）
+   * 后存在两个未根治缺陷——①密集底板视角=首采样支配+alpha 钳 1 的均匀不透明白板；
+   * ②Mac ANGLE→Metal 编译器敏感的方向相关黑楔（2026-09-28 排查：与 20+ uniform 无关、
+   * 对 shader 代码扰动敏感、三次等价重构无效）。「修不动时按高度退化是正当 LOD 解」
+   * （2026-09-03 太空俯视渐隐同款先例）：带内隐藏云、带外零影响。
+   * demo `?cloudsInLayerFade=0` 关闭（逃生门，看层内原貌）。
+   */
+  inLayerFade?: boolean
+  /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
    * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
@@ -419,6 +429,21 @@ in vec2 v_textureCoordinates;
 void main() {
   vec4 scene = texture(colorTexture, v_textureCoordinates);
   vec4 cloud = texture(u_cloudsBuffer, v_textureCoordinates);
+  // 【2026-09-28 层内黑楔 NaN 消毒】march 输出在 Mac ANGLE→Metal 下存在方向相关 NaN
+  // （层内陡视角黑楔：与 20+ uniform 无关、对 shader 代码扰动敏感、等价重构无效——
+  // 根因在编译器层未钉，排查记录 2026-09-28）。premultiplied 合法域 a∈[0,1]、rgb≥0：
+  // NaN/负值 → 0，+inf → 域上界（half float max 65504）。消费端消毒两重收益：
+  // ① u_heightFade=0（层内渐隐）透传不再被 NaN×0=NaN 毒化——fade 能真正隐藏病态像素；
+  // ② 带 NaN 像素退化为透明（黑楔→透出地形）而非 IEEE 传播毒化整帧。
+  // 「history NaN 消毒」同款消费端 defense-in-depth 先例（2026-09-04 53e8bc6 族）。
+  vec3 cr = cloud.rgb;
+  float ca = cloud.a;
+  if (!(cr.r >= 0.0)) cr.r = 0.0;
+  if (!(cr.g >= 0.0)) cr.g = 0.0;
+  if (!(cr.b >= 0.0)) cr.b = 0.0;
+  if (!(ca >= 0.0)) ca = 0.0;
+  cr = min(cr, vec3(65504.0));
+  ca = min(ca, 1.0);
   if (u_overlayDebug > 1.5) {
     out_FragColor = vec4(cloud.rgb, 1.0);
     return;
@@ -429,7 +454,7 @@ void main() {
   }
   // 线性域 premultiplied over（spec D5）：E·premultiplied ≡ premultiplied(E·straight)。
   // ACES + gamma 由链尾 tonemap 统一。u_heightFade 同乘 rgb 与 a（渐隐=整体变透明）。
-  vec3 final = scene.rgb * (1.0 - cloud.a * u_heightFade) + cloud.rgb * (u_cloudsExposure * u_heightFade);
+  vec3 final = scene.rgb * (1.0 - ca * u_heightFade) + cr * (u_cloudsExposure * u_heightFade);
   out_FragColor = vec4(final, scene.a);
 }
 `
@@ -461,6 +486,20 @@ export function computeCloudsHeightFade(
   if (start >= end) return 1
   const t = Math.min(1, Math.max(0, (heightMeters - start) / (end - start)))
   return 1 - t * t * (3 - 2 * t)
+}
+
+/**
+ * 【2026-09-28 层内渐隐】相机地心高度 → 带内系数：严格在云壳带开区间 (minHeight, maxHeight)
+ * 内返回 0（隐藏），带外（含边界）返回 1。无渐变带宽——穿层边界本来就该突变（进云/出云），
+ * 且渐变带会侵蚀层底下方正当目验域（1450m 视角）。minHeight≥maxHeight 病态防御返回 1。
+ */
+export function computeCloudsInLayerFade(
+  heightMeters: number,
+  minHeight: number,
+  maxHeight: number
+): number {
+  if (!(maxHeight > minHeight)) return 1
+  return heightMeters > minHeight && heightMeters < maxHeight ? 0 : 1
 }
 
 /** 模块内 impl（spec §6.1 v2）：一次装配的全部资源 + 每帧逻辑 + 完整销毁。
@@ -1206,14 +1245,27 @@ export function createCloudsStage(
       u_overlayDebug: options.overlayDebug ?? 0,
       // 【2026-09-03 高空云层渐隐】每帧按相机地心高度算系数（uniformMap 闭包每帧求值）；
       // heightFade=false（demo ?cloudsFade=0）恒 1。
+      // 【2026-09-28 层内渐隐】相机在云壳带 (minHeight, maxHeight) 内时整体 ×0 透传——
+      // inLayerFade=false（demo ?cloudsInLayerFade=0）关闭该因子（高空渐隐不受影响）。
       u_heightFade: () => {
         if (options.heightFade === false) return 1
         const carto = scene.camera.positionCartographic
-        return computeCloudsHeightFade(
+        let fade = computeCloudsHeightFade(
           carto.height,
           options.heightFadeStart ?? CLOUDS_HEIGHT_FADE_START_DEFAULT,
           options.heightFadeEnd ?? CLOUDS_HEIGHT_FADE_END_DEFAULT
         )
+        if (options.inLayerFade !== false) {
+          // 带边界=稠密低云带 [shadowBottomHeight, shadowTopHeight]（shadow=true 的 L0/L1
+          // =1500-3200）——不能用壳 [minHeight, maxHeight]（含 7500-8000 卷云，会把
+          // 5500m 等正常航高全部误隐藏，2026-09-28 首版实测回归已纠）。
+          fade *= computeCloudsInLayerFade(
+            carto.height,
+            impl.params.shadowBottomHeight,
+            impl.params.shadowTopHeight
+          )
+        }
+        return fade
       }
     },
     sampleMode: PostProcessStageSampleMode.NEAREST,

@@ -257,11 +257,11 @@ float sampleShadowOpticalDepthPCF(
   }
   float sum = 0.0;
   vec2 offset;
-  #pragma unroll_loop_start
-  for (int i = 0; i < 16; ++i) {
-    #if UNROLLED_LOOP_INDEX < SHADOW_SAMPLE_COUNT
+  // 【2026-09-28 层内黑楔】原 three #pragma unroll_loop 文本展开（16 次循环，SHADOW_SAMPLE_COUNT=16
+  // 时 #if 全真=纯展开无裁剪）与 AMS 同款构造型；一并改恒定边界普通循环（数学逐位等价）。
+  for (int i = 0; i < SHADOW_SAMPLE_COUNT; ++i) {
     offset = vogelDisk(
-      UNROLLED_LOOP_INDEX,
+      i,
       SHADOW_SAMPLE_COUNT,
       interleavedGradientNoise(gl_FragCoord.xy + temporalJitter * resolution) * PI2
     );
@@ -271,9 +271,7 @@ float sampleShadowOpticalDepthPCF(
       distanceOffset,
       cascadeIndex
     );
-    #endif // UNROLLED_LOOP_INDEX < SHADOW_SAMPLE_COUNT
   }
-  #pragma unroll_loop_end
   return sum / float(SHADOW_SAMPLE_COUNT);
 }
 
@@ -460,16 +458,15 @@ float approximateMultipleScattering(const float opticalDepth, const float cosThe
   vec3 coeffs = vec3(1.0); // [a, b, c]
   const vec3 attenuation = vec3(0.5, 0.5, 0.5); // Should satisfy a <= b
   float scattering = 0.0;
-  float beerLambert;
-  #pragma unroll_loop_start
-  for (int i = 0; i < 12; ++i) {
-    #if UNROLLED_LOOP_INDEX < MULTI_SCATTERING_OCTAVES
-    beerLambert = exp(-opticalDepth * coeffs.y);
-    scattering += coeffs.x * beerLambert * phaseFunction(cosTheta, coeffs.z);
+  // 【2026-09-28 层内黑楔】原 three #pragma unroll_loop 文本展开（12 次循环
+  // #if UNROLLED_LOOP_INDEX < MULTI_SCATTERING_OCTAVES 裁剪留 6）在 Mac ANGLE→Metal
+  // 下疑似触发方向相关误编译（层内陡视角黑楔；代码扰动敏感实证见排查记录：
+  // 插入惰性全局即消失/换档位移动边界/与 20+ uniform 无关）。改恒定边界普通循环——
+  // 数学逐位等价（coeffs 几何递推与求和次序不变，仅去掉文本展开与 #if 死分支）。
+  for (int i = 0; i < MULTI_SCATTERING_OCTAVES; ++i) {
+    scattering += coeffs.x * exp(-opticalDepth * coeffs.y) * phaseFunction(cosTheta, coeffs.z);
     coeffs *= attenuation;
-    #endif // UNROLLED_LOOP_INDEX < MULTI_SCATTERING_OCTAVES
   }
-  #pragma unroll_loop_end
   return scattering;
 }
 
