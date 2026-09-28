@@ -155,7 +155,7 @@ vi.mock('./CloudsResolvePass', () => ({
 }))
 
 import { createCloudsStage, type CloudsStageOptions } from './createCloudsStage'
-import { computeCloudsHeightFade, computeCloudsInLayerFade } from './createCloudsStage'
+import { computeCloudsHeightFade } from './createCloudsStage'
 import { createCloudsPass } from './CloudsPass'
 import { createShadowPass } from './ShadowPass'
 import { quantizeSunDirection, SUN_QUANT_STEP } from './sunQuantization'
@@ -1694,30 +1694,10 @@ describe('高空云层渐隐：computeCloudsHeightFade', () => {
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 层内渐隐（2026-09-28）：相机进入最低稠密层 L0 带内时 overlay 隐藏——L0 带内存在
-// 未根治缺陷（密集底板白板/糊状 + Mac ANGLE→Metal 编译器敏感黑楔），按「修不动按
-// 高度退化」LOD 先例处理（太空渐隐同款）。带外零影响：L1 带内（2500/3084 实测正常）、
-// 层底下方（1450 目验域）、贴地、高空全部保持原渲染。
-// ─────────────────────────────────────────────────────────────────────────────
-describe('层内渐隐：computeCloudsInLayerFade', () => {
-  it('带开区间内 0（隐藏）；带外 1（全显）——实接线 L0 带 [1500, 2150]', () => {
-    expect(computeCloudsInLayerFade(1536, 1500, 2150)).toBe(0) // 用户异常机位
-    expect(computeCloudsInLayerFade(1800, 1500, 2150)).toBe(0) // 实测糊状域
-    expect(computeCloudsInLayerFade(2500, 1500, 2150)).toBe(1) // L1 带内实测正常
-    expect(computeCloudsInLayerFade(3084, 1500, 2150)).toBe(1) // 用户期望可见（云顶视野）
-    expect(computeCloudsInLayerFade(1450, 1500, 2150)).toBe(1) // 层底下方目验域
-    expect(computeCloudsInLayerFade(5500, 1500, 2150)).toBe(1)
-  })
-  it('边界取 1（开区间语义：恰在层底/层顶不隐藏）', () => {
-    expect(computeCloudsInLayerFade(1500, 1500, 2150)).toBe(1)
-    expect(computeCloudsInLayerFade(2150, 1500, 2150)).toBe(1)
-  })
-  it('病态区间防御：minHeight≥maxHeight 恒 1（不隐藏）', () => {
-    expect(computeCloudsInLayerFade(2000, 3200, 1500)).toBe(1)
-    expect(computeCloudsInLayerFade(2000, 100, 100)).toBe(1)
-  })
-})
+// 【2026-09-28 层内渐隐已移除】首版以相机高度带隐藏 overlay——第一性原理复估否决：
+// 云层内相机「看不到任何云」比白板更违反物理；层内下行射线水平展开 ±35m ≪ 天气纹素
+// （~100km），整下半球同纹素，白板/见地二态皆密度场诚实输出（ext≥0.1/m 直读实证）。
+// 病态像素由 overlay NaN 消毒兜底。
 
 // ─────────────────────────────────────────────────────────────────────────────
 // T-adaptive A：太阳角影子预算（spec 2026-09-04 §3）——preRender 乘数写 state + BSM

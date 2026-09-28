@@ -678,10 +678,6 @@ async function main(): Promise<void> {
           // march 域外伪影不可根治且视觉贡献趋零，隐去后为干净蓝色地球）；?cloudsFade=0
           // 逃生门（看全量云盘）
           ...(getString('cloudsFade') === '0' ? { heightFade: false } : {}),
-          // 层内渐隐（默认开，2026-09-28）：相机进入云壳带（1500-3200m）时云 overlay 隐藏——
-          // 层内视角存在未根治缺陷（密集底板白板 + Mac ANGLE→Metal 编译器敏感黑楔），
-          // 「修不动按高度退化」LOD 先例同款；?cloudsInLayerFade=0 逃生门（看层内原貌）
-          ...(getString('cloudsInLayerFade') === '0' ? { inLayerFade: false } : {}),
           // 夜间环境底光（方向 B，2026-08-29）：夜间云照明地板（默认 0.12 标定夜空底光量级；
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0

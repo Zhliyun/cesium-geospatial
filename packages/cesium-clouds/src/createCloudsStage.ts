@@ -216,17 +216,6 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   /** 渐隐终止高度（米，缺省 3e5=300km）：以上全隐。 */
   heightFadeEnd?: number
   /**
-   * 【2026-09-28 层内渐隐】相机进入最低稠密层 L0 带内（shadowBottomHeight<相机<maxLayerHeights.x，
-   * 即 1500-2150）时云 overlay 整体隐藏（×0 透传地形）。缺省 true。动机：L0 带内视角存在
-   * 两个未根治缺陷——①密集底板视角=首采样支配+alpha 钳 1 的均匀不透明白板/糊状；
-   * ②Mac ANGLE→Metal 编译器敏感的方向相关黑楔（2026-09-28 排查：与 20+ uniform 无关、
-   * 对 shader 代码扰动敏感、三次等价重构无效）。「修不动时按高度退化是正当 LOD 解」
-   * （2026-09-03 太空俯视渐隐同款先例）。带外零影响——L1 带内（2500 均匀雾=层内厚柱
-   * 物理观感、3084 云顶视野）与贴地/高空全部正常（2026-09-28 实测定界）。
-   * demo `?cloudsInLayerFade=0` 关闭（逃生门，看层内原貌）。
-   */
-  inLayerFade?: boolean
-  /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
    * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
@@ -487,20 +476,6 @@ export function computeCloudsHeightFade(
   if (start >= end) return 1
   const t = Math.min(1, Math.max(0, (heightMeters - start) / (end - start)))
   return 1 - t * t * (3 - 2 * t)
-}
-
-/**
- * 【2026-09-28 层内渐隐】相机地心高度 → 带内系数：严格在云壳带开区间 (minHeight, maxHeight)
- * 内返回 0（隐藏），带外（含边界）返回 1。无渐变带宽——穿层边界本来就该突变（进云/出云），
- * 且渐变带会侵蚀层底下方正当目验域（1450m 视角）。minHeight≥maxHeight 病态防御返回 1。
- */
-export function computeCloudsInLayerFade(
-  heightMeters: number,
-  minHeight: number,
-  maxHeight: number
-): number {
-  if (!(maxHeight > minHeight)) return 1
-  return heightMeters > minHeight && heightMeters < maxHeight ? 0 : 1
 }
 
 /** 模块内 impl（spec §6.1 v2）：一次装配的全部资源 + 每帧逻辑 + 完整销毁。
@@ -1246,28 +1221,18 @@ export function createCloudsStage(
       u_overlayDebug: options.overlayDebug ?? 0,
       // 【2026-09-03 高空云层渐隐】每帧按相机地心高度算系数（uniformMap 闭包每帧求值）；
       // heightFade=false（demo ?cloudsFade=0）恒 1。
-      // 【2026-09-28 层内渐隐】相机在云壳带 (minHeight, maxHeight) 内时整体 ×0 透传——
-      // inLayerFade=false（demo ?cloudsInLayerFade=0）关闭该因子（高空渐隐不受影响）。
+      // 【2026-09-28 层内渐隐已移除】首版以相机高度带隐藏 overlay（L0 带内透传）——第一性
+      // 原理复估否决：云层内相机「看不到任何云」比白板更违反物理；且层内下行射线水平展开
+      // ±35m ≪ 天气纹素（~100km），整下半球同纹素，白板/见地二态皆密度场诚实输出
+      // （ext≥0.1/m 直读实证）。病态像素由 overlay NaN 消毒兜底（黑楔→透明/暗纱）。
       u_heightFade: () => {
         if (options.heightFade === false) return 1
         const carto = scene.camera.positionCartographic
-        let fade = computeCloudsHeightFade(
+        return computeCloudsHeightFade(
           carto.height,
           options.heightFadeStart ?? CLOUDS_HEIGHT_FADE_START_DEFAULT,
           options.heightFadeEnd ?? CLOUDS_HEIGHT_FADE_END_DEFAULT
         )
-        if (options.inLayerFade !== false) {
-          // 带边界=最低稠密层 L0 的 [底, 顶]（shadowBottomHeight=1500 / maxLayerHeights.x=2150）。
-          // 缺陷域实测（2026-09-28，coverage 0.5 波河平原）：L0 带内=白板/糊状/黑楔；L1 带内
-          // （2500 均匀雾=层内厚柱物理观感、3084 云顶视野精美）与带外全部正常——首版误用
-          // 壳 [minHeight,maxHeight]（含卷云顶 8000）把 3084/5500 航高全隐藏，已按实测收窄。
-          fade *= computeCloudsInLayerFade(
-            carto.height,
-            impl.params.shadowBottomHeight,
-            impl.params.maxLayerHeights.x
-          )
-        }
-        return fade
       }
     },
     sampleMode: PostProcessStageSampleMode.NEAREST,
