@@ -528,6 +528,15 @@ vec3 approximateRadianceFromGround(
 }
 #endif // GROUND_BOUNCE
 
+// 【2026-09-28 层内黑楔排查探针】marchClouds 末次 media 采样量的直读全局（仅
+// DEBUG_SHOW_PROBE_* 块消费；正常渲染路径零消费零成本）。默认 -1/0 区分「无 media 采样」。
+vec3 g_probeSunSky = vec3(0.0); // sun+sky irradiance（末次 media 采样点）
+float g_probeExt = 0.0;         // media.extinction
+float g_probeOD = -1.0;         // to-sun 光深（marchOpticalDepth+BSM）
+float g_probeRad = -1.0;        // 局部 radiance 标量 dot(radiance, 1/3)（powder 后）
+float g_probeT = 1.0;           // transmittanceIntegral（末次采样后）
+vec3 g_probePreAerial = vec3(0.0); // aerial 前的 march 出口 rgb
+
 vec4 marchClouds(
   const vec3 rayOrigin,
   const vec3 rayDirection,
@@ -600,6 +609,8 @@ vec4 marchClouds(
       vec3 skyIrradiance;
       vec3 sunIrradiance = getCloudsSunSkyIrradiance(position, height, skyIrradiance);
       vec3 surfaceNormal = normalize(position);
+      g_probeSunSky = sunIrradiance + skyIrradiance;
+      g_probeExt = media.extinction;
 
       // 夜间环境底光（方向 B）：抬 skyIrradiance 地板，随现有 skyGradient × scattering ×
       // 能量守恒积分传播 → 夜间云保有形体梯度（深灰云海而非黑洞）。淡入区间 = 当地太阳
@@ -661,6 +672,7 @@ vec4 marchClouds(
         }
       }
 
+      g_probeOD = opticalDepth;
       vec3 radiance = sunIrradiance * approximateMultipleScattering(opticalDepth, cosTheta);
 
       // 月光散射项（spec §6.1）：独立构造 moonIrradiance（非 sun 项乘系数——夜间 LUT 太阳
@@ -712,7 +724,12 @@ vec4 marchClouds(
       // 暮光天光补偿（2026-09-01）：窗 [sin(+2°)=0.0349, sin(-1.5°)=-0.0262]，锚 =
       // muSunLocal（采样点当地太阳角，与 nightFactor 同源——远云曲率太阳角差已含）。
       // 白天精确 1 零回归；直射/月光/地面反照不动，只补天光项。
-      float twilightBoost = mix(1.0, u_twilightSkyBoost, smoothstep(0.0349, -0.0262, muSunLocal));
+      // 【2026-09-28 层内黑楔排查】原 smoothstep(0.0349, -0.0262, x) 边界反转（e0>e1）为
+      // GLSL 规范 UB——驱动实现可产出非良定值（实测 Mac ANGLE→Metal 在层内陡视角产出
+      // 方向相关黑楔区，rgb 归零/NaN、alpha 实值）。手工展开为数值逐位等价的递减 ramp：
+      // t = clamp((0.0349 - x) / 0.0611) 恒等于负分母式的 clamp 结果。
+      float twilightT = clamp((0.0349 - muSunLocal) / 0.0611, 0.0, 1.0);
+      float twilightBoost = mix(1.0, u_twilightSkyBoost, twilightT * twilightT * (3.0 - 2.0 * twilightT));
       radiance += skyIrradiance * RECIPROCAL_PI4 * skyGradient * skyLightScale * twilightBoost;
 
       // Finally multiply by scattering.
@@ -721,6 +738,7 @@ vec4 marchClouds(
       #ifdef POWDER
       radiance *= 1.0 - powderScale * exp(-media.extinction * powderExponent);
       #endif // POWDER
+      g_probeRad = dot(radiance, vec3(0.33333333));
 
       #ifdef DEBUG_SHOW_CASCADES
       if (height < shadowTopHeight) {
@@ -735,6 +753,7 @@ vec4 marchClouds(
       vec3 scatteringIntegral = (radiance - radiance * transmittance) / clampedExtinction;
       radianceIntegral += transmittanceIntegral * scatteringIntegral;
       transmittanceIntegral *= transmittance;
+      g_probeT = transmittanceIntegral;
 
       // Aerial perspective affecting clouds
       // See 5.9.1 in https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/s2016-pbs-frostbite-sky-clouds-new.pdf
@@ -1117,6 +1136,7 @@ void main() {
 
       // Apply aerial perspective.
       vec3 frontPosition = cameraPosition + frontDepth * rayDirection;
+      g_probePreAerial = color.rgb;
       applyAerialPerspective(cameraPosition, frontPosition, shadowLength, color);
 
       // Velocity for temporal resolution.
@@ -1176,6 +1196,39 @@ void main() {
   #endif // SHADOW_LENGTH
   return;
   #endif // DEBUG_SHOW_MARCH_ALPHA
+
+  #ifdef DEBUG_SHOW_PROBE_LIGHT
+  // 【2026-09-28 层内黑楔排查】末次 media 采样点 sun+sky irradiance ×0.1 直显——
+  // 黑楔区读数 0（黑）=光照项归零/NaN（LUT 或路径问题）、非 0=光照正常（NaN 在别处）。
+  outputColor = vec4(g_probeSunSky * 0.1, 1.0);
+  outputDepthVelocity = vec3(0.0);
+  #ifdef SHADOW_LENGTH
+  outputShadowLength = 0.0;
+  #endif // SHADOW_LENGTH
+  return;
+  #endif // DEBUG_SHOW_PROBE_LIGHT
+
+  #ifdef DEBUG_SHOW_PROBE_OD
+  // R=extinction×10 / G=to-sun 光深×0.1 / B=局部 radiance 标量——区分「extinction 积累但
+  // radiance 为 0/NaN」（黑楔特征：R 亮 G/B 黑）与全零（无 media 采样：R=G=B=0）。
+  outputColor = vec4(g_probeExt * 10.0, g_probeOD * 0.1, g_probeRad, 1.0);
+  outputDepthVelocity = vec3(0.0);
+  #ifdef SHADOW_LENGTH
+  outputShadowLength = 0.0;
+  #endif // SHADOW_LENGTH
+  return;
+  #endif // DEBUG_SHOW_PROBE_OD
+
+  #ifdef DEBUG_SHOW_PROBE_PREAERIAL
+  // march 出口 rgb（aerial 前）×50——与 cloudsDebug=6（aerial 后）对照：pre 正常 post 黑
+  // = NaN 诞生于 applyAerialPerspective；pre 黑 = NaN 诞生于 march 本体。
+  outputColor = vec4(g_probePreAerial * 50.0, 1.0);
+  outputDepthVelocity = vec3(0.0);
+  #ifdef SHADOW_LENGTH
+  outputShadowLength = 0.0;
+  #endif // SHADOW_LENGTH
+  return;
+  #endif // DEBUG_SHOW_PROBE_PREAERIAL
 
   #ifdef DEBUG_SHOW_FRONT_DEPTH
   outputColor = vec4(turbo(frontDepth / maxRayDistance), 1.0);

@@ -69,7 +69,8 @@ export interface CloudsMainOptions {
    *   'shadowMap'（BSM 可视化，M3）/ 'cascades'（cascade 分层着色：红=0 绿=1 蓝=2，越界=白）。
    *   默认 null 正常渲染。
    */
-  debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | 'cascades' | 'march' | 'marchA' | null
+  debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | 'cascades' | 'march' | 'marchA'
+    | 'probeLight' | 'probeOD' | 'probePreAerial' | null
   /**
    * M5 云 god rays 开关（默认 true，对齐 three defaults.lightShafts）：define SHADOW_LENGTH →
    * marchShadowLength 沿视线累加 BSM 光深 → applyAerialPerspective 以 shadow_length 调
@@ -166,6 +167,10 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     // 【2026-09-03 穿云黑块探针】march 分量直显（rgb×50 / alpha；a 钉 1 防 overlay 混淆）
     o.debugShow === 'march' ? '#define DEBUG_SHOW_MARCH_RADIANCE' : '',
     o.debugShow === 'marchA' ? '#define DEBUG_SHOW_MARCH_ALPHA' : '',
+    // 【2026-09-28 层内黑楔排查】分量探针三视图（demo ?cloudsDebug=8/9/10）
+    o.debugShow === 'probeLight' ? '#define DEBUG_SHOW_PROBE_LIGHT' : '',
+    o.debugShow === 'probeOD' ? '#define DEBUG_SHOW_PROBE_OD' : '',
+    o.debugShow === 'probePreAerial' ? '#define DEBUG_SHOW_PROBE_PREAERIAL' : '',
     o.lightShafts ? '#define SHADOW_LENGTH' : ''
   ].filter(s => s.length > 0)
 }

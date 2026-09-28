@@ -558,6 +558,10 @@ async function main(): Promise<void> {
           // 【2026-09-03 穿云黑块探针】march 分量直显
           : cloudsDebug === 6 ? ('march' as const)
           : cloudsDebug === 7 ? ('marchA' as const)
+          // 【2026-09-28 层内黑楔排查】分量探针（8=末次采样光照 / 9=ext+光深+radiance / 10=aerial 前 rgb）
+          : cloudsDebug === 8 ? ('probeLight' as const)
+          : cloudsDebug === 9 ? ('probeOD' as const)
+          : cloudsDebug === 10 ? ('probePreAerial' as const)
           : undefined
         // 质量档位白名单解析（controller 裁决 Ruling 4）：?cloudsQuality 非法值（如 foo）
         // → undefined 走库内缺省 high，而非 as 直传踩 Record 键 undefined

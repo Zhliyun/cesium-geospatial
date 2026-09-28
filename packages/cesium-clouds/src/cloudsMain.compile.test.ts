@@ -399,12 +399,15 @@ describe('夜间环境底光 nightAmbient（方向 B）', () => {
 // 白天（>+2°）精确 1 零回归；<-6° LUT 天光归零后补偿自然无效（nightAmbient 接管）。
 // ─────────────────────────────────────────────────────────────────────────────
 describe('暮光天光补偿 twilightSkyBoost', () => {
-  it('uniform 声明 + 补偿式乘天光项（mix 1→boost，smoothstep 窗 [sin2°,sin-1.5°]）', () => {
+  it('uniform 声明 + 补偿式乘天光项（mix 1→boost，递减 ramp 窗 [sin2°,sin-1.5°]）', () => {
     const src = buildCloudsMainFragmentShader({})
     expect(src).toContain('uniform float u_twilightSkyBoost;')
     // 窗口：白天下沿 sin(+2°)=0.0349（零回归边界）→ 上沿 sin(-1.5°)=-0.0262（全额）；
-    // 锚 = muSunLocal（采样点当地太阳角，与 nightFactor 同源——远云曲率太阳角差已含）
-    expect(src).toContain('float twilightBoost = mix(1.0, u_twilightSkyBoost, smoothstep(0.0349, -0.0262, muSunLocal));')
+    // 锚 = muSunLocal（采样点当地太阳角，与 nightFactor 同源——远云曲率太阳角差已含）。
+    // 【2026-09-28】原 smoothstep(0.0349, -0.0262, x) 边界反转（e0>e1）为 GLSL 规范 UB，
+    // 手工展开为数值等价递减 ramp t=clamp((0.0349-x)/0.0611)（层内黑楔排查，见 clouds.frag 同日注）
+    expect(src).toContain('float twilightT = clamp((0.0349 - muSunLocal) / 0.0611, 0.0, 1.0);')
+    expect(src).toContain('float twilightBoost = mix(1.0, u_twilightSkyBoost, twilightT * twilightT * (3.0 - 2.0 * twilightT));')
     // 乘在天光项 skyLightScale 之后（直射/月光/地面反照不动）
     expect(src).toContain('skyIrradiance * RECIPROCAL_PI4 * skyGradient * skyLightScale * twilightBoost')
   })
