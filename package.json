@@ -9,11 +9,6 @@
     "build": "pnpm -r build"
   },
   "packageManager": "pnpm@10.32.1",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
-  },
   "devDependencies": {
     "@types/pngjs": "^6.0.5",
     "playwright": "^1.62.1",

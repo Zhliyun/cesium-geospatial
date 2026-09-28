@@ -1,3 +1,7 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+# pnpm v10 起构建脚本白名单从 package.json 的 pnpm 字段迁到此处
+onlyBuiltDependencies:
+  - esbuild
