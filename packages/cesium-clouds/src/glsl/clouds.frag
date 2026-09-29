@@ -616,6 +616,12 @@ vec4 marchClouds(
   // 薄段细化：段长<300m 时段长/12（保 12 步采样密度）；厚段原步进（LOD 大步横穿）
   float thinSegment = maxRayDistance < 300.0 ? 1.0 : 0.0;
   stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam * thinSegment);
+  // 【层内步数上限 v3.2】禁早退全横穿必须有限步完成：密云区无空区大步，minStepSize 100m/步
+  // 走 3.9-8.6km 段 = 39-86 步 × 全屏 × 每步光照采样 → 帧时爆炸（1650/1740 实测页面导航
+  // 超时级卡顿）。段长/64 在 minStepSize=100m 地板下不生效（61m<100m）——升段长/32 直接
+  // 覆盖地板（3.9km→122m/步 32 步、8.6km→269m/步 32 步）。薄段细化 10-49m 不受影响
+  // （其段长/32 更小）。32 步对横穿结构足够（LOD 语义：远距离采样无需过细）。
+  stepSize = max(stepSize, maxRayDistance / 32.0);
   marchJitter = mix(marchJitter, 0.0, inLayerCam);
   startJitter = mix(startJitter, 0.0, inLayerCam);
   float rayDistance = stepSize * startJitter * 2.0;
