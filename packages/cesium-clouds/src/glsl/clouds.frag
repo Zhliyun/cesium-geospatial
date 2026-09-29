@@ -902,7 +902,12 @@ vec4 marchClouds(
     radianceIntegral = vec3(0.0);
     outAlpha = 0.0;
   }
-  return vec4(radianceIntegral, mix(outAlpha, outAlpha * 0.80, inLayerCam));
+  // 【软化 T 门控 2026-09-29 三轮】×0.80 原为无差别全局乘子——1959 实测浓云 τ→0 透射
+  // 也被恒打 8 折=恒定 20% 透底（远处地平线透出，「体积云半透明」）。软化的物理意图=
+  // 让薄雾纱更透，不应动实心浓云：软化量改随出口透射比门控——T>0.15 的纱全软化、
+  // T→0 的浓云精确保持遮蔽（1740 雾面 T≈0.12 仍在软化域，弧线软化保持）。
+  float softenGate = inLayerCam * smoothstep(0.0, 0.15, transmittanceIntegral);
+  return vec4(radianceIntegral, mix(outAlpha, outAlpha * 0.80, softenGate));
 }
 
 #ifdef SHADOW_LENGTH
