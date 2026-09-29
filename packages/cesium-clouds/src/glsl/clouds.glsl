@@ -104,13 +104,21 @@ WeatherSample sampleWeather(const vec2 uv, const vec3 position, const float heig
   // 顶面蓬松化（u_topPuffWeights，2026-09-29 密度分布专项）：半圆包络在顶段单调衰减
   // （bias=0.35 时 hf=0.8 → hs=0.28、hf≥0.95 → hs≈0）→ coverage factor→1 → 密度归零带
   // 覆盖顶部 ~25-30% 层厚，3D shape/detail 噪声在零密度区全部失效 → 俯视顶面=天气图案
-  // 直投影（3035/3199/3187「一层一层二维」实测）。改法：hf∈[0.70,0.85] smoothstep 升入
-  // hs=0.85 平台（顶部饱满，成云阈值 0.44→0.29，顶面轮廓交还 3D 噪声=蓬松圆顶），
-  // hf∈[0.92,1.0] 窄带 smoothstep 归零封层带——hf=1 处恒 0（heightFraction clamp 域上
-  // 层带上方恒 1，非零密度会把云无限填上天）。max 合成：底/中段原半圆主导（平台为 0），
-  // 顶段平台接管。两段 smoothstep 连续无阶跃（层内雾化连续化教训：分支域拼贴=弧状色带）。
+  // 直投影（3035/3199/3187「一层一层二维」实测）。max 合成：底/中段原半圆主导（平台为
+  // 0），顶段平台接管。两段 smoothstep 连续无阶跃（层内雾化连续化教训：分支域拼贴）。
+  // 云顶高度场（二轮修正 d4a19ad 后用户复测等高线仍在）：归零带起点若为常数 hf，顶面
+  // 仍是同一等高面——平面切 3D detail 噪声=等值线环纹（真·等高线，俯视切片本性）。
+  // 改为云顶高度 ∝ localWeather 低频天气场（clamp 防气候带 >1 外推）：云团核心长到近
+  // 层顶（0.97 起 3% 归零封口）、边缘矮（0.78 起缓归零）→ 圆丘群取代平台海。
+  // 三轮补中频（真机复测网纹仍在的根因）：weather 频率 ~100km 级，几 km 视距内其调制
+  // 的顶面高度近恒定 → 近中景顶面仍是平面切片。shape 噪声降频 16× 提供 1-10km 中频
+  // 谷脊（mix 0.6-1.0 深谷权重），与 weather 圆丘包络相乘——顶面高度场跨三个频率层级
+  // （weather 十 km+ 包络 / shape 中频谷脊 / detail 高频侵蚀），平面切片被彻底打破。
+  float puffMid = texture(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset).r;
+  vec4 puffTop = mix(vec4(0.74), vec4(0.97),
+    clamp(localWeather, 0.0, 1.0) * mix(0.6, 1.0, puffMid));
   vec4 puffPlateau = smoothstep(vec4(0.70), vec4(0.85), weather.heightFraction)
-    * (1.0 - smoothstep(vec4(0.92), vec4(1.0), weather.heightFraction))
+    * (1.0 - smoothstep(puffTop, vec4(1.0), weather.heightFraction))
     * vec4(0.85);
   heightScale = max(heightScale, puffPlateau * u_topPuffWeights);
 

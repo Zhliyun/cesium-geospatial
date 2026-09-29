@@ -624,8 +624,14 @@ vec4 marchClouds(
   // 覆盖地板（3.9km→122m/步 32 步、8.6km→269m/步 32 步）。薄段细化 10-49m 不受影响
   // （其段长/32 更小）。32 步对横穿结构足够（LOD 语义：远距离采样无需过细）。
   stepSize = max(stepSize, maxRayDistance / 32.0);
-  marchJitter = mix(marchJitter, 0.0, inLayerCam);
-  startJitter = mix(startJitter, 0.0, inLayerCam);
+  // jitter 归零域收敛（2026-09-29 三轮）：归零若作用于全部层内段，长段俯视（3035 实测）
+  // 的规则步长扫过顶面归零带（步长 150m vs 带厚 36-310m，1-2 采样点）→ 等相位点连成
+  // 驻波环纹=「等高线状二维云层」（质量档判别实锤：low 粗环纹/ultra 完全消失=采样伪影
+  // 非密度场纹理）。归零只保留给短段（f49589b 闪屏域=veil alpha 二值跳变的薄段）；
+  // 长段恢复蓝噪声相位打碎驻波（静止帧 STBN 层冻结=M4 temporal 静止不递增 → 噪点固定
+  // 不闪；运动帧 TAA 平滑）。
+  marchJitter = mix(marchJitter, 0.0, inLayerCam * thinSegment);
+  startJitter = mix(startJitter, 0.0, inLayerCam * thinSegment);
   float rayDistance = stepSize * startJitter * 2.0;
 
   for (int i = 0; i < maxIterationCount; ++i) {
