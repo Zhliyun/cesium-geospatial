@@ -604,8 +604,12 @@ vec4 marchClouds(
   // （步长=段长/12 保证 12 步铺满）；层带内近水平视角段长可达几 km-几十 km（L1 带内 3187m
   // -4.6° 俯角段 ~21km → 步长 1.75km，12 个采样点跨 21km → 体积结构完全欠采样=平面云）。
   // 长段=「在云层高度看远处云墙」应走原路径（mip LOD 大步+早退，体积感由几十步采样呈现，
-  // 实测正常）。2000m=步长上限 ~167m（1692 最坏段 590m/1536 薄段 117m 均不受影响）。
-  float shortInLayer = any(camInLayer) && maxRayDistance < 2000.0 ? 1.0 : 0.0;
+  // 实测正常）。阈值 1000m（v2，2026-09-29 2214m 白扇形实测收敛）：2214m（L0 顶上方 64m、
+  // L1 带内）向下段长 ~2km 落在旧阈值 2000 临界——底部陡视线段<2000 误触发雾化→纯白无
+  // 结构扇形（原路径同机位整屏云海完美，雾化 floor 常量色毁结构）。1000m=步长上限 ~84m
+  // （1692 段 590m/1536 薄段 117m 不受影响；2022 黑斑机位段 1-2km 部分退出雾化——该机位
+  // 黑斑已定性为 scene 侧帧污染与雾化无关，见 d71fb01）。
+  float shortInLayer = any(camInLayer) && maxRayDistance < 1000.0 ? 1.0 : 0.0;
   float inLayerCam = u_inLayerFog * shortInLayer;
   g_fogInLayer = inLayerCam; // 【2026-09-29 fogDebug 探针】
   g_fogLit = 0.0;
