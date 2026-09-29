@@ -445,7 +445,15 @@ void main() {
     ca = 0.0;
   }
   if (u_overlayDebug > 1.5) {
-    out_FragColor = vec4(cloud.rgb, 1.0);
+    // 【2026-09-29 分类直显】NaN→蓝 / 任一分量负→红 / 全零→黑 / 正常正值→绿。
+    // 自比较在本机已验证有效（nantest：ANGLE M2 Max 绿=检测工作）。
+    vec3 c = cloud.rgb;
+    bool badNaN = c.r != c.r || c.g != c.g || c.b != c.b;
+    bool badNeg = c.r < 0.0 || c.g < 0.0 || c.b < 0.0;
+    bool zero = abs(c.r) + abs(c.g) + abs(c.b) < 1e-6;
+    out_FragColor = vec4(
+      badNaN ? vec3(0.0, 0.0, 1.0) : badNeg ? vec3(1.0, 0.0, 0.0) : zero ? vec3(0.0) : vec3(0.0, 1.0, 0.0),
+      1.0);
     return;
   }
   if (u_overlayDebug > 0.5) {

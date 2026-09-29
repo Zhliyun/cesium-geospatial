@@ -562,6 +562,8 @@ async function main(): Promise<void> {
           : cloudsDebug === 8 ? ('probeLight' as const)
           : cloudsDebug === 9 ? ('probeOD' as const)
           : cloudsDebug === 10 ? ('probePreAerial' as const)
+          // 【2026-09-29 2022m 黑斑机理钉死】12=门控/受照比/rgb 亮度三通道
+          : cloudsDebug === 12 ? ('fogDebug' as const)
           : undefined
         // 质量档位白名单解析（controller 裁决 Ruling 4）：?cloudsQuality 非法值（如 foo）
         // → undefined 走库内缺省 high，而非 as 直传踩 Record 键 undefined

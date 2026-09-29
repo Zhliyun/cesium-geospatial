@@ -541,6 +541,9 @@ float g_probeOD = -1.0;         // to-sun 光深（marchOpticalDepth+BSM）
 float g_probeRad = -1.0;        // 局部 radiance 标量 dot(radiance, 1/3)（powder 后）
 float g_probeT = 1.0;           // transmittanceIntegral（末次采样后）
 vec3 g_probePreAerial = vec3(0.0); // aerial 前的 march 出口 rgb
+// 【2026-09-29 2022m 黑斑机理钉死】fogDebug 探针：门控值 + 受照样本计数
+float g_fogInLayer = 0.0;
+float g_fogLit = 0.0;
 
 vec4 marchClouds(
   const vec3 rayOrigin,
@@ -604,6 +607,8 @@ vec4 marchClouds(
   // 实测正常）。2000m=步长上限 ~167m（1692 最坏段 590m/1536 薄段 117m 均不受影响）。
   float shortInLayer = any(camInLayer) && maxRayDistance < 2000.0 ? 1.0 : 0.0;
   float inLayerCam = u_inLayerFog * shortInLayer;
+  g_fogInLayer = inLayerCam; // 【2026-09-29 fogDebug 探针】
+  g_fogLit = 0.0;
   stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam);
   marchJitter = mix(marchJitter, 0.0, inLayerCam);
   startJitter = mix(startJitter, 0.0, inLayerCam);
@@ -802,6 +807,13 @@ vec4 marchClouds(
         rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel));
         continue;
       }
+      // 【2026-09-29 编译扰动锚（2022m 黑斑压制实验）】Mac ANGLE→Metal fast-math 在本函数
+      // 的特定调度下于重叠带深部像素产出错误值（黑斑家族=层内黑楔同族：对代码扰动敏感、
+      // 探针/哨兵插入即消失、isnan/自比较检测被折叠——两次独立排查同结论）。此恒假分支
+      // 强制保留调度节点、改变指令调度——实测若压制黑斑则确证编译器层，锚永久保留并注释。
+      if (u_inLayerFog < 0.0) {
+        radiance = mix(radiance, vec3(0.0), g_fogLit * 0.0);
+      }
       g_probeRad = dot(radiance, vec3(0.33333333));
 
       #ifdef DEBUG_SHOW_CASCADES
@@ -818,6 +830,7 @@ vec4 marchClouds(
       radianceIntegral += transmittanceIntegral * scatteringIntegral;
       transmittanceIntegral *= transmittance;
       g_probeT = transmittanceIntegral;
+      ++g_fogLit; // 【2026-09-29 fogDebug 探针】受照样本计数
 
       // Aerial perspective affecting clouds
       // See 5.9.1 in https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/s2016-pbs-frostbite-sky-clouds-new.pdf
@@ -1176,6 +1189,19 @@ void main() {
     #endif // SHADOW_LENGTH
     return;
     #endif // DEBUG_SHOW_SAMPLE_COUNT
+
+    // 【2026-09-29 2022m 黑斑机理钉死】fogDebug：R=门控 inLayerCam / G=受照样本比(÷12) /
+    // B=出口 rgb 亮度×3。黑斑区读数组合区分：「R=1 G=0」（雾化门开但零受照——rgb=0 因无
+    // 散射且 α=0.88 来自 T 积累？矛盾点）vs「R=1 G>0 B=0」（受照但 rad 积累 0——白化/地板
+    // 未生效实锤）vs「R=0」（门控关——黑斑另有来源）。
+    #ifdef DEBUG_SHOW_FOG_DEBUG
+    outputColor = vec4(g_fogInLayer, g_fogLit / 12.0, dot(color.rgb, vec3(0.33333333)) * 3.0, 1.0);
+    outputDepthVelocity = vec3(0.0);
+    #ifdef SHADOW_LENGTH
+    outputShadowLength = 0.0;
+    #endif // SHADOW_LENGTH
+    return;
+    #endif // DEBUG_SHOW_FOG_DEBUG
 
     // Front depth will be -1.0 when no samples are accumulated.
     hitClouds = marchedFrontDepth >= 0.0;

@@ -70,7 +70,7 @@ export interface CloudsMainOptions {
    *   默认 null 正常渲染。
    */
   debugShow?: 'uv' | 'frontDepth' | 'sampleCount' | 'shadowMap' | 'cascades' | 'march' | 'marchA'
-    | 'probeLight' | 'probeOD' | 'probePreAerial' | null
+    | 'probeLight' | 'probeOD' | 'probePreAerial' | 'fogDebug' | null
   /**
    * M5 云 god rays 开关（默认 true，对齐 three defaults.lightShafts）：define SHADOW_LENGTH →
    * marchShadowLength 沿视线累加 BSM 光深 → applyAerialPerspective 以 shadow_length 调
@@ -171,6 +171,8 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     o.debugShow === 'probeLight' ? '#define DEBUG_SHOW_PROBE_LIGHT' : '',
     o.debugShow === 'probeOD' ? '#define DEBUG_SHOW_PROBE_OD' : '',
     o.debugShow === 'probePreAerial' ? '#define DEBUG_SHOW_PROBE_PREAERIAL' : '',
+    // 【2026-09-29 2022m 黑斑机理钉死】fogDebug=R=门控 inLayerCam / G=受照样本比 / B=rgb 亮度×3
+    o.debugShow === 'fogDebug' ? '#define DEBUG_SHOW_FOG_DEBUG' : '',
     o.lightShafts ? '#define SHADOW_LENGTH' : ''
   ].filter(s => s.length > 0)
 }
