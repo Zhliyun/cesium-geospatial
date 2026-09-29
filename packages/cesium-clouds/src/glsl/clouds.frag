@@ -630,13 +630,18 @@ vec4 marchClouds(
   // 0.03 防超长段），32 步走完层内段；出层后空隙/无云大步跳跃（循环 interval 分支）
   // 不受影响，帧时安全。inLayerCam 全屏一致（相机级门控）无逐像素拼贴。
   float layerFloorH = 1e9;
+  // 【L2 卷云排除 2026-09-29 六轮】预算只对稠密低云（L0/L1）生效：7618 实测水波纹=
+  // 相机在卷云带内时预算把步长从 5.3km 拉回 ~100m 细采样，jitter 采样噪点在白亮平坦
+  // 的卷云顶面上显形为沿云丘轮廓聚集的颗粒弧带（fog0 大步+早退全部平均掉所以无纹；
+  // 四件套白化/α软化/地板/禁早退单项短接全证伪，逐项排查锁定预算项）。卷云是薄冰晶
+  // 层（相机层内段 ~200m 本就 1-2 步），细预算无意义——排除后还原大步语义。
   if (camInLayer.x) layerFloorH = min(layerFloorH, minLayerHeights.x);
   if (camInLayer.y) layerFloorH = min(layerFloorH, minLayerHeights.y);
-  if (camInLayer.z) layerFloorH = min(layerFloorH, minLayerHeights.z);
   if (camInLayer.w) layerFloorH = min(layerFloorH, minLayerHeights.w);
+  float hasDenseLayer = (camInLayer.x || camInLayer.y || camInLayer.w) ? 1.0 : 0.0;
   float rayUp = dot(rayDirection, normalize(rayOrigin));
   float inBandSegLen = (camHeightLocal - layerFloorH) / max(0.03, -rayUp);
-  float stepBudgetLen = mix(maxRayDistance, min(maxRayDistance, inBandSegLen), inLayerCam);
+  float stepBudgetLen = mix(maxRayDistance, min(maxRayDistance, inBandSegLen), inLayerCam * hasDenseLayer);
   stepSize = max(stepSize, stepBudgetLen / 32.0);
   // jitter 归零域收敛（2026-09-29 三轮）：归零若作用于全部层内段，长段俯视（3035 实测）
   // 的规则步长扫过顶面归零带（步长 150m vs 带厚 36-310m，1-2 采样点）→ 等相位点连成
@@ -647,6 +652,14 @@ vec4 marchClouds(
   marchJitter = mix(marchJitter, 0.0, inLayerCam * thinSegment);
   startJitter = mix(startJitter, 0.0, inLayerCam * thinSegment);
   float rayDistance = stepSize * startJitter * 2.0;
+  // 【云内步长恢复 2026-09-29 五轮】空隙/无云分支的 stepSize×=perspectiveStepScale 是
+  // 单向指数放大且从不恢复——跨层相机（7618 在卷云带，俯视跨空隙进 L1）的步长到达云顶
+  // 时已被放大数倍，起点 jitter 的相位差被指数映射吞噬（×scale^k 对初值不敏感）→ 云顶
+  // 归零带采样相位逐像素重新同步 → 驻波环=「水波纹」（雾化禁早退后完整横穿才显形，
+  // fog0 早退掩盖；实验分解：fog0 消失/BSM 关仍在/low 档 detail 关仍在/白化短接仍在）。
+  // 修复：云内有云样本处把步长恢复到预算值——云内均匀采样（jitter 相位保持打碎驻波）、
+  // 空隙/无云保持指数大步 LOD。3035 无跨层跳跃故前轮 jitter 修复已足，7618 必须本修。
+  float cloudStepSize = stepSize;
 
   for (int i = 0; i < maxIterationCount; ++i) {
     if (rayDistance > maxRayDistance) {
@@ -686,6 +699,8 @@ vec4 marchClouds(
     MediaSample media = sampleMedia(weather, position, uv, mipLevel, marchJitter, sampleCount);
 
     if (media.extinction > minExtinction) {
+      // 云内步长恢复（见 cloudStepSize 注释）：空隙/无云的指数放大不进云内采样序列。
+      stepSize = cloudStepSize;
       vec3 skyIrradiance;
       vec3 sunIrradiance = getCloudsSunSkyIrradiance(position, height, skyIrradiance);
       vec3 surfaceNormal = normalize(position);
