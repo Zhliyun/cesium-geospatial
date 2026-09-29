@@ -799,12 +799,12 @@ vec4 marchClouds(
       // 不会纯黑（阴天云底反照 ~0.3-0.6）。地板=天光的 50%（v2：0.06 经 45% 混合等效
       // ~2.7% 仍黑——2022 成对 A/B 实测无效提档；旁路 skyGradient——底部 gradient≈0
       // 正是黑因）。浅部（1692 白雾）luma 远高于地板，max 取 luma 不受影响。
-      // 【v3】白化只做去饱和提亮，且只对短段（<1000m）生效：短段（1692/1536 类）采样少
-      // 需提亮托观感；长段横穿（1740/3187/2214 类）rad 自带云团/云隙结构不干预——云隙小
-      // ext 的 ÷ext 放大属物理正确（穿云隙远望亮雾），白化反而抹平结构。
+      // 【v3.1】短段（<1000m）去饱和提亮（1692/1536 类采样少需托观感）；长段（1740 类
+      // 横穿）弱去饱和 0.25——横穿 rad 的 Rayleigh 蓝灰与下方地面暖白色调差是「弧线色差」
+      // 的色调分量，弱去饱和把雾面拉向灰白靠拢地面色调（强 0.45 会抹平云团/云隙结构）。
       vec3 inLayerLuma = vec3(dot(radiance, vec3(0.33333333)));
       float shortFog = maxRayDistance < 1000.0 ? 1.0 : 0.0;
-      radiance = mix(radiance, inLayerLuma * 1.15, 0.45 * inLayerCam * shortFog);
+      radiance = mix(radiance, inLayerLuma * 1.15, (0.45 * shortFog + 0.25) * inLayerCam);
       g_probeSky = skyIrradiance;
       // 【2026-09-28 2022m 黑斑止血】NaN 样本免疫：2022m（L0∩L1 重叠带深部）雾化路径
       // readPixels 实证黑斑像素 rgb=NaN（α=0.88 雾化签名、全图 ~29 万 NaN 分量）→
@@ -886,7 +886,7 @@ vec4 marchClouds(
     radianceIntegral = vec3(0.0);
     outAlpha = 0.0;
   }
-  return vec4(radianceIntegral, mix(outAlpha, outAlpha * 0.88, inLayerCam));
+  return vec4(radianceIntegral, mix(outAlpha, outAlpha * 0.80, inLayerCam));
 }
 
 #ifdef SHADOW_LENGTH
