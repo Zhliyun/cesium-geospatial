@@ -623,7 +623,21 @@ vec4 marchClouds(
   // 超时级卡顿）。段长/64 在 minStepSize=100m 地板下不生效（61m<100m）——升段长/32 直接
   // 覆盖地板（3.9km→122m/步 32 步、8.6km→269m/步 32 步）。薄段细化 10-49m 不受影响
   // （其段长/32 更小）。32 步对横穿结构足够（LOD 语义：远距离采样无需过细）。
-  stepSize = max(stepSize, maxRayDistance / 32.0);
+  // 【四轮：分母改层内段长 2026-09-29】/32 的分母原为到场景全程——近水平俯角（2377 实测
+  // -2.9°）层内段 17.3km 但到海面 170km → 步长 5.3km → 层内仅 3 采样点，消光 τ 灾难性
+  // 低估 → 云层透出真地平线（fog0 同位直线=几何/采样固有非雾化引入；ultra 同款=32 上限
+  // 全局性）。修正：带内相机预算分母换成「到最低覆盖层底」的距离（俯角仰角 rayUp clamp
+  // 0.03 防超长段），32 步走完层内段；出层后空隙/无云大步跳跃（循环 interval 分支）
+  // 不受影响，帧时安全。inLayerCam 全屏一致（相机级门控）无逐像素拼贴。
+  float layerFloorH = 1e9;
+  if (camInLayer.x) layerFloorH = min(layerFloorH, minLayerHeights.x);
+  if (camInLayer.y) layerFloorH = min(layerFloorH, minLayerHeights.y);
+  if (camInLayer.z) layerFloorH = min(layerFloorH, minLayerHeights.z);
+  if (camInLayer.w) layerFloorH = min(layerFloorH, minLayerHeights.w);
+  float rayUp = dot(rayDirection, normalize(rayOrigin));
+  float inBandSegLen = (camHeightLocal - layerFloorH) / max(0.03, -rayUp);
+  float stepBudgetLen = mix(maxRayDistance, min(maxRayDistance, inBandSegLen), inLayerCam);
+  stepSize = max(stepSize, stepBudgetLen / 32.0);
   // jitter 归零域收敛（2026-09-29 三轮）：归零若作用于全部层内段，长段俯视（3035 实测）
   // 的规则步长扫过顶面归零带（步长 150m vs 带厚 36-310m，1-2 采样点）→ 等相位点连成
   // 驻波环纹=「等高线状二维云层」（质量档判别实锤：low 粗环纹/ultra 完全消失=采样伪影
