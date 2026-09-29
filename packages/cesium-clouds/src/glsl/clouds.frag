@@ -613,8 +613,10 @@ vec4 marchClouds(
   float inLayerCam = u_inLayerFog * (any(camInLayer) ? 1.0 : 0.0);
   g_fogInLayer = inLayerCam; // 【2026-09-29 fogDebug 探针】
   g_fogLit = 0.0;
-  // 薄段细化：段长<300m 时段长/12（保 12 步采样密度）；厚段原步进（LOD 大步横穿）
-  float thinSegment = maxRayDistance < 300.0 ? 1.0 : 0.0;
+  // 薄段细化：段长<300m 时段长/12（保 12 步采样密度）；厚段原步进（LOD 大步横穿）。
+  // 【v3.2 连续化 2026-09-29】300m 阶跃在近水平层内相机的「逐像素段长剧变」下产生
+  // 处理分支域拼贴=弧状色带（1688 实测）——细化比例改 400→200m smoothstep 连续过渡。
+  float thinSegment = 1.0 - smoothstep(200.0, 400.0, maxRayDistance);
   stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam * thinSegment);
   // 【层内步数上限 v3.2】禁早退全横穿必须有限步完成：密云区无空区大步，minStepSize 100m/步
   // 走 3.9-8.6km 段 = 39-86 步 × 全屏 × 每步光照采样 → 帧时爆炸（1650/1740 实测页面导航
@@ -808,9 +810,11 @@ vec4 marchClouds(
       // 【v3.1】短段（<1000m）去饱和提亮（1692/1536 类采样少需托观感）；长段（1740 类
       // 横穿）弱去饱和 0.25——横穿 rad 的 Rayleigh 蓝灰与下方地面暖白色调差是「弧线色差」
       // 的色调分量，弱去饱和把雾面拉向灰白靠拢地面色调（强 0.45 会抹平云团/云隙结构）。
+      // 【v3.2 连续化】1000m 阶跃同为色带源（1688 实测多段色带）——0.45→0.25 于
+      // 1200→800m smoothstep 连续过渡，与薄段细化的连续化配套。
       vec3 inLayerLuma = vec3(dot(radiance, vec3(0.33333333)));
-      float shortFog = maxRayDistance < 1000.0 ? 1.0 : 0.0;
-      radiance = mix(radiance, inLayerLuma * 1.15, (0.45 * shortFog + 0.25) * inLayerCam);
+      float shortFog = 0.45 - 0.2 * smoothstep(800.0, 1200.0, maxRayDistance);
+      radiance = mix(radiance, inLayerLuma * 1.15, shortFog * inLayerCam);
       g_probeSky = skyIrradiance;
       // 【2026-09-28 2022m 黑斑止血】NaN 样本免疫：2022m（L0∩L1 重叠带深部）雾化路径
       // readPixels 实证黑斑像素 rgb=NaN（α=0.88 雾化签名、全图 ~29 万 NaN 分量）→
