@@ -171,6 +171,12 @@ export interface CloudsParameters {
    *  治「层内单点辐射平刷」（1536 白板/1692 蓝板两例同机制）。0=整路径逐位回退
    *  （门控 mix 恒等，带外本就不受影响）。demo ?cloudsInLayerFog=。不进质量档位。 */
   inLayerFog: number
+  /** 顶面蓬松化权重（2026-09-29 密度分布专项，用户拍板「层状二维是问题」）：per-layer
+   *  门控 sampleWeather 对 heightScale 的蓬松平台合成（hf∈[0.70,0.85] 升入 0.85 平台、
+   *  hf∈[0.92,1] 窄带归零封层带）——治半圆包络顶部渐消带（~25-30% 层厚无云+渐消）造成
+   *  的俯视顶面图案直投影（3035/3199/3187 层状二维）。缺省 (1,1,0,0)：L0/L1 开、L2 卷云
+   *  保持薄层状。0 向量=逐位回退。demo ?cloudsTopPuff=（0=关）。不进质量档位。 */
+  topPuffWeights: Cartesian4
   /** 月光倍率（方向 C，2026-08-30）：moonIrradiance = solar_irradiance×2.5e-6×月相×此值×
    *  nightFactor。默认 25000（2026-08-31 用户反馈夜间云偏亮，三档实测拍板减半：中景云 −36%/
    *  地平亮云 −31%，月光仍主导夜间照明；沿革 50000→25000。物理 2.5e-6 不可见）。
@@ -341,6 +347,9 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 层内雾化总开关（2026-09-28 方案 A）：1=开（缺省，治 1536 白板/1692 蓝板平刷）；
     // 0=逐位回退。?cloudsInLayerFog= 即调
     inLayerFog: 1.0,
+    // 顶面蓬松化（2026-09-29 密度分布专项）：(1,1,0,0)=L0/L1 开、L2 卷云关；0 向量=逐位
+    // 回退。?cloudsTopPuff=0 即调（同 interface 注释）
+    topPuffWeights: new Cartesian4(1.0, 1.0, 0.0, 0.0),
     // 夜间云色调乘子（线性域，乘底光+月光两项；2026-09-01 uniform 化+三档拍板定稿 C 档——
     // 沿革 (0.72,1,1.32) 泛红对冲→(0.72,1,1.15) 一轮弱蓝→(0.88,1,1.0) 二轮弱蓝拍板：
     // 蓝收干净+红大幅回抬，实测云 B/G=1.06（残余蓝=云介质散射谱依赖的物理蓝移）、

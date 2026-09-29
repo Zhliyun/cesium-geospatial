@@ -292,6 +292,11 @@ export function buildSharedCloudsUniforms(
     weatherExponents: () => params.weatherExponents,
     shapeAlteringBiases: () => params.shapeAlteringBiases,
     coverageFilterWidths: () => params.coverageFilterWidths,
+    // 顶面蓬松化权重（2026-09-29 密度分布专项；?cloudsTopPuff= URL 调，0 向量=逐位回退）。
+    // 必须在共享段：shadow 生成端 shader 同 include parameters+clouds（sampleWeather 被烘焙
+    // march 调用→uniform active），map 不提供即 DeveloperError Unknown uniform（M6 同族坑）；
+    // 且 BSM 密度场须与主 march 同步蓬松（云形变→自阴影跟随）。
+    u_topPuffWeights: () => params.topPuffWeights,
     minHeight: () => params.minHeight,
     maxHeight: () => params.maxHeight,
     shadowTopHeight: () => params.shadowTopHeight,

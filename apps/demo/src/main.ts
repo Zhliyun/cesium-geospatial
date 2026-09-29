@@ -6,6 +6,7 @@ import {
   SceneMode,
   Ion,
   Cartesian3,
+  Cartesian4,
   Color,
   JulianDate,
   Math as CesiumMath,
@@ -725,6 +726,16 @@ async function main(): Promise<void> {
                   // 1692 蓝板单点平刷；缺省 1 开，0=逐位回退（排查对照用）
                   ...(getNumber('cloudsInLayerFog') != null
                     ? { inLayerFog: getNumber('cloudsInLayerFog')! }
+                    : {}),
+                  // ?cloudsTopPuff= 顶面蓬松化权重（2026-09-29 密度分布专项）：0=关（逐位
+                  // 回退，排查对照）；1=恢复缺省 (1,1,0,0)（L0/L1 开、L2 卷云关）
+                  ...(getNumber('cloudsTopPuff') != null
+                    ? {
+                        topPuffWeights:
+                          getNumber('cloudsTopPuff') === 0
+                            ? new Cartesian4(0, 0, 0, 0)
+                            : new Cartesian4(1, 1, 0, 0)
+                      }
                     : {}),
                   ...(getNumber('moonLightScale') != null
                     ? { moonLightScale: getNumber('moonLightScale')! }

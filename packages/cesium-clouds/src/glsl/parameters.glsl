@@ -67,6 +67,12 @@ uniform vec4 shapeDetailAmounts;
 uniform vec4 weatherExponents;
 uniform vec4 shapeAlteringBiases;
 uniform vec4 coverageFilterWidths;
+// 顶面蓬松化权重（2026-09-29 密度分布专项，用户拍板「层状二维是问题」）：per-layer 门控
+// sampleWeather 里的顶面蓬松平台（见 clouds.glsl）。缺省 (1,1,0,0)：L0/L1 积云族开、
+// L2 卷云关（保持薄层状物理形态）。0 向量=逐位回退（demo ?cloudsTopPuff=0）。
+// 注意：shadow 生成端（shadow.frag）include 本文件但 uniformMap 不提供此 uniform——
+// GL 默认 0 → max(heightScale, plateau×0) = heightScale，烘焙侧天然逐位不变。
+uniform vec4 u_topPuffWeights;
 uniform float minHeight;
 uniform float maxHeight;
 uniform float shadowTopHeight;

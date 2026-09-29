@@ -109,7 +109,7 @@ function createMockWeather(): any {
 
 import { createCloudsPass, type CloudsFrameState } from './CloudsPass'
 import { createVolumetricPrimitive } from '@cesium-geospatial/core'
-import { Cartesian2, Cartesian3, Matrix4 } from 'cesium'
+import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from 'cesium'
 
 describe('createCloudsPass', () => {
   const state: CloudsFrameState = {
@@ -446,7 +446,7 @@ describe('createCloudsPass', () => {
       'shapeDetailAmounts', 'weatherExponents', 'shapeAlteringBiases',
       'coverageFilterWidths', 'minHeight', 'maxHeight', 'shadowTopHeight',
       'shadowBottomHeight', 'shadowLayerMask', 'cameraHeight', 'nightAmbient',
-      'u_nightTint', 'u_twilightSkyBoost', 'u_inLayerFog'
+      'u_nightTint', 'u_twilightSkyBoost', 'u_inLayerFog', 'u_topPuffWeights'
     ]
     for (const name of expected) {
       expect(um[name], `uniform ${name} 应注入`).toBeDefined()
@@ -524,6 +524,27 @@ describe('createCloudsPass', () => {
     })
     const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
     expect(um2.u_inLayerFog()).toBe(0)
+    pass2.destroy()
+  })
+
+  it('顶面蓬松化 u_topPuffWeights：默认 (1,1,0,0)（2026-09-29 密度分布专项，治 3035/3199 层状二维）；0 向量=逐位回退', () => {
+    vi.clearAllMocks()
+    const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
+    const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um.u_topPuffWeights().x).toBe(1.0)
+    expect(um.u_topPuffWeights().y).toBe(1.0)
+    expect(um.u_topPuffWeights().z).toBe(0.0)
+    expect(um.u_topPuffWeights().w).toBe(0.0)
+    pass.destroy()
+
+    vi.clearAllMocks()
+    const params = defaultCloudsParameters()
+    params.topPuffWeights = new Cartesian4(0, 0, 0, 0)
+    const pass2 = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state, {
+      parameters: params
+    })
+    const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
+    expect(um2.u_topPuffWeights().x).toBe(0)
     pass2.destroy()
   })
 })

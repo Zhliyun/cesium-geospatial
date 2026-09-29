@@ -101,6 +101,18 @@ WeatherSample sampleWeather(const vec2 uv, const vec3 position, const float heig
   #endif // SHADOW
 
   vec4 heightScale = shapeAlteringFunction(weather.heightFraction, shapeAlteringBiases);
+  // 顶面蓬松化（u_topPuffWeights，2026-09-29 密度分布专项）：半圆包络在顶段单调衰减
+  // （bias=0.35 时 hf=0.8 → hs=0.28、hf≥0.95 → hs≈0）→ coverage factor→1 → 密度归零带
+  // 覆盖顶部 ~25-30% 层厚，3D shape/detail 噪声在零密度区全部失效 → 俯视顶面=天气图案
+  // 直投影（3035/3199/3187「一层一层二维」实测）。改法：hf∈[0.70,0.85] smoothstep 升入
+  // hs=0.85 平台（顶部饱满，成云阈值 0.44→0.29，顶面轮廓交还 3D 噪声=蓬松圆顶），
+  // hf∈[0.92,1.0] 窄带 smoothstep 归零封层带——hf=1 处恒 0（heightFraction clamp 域上
+  // 层带上方恒 1，非零密度会把云无限填上天）。max 合成：底/中段原半圆主导（平台为 0），
+  // 顶段平台接管。两段 smoothstep 连续无阶跃（层内雾化连续化教训：分支域拼贴=弧状色带）。
+  vec4 puffPlateau = smoothstep(vec4(0.70), vec4(0.85), weather.heightFraction)
+    * (1.0 - smoothstep(vec4(0.92), vec4(1.0), weather.heightFraction))
+    * vec4(0.85);
+  heightScale = max(heightScale, puffPlateau * u_topPuffWeights);
 
   // Modulation to control weather by coverage parameter.
   // Reference: https://github.com/Prograda/Skybolt/blob/master/Assets/Core/Shaders/Clouds.h#L63
