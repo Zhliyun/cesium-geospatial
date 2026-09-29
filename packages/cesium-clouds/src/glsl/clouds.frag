@@ -536,6 +536,7 @@ vec3 approximateRadianceFromGround(
 // 【2026-09-28 层内黑楔排查探针】marchClouds 末次 media 采样量的直读全局（仅
 // DEBUG_SHOW_PROBE_* 块消费；正常渲染路径零消费零成本）。默认 -1/0 区分「无 media 采样」。
 vec3 g_probeSunSky = vec3(0.0); // sun+sky irradiance（末次 media 采样点）
+vec3 g_probeSky = vec3(0.0);    // skyIrradiance（末次受照样本；层内雾化出口亮度地板用）
 float g_probeExt = 0.0;         // media.extinction
 float g_probeOD = -1.0;         // to-sun 光深（marchOpticalDepth+BSM）
 float g_probeRad = -1.0;        // 局部 radiance 标量 dot(radiance, 1/3)（powder 后）
@@ -594,26 +595,27 @@ vec4 marchClouds(
   // 【坑 2026-09-28】insideLayerIntervals 是「层间空隙」判定（packIntervalHeights 产出
   // [0,1500]/[3200,7500] 空域，march 快速跳跃用）——语义=「在空隙里」，与「在云层里」
   // 恰好相反；首版误用导致门控恒 false（三实验定位）。
+  // 【v3 第一性原理重构（2026-09-29 1740m 近水平蓝雾+白扇形）】层带内相机（不分段长）
+  // 统一「禁早退+原步进横穿」：层内相机近水平段可达 8.6km（1740 深处 -1.6°），原路径
+  // 首样本即早退=单点蓝雾平刷；v2 的「段长阈值+段长/12 细化」在厚段产 1.75km 步（12 点
+  // 跨 21km=平面云 3187）或 floor 常量色白扇形（2214）——治标连环失败。第一性原理解=
+  // **完整横穿**：保留原步进（minStepSize 100m 起步+空区/云内 mip LOD 大步），仅去掉
+  // 早退——视线真实穿过云团（rad 贡献）与云隙（T 保持、透地面），rgb/α 天然带体积结构。
+  // 预算：8.6km 段 LOD 加持 ~60-80 步 ≪ high 档 maxIterationCount=500 ✓；21km（3187）
+  // 同理。薄段（<300m）保留段长/12 细化（117m 薄段原步 100m 只 1-2 步，细化保 12 步
+  // 采样密度）。性能：层内相机全屏横穿帧时上升，属「飞进云层」体验场景主动成本。
   float camHeightLocal = length(rayOrigin) - bottomRadius;
   bvec4 camInLayer = bvec4(
     camHeightLocal > minLayerHeights.x && camHeightLocal < maxLayerHeights.x,
     camHeightLocal > minLayerHeights.y && camHeightLocal < maxLayerHeights.y,
     camHeightLocal > minLayerHeights.z && camHeightLocal < maxLayerHeights.z,
     camHeightLocal > minLayerHeights.w && camHeightLocal < maxLayerHeights.w);
-  // 【段长上限 2026-09-28 用户反馈 3187m 近水平云变平面】雾化语义=「扎在云里的近场短段」
-  // （步长=段长/12 保证 12 步铺满）；层带内近水平视角段长可达几 km-几十 km（L1 带内 3187m
-  // -4.6° 俯角段 ~21km → 步长 1.75km，12 个采样点跨 21km → 体积结构完全欠采样=平面云）。
-  // 长段=「在云层高度看远处云墙」应走原路径（mip LOD 大步+早退，体积感由几十步采样呈现，
-  // 实测正常）。阈值 1000m（v2，2026-09-29 2214m 白扇形实测收敛）：2214m（L0 顶上方 64m、
-  // L1 带内）向下段长 ~2km 落在旧阈值 2000 临界——底部陡视线段<2000 误触发雾化→纯白无
-  // 结构扇形（原路径同机位整屏云海完美，雾化 floor 常量色毁结构）。1000m=步长上限 ~84m
-  // （1692 段 590m/1536 薄段 117m 不受影响；2022 黑斑机位段 1-2km 部分退出雾化——该机位
-  // 黑斑已定性为 scene 侧帧污染与雾化无关，见 d71fb01）。
-  float shortInLayer = any(camInLayer) && maxRayDistance < 1000.0 ? 1.0 : 0.0;
-  float inLayerCam = u_inLayerFog * shortInLayer;
+  float inLayerCam = u_inLayerFog * (any(camInLayer) ? 1.0 : 0.0);
   g_fogInLayer = inLayerCam; // 【2026-09-29 fogDebug 探针】
   g_fogLit = 0.0;
-  stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam);
+  // 薄段细化：段长<300m 时段长/12（保 12 步采样密度）；厚段原步进（LOD 大步横穿）
+  float thinSegment = maxRayDistance < 300.0 ? 1.0 : 0.0;
+  stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam * thinSegment);
   marchJitter = mix(marchJitter, 0.0, inLayerCam);
   startJitter = mix(startJitter, 0.0, inLayerCam);
   float rayDistance = stepSize * startJitter * 2.0;
@@ -797,9 +799,13 @@ vec4 marchClouds(
       // 不会纯黑（阴天云底反照 ~0.3-0.6）。地板=天光的 50%（v2：0.06 经 45% 混合等效
       // ~2.7% 仍黑——2022 成对 A/B 实测无效提档；旁路 skyGradient——底部 gradient≈0
       // 正是黑因）。浅部（1692 白雾）luma 远高于地板，max 取 luma 不受影响。
+      // 【v3】白化只做去饱和提亮，且只对短段（<1000m）生效：短段（1692/1536 类）采样少
+      // 需提亮托观感；长段横穿（1740/3187/2214 类）rad 自带云团/云隙结构不干预——云隙小
+      // ext 的 ÷ext 放大属物理正确（穿云隙远望亮雾），白化反而抹平结构。
       vec3 inLayerLuma = vec3(dot(radiance, vec3(0.33333333)));
-      vec3 inLayerFloor = skyIrradiance * (RECIPROCAL_PI4 * skyLightScale * 0.5);
-      radiance = mix(radiance, max(inLayerLuma * 1.15, inLayerFloor), 0.45 * inLayerCam);
+      float shortFog = maxRayDistance < 1000.0 ? 1.0 : 0.0;
+      radiance = mix(radiance, inLayerLuma * 1.15, 0.45 * inLayerCam * shortFog);
+      g_probeSky = skyIrradiance;
       // 【2026-09-28 2022m 黑斑止血】NaN 样本免疫：2022m（L0∩L1 重叠带深部）雾化路径
       // readPixels 实证黑斑像素 rgb=NaN（α=0.88 雾化签名、全图 ~29 万 NaN 分量）→
       // overlay 消毒 → 黑斑。NaN 源头未钉（BSM=0/AMS 简单版/shapeDetail=0/turbulence=0
@@ -868,10 +874,14 @@ vec4 marchClouds(
   // 【层内雾化 ⑤】出口 alpha 软化：全段积分后稠密柱 T≈0 → alpha=1 纯墙（透射 0.7% 以下
   // 全被 remap 钳死）。×0.88 给地面留 12% 可见度=「浓雾」观感而非「墙」。带外恒等。
   float outAlpha = remapClamped(transmittanceIntegral, 1.0, minTransmittance);
-  // 【2026-09-28 2022m 黑斑出口兜底】readPixels 实证黑斑像素 rgb=NaN（样本级 isnan 拦截
-  // 无效——NaN 产生于能量积分自身/0×NaN 传播，样本级检测点在传播前）。RT 写入前终检：
-  // NaN 像素按无云处理（rgb=0、α=0 透出地面），NaN 源头（重叠带深部雾化路径、区域随
-  // 瓦片/天气状态波动）留专项调查。
+  // 【层内雾化 ⑥ 出口亮度地板 v3】横穿段 rgb 弱（深部直射 0+天光梯度低）时一次托底到
+  // 原路径深部 ambient 同源量级（sky×0.02 系），max 语义下 rgb 已亮处（受光/云隙）不变；
+  // g_probeSky=末次受照样本 skyIrradiance（无受照=0 → 地板 0 → 恒等）。夜间 sky≈0 同理。
+  // 量级标定：原路径深部蓝 rgb≈(0.13,0.2,0.4)≈sky×0.01-0.02。
+  vec3 fogExitFloor = g_probeSky * (RECIPROCAL_PI4 * skyLightScale * 0.02);
+  radianceIntegral = max(radianceIntegral, fogExitFloor * inLayerCam);
+  // 【2026-09-28 2022m 黑斑出口兜底】RT 写入前终检：NaN 像素按无云处理（rgb=0、α=0）。
+  // 〔勘误：readPixels NaN 为 HALF_FLOAT 回读伪像——本兜底保留为无害防御。〕
   if (isnan(radianceIntegral.r) || isnan(radianceIntegral.g) || isnan(radianceIntegral.b)) {
     radianceIntegral = vec3(0.0);
     outAlpha = 0.0;
