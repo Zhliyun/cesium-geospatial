@@ -780,7 +780,10 @@ ${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
   // M6 地面云影透射率（debug=11 直显；初始 1=无影，采样后 exp(-光深)）
   float groundSunTrans = 1.0;
 #endif
-` : ''}  vec3 groundLightColor;
+` : ''}  // 【M6 云影排查探针 2026-09-30】地面光照分量直读（debug=13 消费；shadow 乘前捕获）
+  vec3 g_gscSunIrr = vec3(0.0);
+  vec3 g_gscSkyIrr = vec3(0.0);
+  vec3 groundLightColor;
   {
     vec3 mulAnchorKm = discG > 0.0
       ? cameraPosition + rayDirection * tHitG
@@ -790,6 +793,7 @@ ${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
     vec3 mulSunIrr = ATMOSPHERE.solar_irradiance
       * GetTransmittanceToSun(ATMOSPHERE, transmittance_texture, length(mulAnchorKm), mulMuS)
       * max(dot(mulNormal, sunDirection), 0.0);
+    g_gscSunIrr = mulSunIrr;
 ${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
     // —— M6 地面云影（spec §6.2/§6.6）——
     // 采样点：hasScene → depth 重建 raw ECEF 米；瓦片流送缺失（discG>0）→ tHitG 椭球兜底
@@ -828,6 +832,7 @@ ${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
       length(mulAnchorKm),
       mulMuS
     ) * (1.0 + dot(mulNormal, mulAnchorKm) / length(mulAnchorKm)) * 0.5;
+    g_gscSkyIrr = mulSkyIrr;
     groundLightColor = max(
       (mulSunIrr + mulSkyIrr) / ATMOSPHERE.solar_irradiance,
       u_groundNightAmbient
@@ -941,6 +946,27 @@ ${o.moon ? '    moonDisc *= limbFade; // 与太阳盘行为一致（太空视角
   // depth 可视化 → HDR 验证假阴性，现已用外层包裹修复。8/9/10 同理外置（>7.5）。
   if (u_debugMode < 6.5 || u_debugMode > 7.5) {
     if (u_debugMode > 7.5) {
+      if (u_debugMode > 11.5) {
+        if (u_debugMode > 12.5) {
+          // 【M6 云影排查探针 2026-09-30】13=地面光照分量：R=太阳直射/solar（shadow 乘前）/
+          // G=天空漫射/solar——太阳份额疑点（实测 ~19%，物理应 40-65%）定位用。
+          out_FragColor = vec4(
+            g_gscSunIrr.r / ATMOSPHERE.solar_irradiance.r,
+            g_gscSkyIrr.r / ATMOSPHERE.solar_irradiance.r,
+            0.0, 1.0);
+          return;
+        }
+        // 12：M6 地面云影数值分解：R=透射率场真值 /
+        // G=地面光乘子红通道 / B=地面光乘子绿通道。debug=11 的直显经 overlay+tonemap
+        // 后读图失真（黑=雾纱/红=缺口不可辨），本分支配合 in-page readPixels 用精确
+        // 数值定位断链。
+${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
+        out_FragColor = vec4(groundSunTrans, groundLightColor.r, groundLightColor.g, 1.0);
+        return;
+#endif
+` : ''}        out_FragColor = vec4(1.0);
+        return;
+      }
       if (u_debugMode > 10.5) {
         // 11：M6 地面云影透射率灰度。分支外壳+恒白兜底恒常存在——关态（M6 define 关）debug=11
         // 显恒白，不再静默跌落 debug=10（验收误读陷阱）；开态读数行在下方 define 门内。
