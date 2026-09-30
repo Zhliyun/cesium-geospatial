@@ -1380,9 +1380,21 @@ void main() {
       mulMuS
     ) * (1.0 + dot(mulNormal, mulAnchorKm) / length(mulAnchorKm)) * 0.5;
     g_gscSkyIrr = mulSkyIrr;
-    groundLightColor = max(
-      (mulSunIrr + mulSkyIrr) / ATMOSPHERE.solar_irradiance,
-      u_groundNightAmbient
+    // 【2026-09-30 云影第一性原理 P1（spec 2026-09-30-m6-shadow-first-principles-design）】
+    // 夜间地板昼夜门控：原全局 max() 让为夜间定稿的地板 (0.55,0.62,0.78)（线性值=白天
+    // 满日照 (sun+sky)/solar≈0.667 的 83%）无差别钳压全时段——M6 地面云影把太阳项打到
+    // 0 后信号被钳掉 83%（33× 物理摆动→1.2×，plain Δ≈噪声地板），云影不可见核心根因；
+    // 且 el<40° 白天正常光照同样被地板接管（el 20° 物理值≈0.24<0.55）。改昼夜混合：
+    // 白天（el>-1°）纯物理零地板（影子满摆幅）；夜间（el<-6°）nightFactor=1 →
+    // max(物理,地板) 与原语义逐位一致（夜间物理项=0<地板）；淡入窗 [-6°,-1°] 与
+    // clouds.frag nightFactor 同窗同语义。可见基线变化（有意）：el<40° 白天地面物理化
+    // 变暗，曝光链 exposureDay 可调回。groundLighting=0 关乘子路径不受影响。
+    float glcNightFactor = 1.0 - smoothstep(-0.1045, -0.0175, mulMuS);
+    vec3 glcPhysical = (mulSunIrr + mulSkyIrr) / ATMOSPHERE.solar_irradiance;
+    groundLightColor = mix(
+      glcPhysical,
+      max(glcPhysical, u_groundNightAmbient),
+      glcNightFactor
     );
   }
   vec3 finalColor;

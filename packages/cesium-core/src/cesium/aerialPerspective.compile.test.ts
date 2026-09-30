@@ -337,10 +337,14 @@ describe('地面光色乘子 groundLightColor', () => {
     expect(src).toContain('normalize(cameraPosition) * ATMOSPHERE.bottom_radius')
   })
 
-  it('夜间地板：vec3 uniform + max() 乘法语义（保地物纹理，非云侧加法自发光）', () => {
+  it('夜间地板：vec3 uniform + 昼夜门控混合（P1 2026-09-30：白天纯物理零地板解锁云影满摆幅，夜间 max 语义逐位保持）', () => {
     const src = build()
     expect(src).toContain('uniform vec3 u_groundNightAmbient;')
-    expect(src).toContain('max(\n      (mulSunIrr + mulSkyIrr) / ATMOSPHERE.solar_irradiance,\n      u_groundNightAmbient\n    )')
+    // 门控混合：nightFactor=1（夜）→ max(物理,地板)=原语义；=0（昼）→ 纯物理
+    expect(src).toContain('float glcNightFactor = 1.0 - smoothstep(-0.1045, -0.0175, mulMuS)')
+    expect(src).toContain('vec3 glcPhysical = (mulSunIrr + mulSkyIrr) / ATMOSPHERE.solar_irradiance')
+    expect(src).toContain('max(glcPhysical, u_groundNightAmbient)')
+    expect(src).toContain('mix(\n      glcPhysical,\n      max(glcPhysical, u_groundNightAmbient),\n      glcNightFactor\n    )')
   })
 
   it('开关：u_groundLighting mix 门控（1=启用默认，0=A/B 对照兼 CI 逃生门）', () => {
