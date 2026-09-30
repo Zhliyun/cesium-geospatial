@@ -18,6 +18,7 @@
 | `fdb0a2f`+`23e1d69` | 终审修复波（opus 全分支终审「可合并零 Must-Fix」后顺手修 3 项+注释改写；debug=11 关态恒白/开态读数双契约，复审两轮闭环） |
 
 **终审**：opus 全分支审查判定**可合并、零 Must-Fix**——契约链三端逐字符串一致、双域分工全消费点一致、零回归锚全边界闭环（含新论证：首帧 far=0→级联恒 -1 封死 NaN-uv 通道）。留档项：F2 半径计算先于三重短路（夜晚小额未测成本，最小修法=挪进短路块）、14 条 deferred minors（详见 SDD ledger）。
+**F2 已收尾（2026-09-30，`4154117`）**：getGroundShadowRadius 挪进三重短路块——纯函数仅 PCF 消费，门关闭（夜晚满屏地面/strength=0）不再白付 7 次矩阵乘/像素；门开启逐位等价，关态产物逐字符不变。core 354/354 绿+tsc 净；未测真实帧时（微成本级，按卫生项处理）。14 条 deferred minors 仍留档。
 
 ## 验收摘要（详细取证：.superpowers/sdd/2026-09-21-m6-ground-cloud-shadows/task-7-report.md，84 份截图/raw 资产可复核）
 

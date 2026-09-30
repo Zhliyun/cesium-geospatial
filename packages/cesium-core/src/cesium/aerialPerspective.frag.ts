@@ -804,15 +804,17 @@ ${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
     float groundDistToTopM = raySphereSecondIntersection(
       groundShadowPosM + altitudeCorrection, sunDirection, vec3(0.0), u_shellTopRadius);
     int groundCascade = -1;
-    float groundRadius = 0.0;
     if (groundDistToTopM > 0.0) {
       groundCascade = getGroundCascadeIndex(groundShadowPosM, interleavedGradientNoise(gl_FragCoord.xy));
-      groundRadius = getGroundShadowRadius(groundShadowPosM);
     }
     // 短路（spec §6.7，逐位等价）：strength=0 / 夜晚背阳（太阳项=0，mulSunIrr 太阳分量恒 0）/ 级联外
     if (u_groundShadowStrength > 0.0
         && max(dot(mulNormal, sunDirection), 0.0) > 0.0
         && groundCascade >= 0) {
+      // 【F2 收尾 2026-09-30（M6 终审留档项）】半径计算挪进短路块：纯函数（7 次矩阵乘：
+      // 6×mat4·vec4+1×mat4·mat4 反投影+重投影）且仅 PCF 消费——门关闭（夜晚满屏地面/
+      // strength=0）不再白付；门开启时求值次序无关输出（无副作用），逐位等价。
+      float groundRadius = getGroundShadowRadius(groundShadowPosM);
       float groundOd = sampleGroundShadowOpticalDepthPCF(
         groundShadowPosM, groundDistToTopM, groundRadius, groundCascade);
       groundSunTrans = exp(-groundOd);
