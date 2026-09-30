@@ -448,12 +448,12 @@ async function main(): Promise<void> {
         cloudsShadowLengthBridge: () => cloudsShadowBridge?.(),
         cloudsOcclusionBridge: () => cloudsOcclusionBridge?.(),
         // M6 地面云影（spec §5）：?groundShadow=0 时整段不传（define 不开 → 完全零回归）
-        // 【2026-09-30 用户拍板】缺省 strength 0.7：P1 解锁满摆幅后全影过深（trans≈0 场
-        // 影区仅剩天光），0.7=影区保持约 30% 直射透入观感；物理满档 ?groundShadowStrength=1
+        // 【2026-09-30 用户拍板】缺省 strength 0.8：P1 解锁满摆幅后全影过深（trans≈0 场
+        // 影区仅剩天光）；0.7 试档后上调 0.8 定稿；物理满档 ?groundShadowStrength=1
         ...(getString('groundShadow') !== '0'
           ? {
               cloudsShadowBridge: () => groundShadowBridge?.(),
-              groundShadowStrength: getNumber('groundShadowStrength') ?? 0.7
+              groundShadowStrength: getNumber('groundShadowStrength') ?? 0.8
             }
           : {})
       })
