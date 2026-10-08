@@ -1,7 +1,16 @@
-float getSTBN() {
+// 【2026-10-08 白点治理】STBN 相位分域阈值（getSTBN 消费；march/shadow 两编译单元
+// 共享此声明——shadow 端 getSTBN 未调用→uniform 不活跃→uniformMap 缺绑不崩）。
+uniform float u_unfreezeMipThreshold;
+
+float getSTBN(const float mipLevel) {
   ivec3 size = textureSize(stbnTexture, 0);
   vec3 scale = 1.0 / vec3(size);
-  return texture(stbnTexture, vec3(gl_FragCoord.xy, float(frame % size.z)) * scale).r;
+  // 【2026-10-08 白点治理】mip 分域相位（frameUnfreeze 配套）：高 mip（远云域=白点
+  // 重灾区）→ frame 轮换层（resolve 多帧平均治白点）；低 mip（近云/云缘域）→ 恒 0 层
+  //（M4 冻结语义——相位轮换在高对比云缘的帧间重建差=雪花状闪动，5950m 俯视实测）。
+  // u_unfreezeMipThreshold 缺省 0.0=mip>0 即轮换（拆分版行为）；demo ?cloudsUnfreezeMip= 标定。
+  float layer = mipLevel > u_unfreezeMipThreshold ? float(frame % size.z) : 0.0;
+  return texture(stbnTexture, vec3(gl_FragCoord.xy, layer) * scale).r;
 }
 
 // Straightforward spherical mapping

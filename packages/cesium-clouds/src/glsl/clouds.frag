@@ -1208,7 +1208,8 @@ void main() {
   bool intersectsGround = any(lessThan(rayNearFar, vec2(0.0)));
   bool intersectsScene = rayNearFar.y < rayNearFar.x;
 
-  float stbn = getSTBN();
+  // 打地/打场景/光柱分支：冻结层 0（近域防闪动）；天空分支内按 mipLevel 分域重取
+  float stbn = getSTBN(0.0);
 
   vec4 color = vec4(0.0);
   float frontDepth = rayNearFar.y;
@@ -1231,6 +1232,8 @@ void main() {
 
     float mipLevel = getMipLevel(globeUv * localWeatherRepeat) * mipLevelScale;
     mipLevel = mix(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / maxHeight));
+    // 【白点治理】天空分支按 mip 分域取 STBN 层（高 mip 轮换治白点/低 mip 冻结防闪动）
+    stbn = getSTBN(mipLevel);
 
     float marchedFrontDepth;
     ivec3 sampleCount = ivec3(0);

@@ -161,7 +161,8 @@ void cascade(
   getRayNearFar(sunPosition, rayDirection, rayNear, rayFar);
 
   vec3 rayOrigin = rayNear * rayDirection + sunPosition;
-  float stbn = getSTBN();
+  // 【白点治理分域配套】BSM 生成端同判据（shadow 端 frame 缺省恒 0=冻结，行为不变）
+  float stbn = getSTBN(mipLevel);
   vec4 color = marchClouds(rayOrigin, rayDirection, rayFar - rayNear, stbn, mipLevel);
   outputColor = color;
 

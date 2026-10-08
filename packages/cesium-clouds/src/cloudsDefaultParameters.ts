@@ -90,6 +90,12 @@ export interface CloudsParameters {
    * BSM 内容帧间稳定；全端解冻实测暗斑闪烁）。undefined 时 march/resolve 回退 frame。
    */
   marchFrame?: number
+  /**
+   * 【2026-10-08 白点治理】STBN 相位分域阈值（getSTBN）：mip>阈=轮换域（治白点），
+   * mip≤阈=冻结域（防云缘雪花闪动，5950m 俯视实测）。0.0=全轮换（frameUnfreeze
+   * 拆分版行为）。demo `?cloudsUnfreezeMip=`。
+   */
+  unfreezeMipThreshold?: number
   /** targetUvScale：M2 全分（1,1）；M4 1/4 分 march 时 (0.25, 0.25)。 */
   targetUvScale: Cartesian2
   /** mipLevelScale：texture mip 级别缩放（three CloudsMaterial 默认 1）。 */

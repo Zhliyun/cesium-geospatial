@@ -608,6 +608,10 @@ async function main(): Promise<void> {
           // 平均后的残余稳态白点；0=关缺省零回归）
           ...(getNumber('cloudsDespeckle') != null
             ? { spatialDespeckle: getNumber('cloudsDespeckle')! } : {}),
+          // 【2026-10-08 白点治理】?cloudsUnfreezeMip=N STBN 相位分域阈值（mip>N 轮换
+          // 治白点；≤N 冻结防云缘闪动；0=全轮换）
+          ...(getNumber('cloudsUnfreezeMip') != null
+            ? { unfreezeMipThreshold: getNumber('cloudsUnfreezeMip')! } : {}),
           ...(cloudsUpscale != null ? { upscaleDivisor: cloudsUpscale } : {}),
           // 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（缺省 1=空区步同款）
           ...(getNumber('cloudsHitMipBoost') != null
