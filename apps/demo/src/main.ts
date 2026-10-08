@@ -601,6 +601,9 @@ async function main(): Promise<void> {
           // 白名单守卫——非法值忽略，防 Record 键 undefined 崩创建。局部 const 收窄使
           // getString 的 string|null 收敛到字面量联合，无需 as 断言）
           ...(cloudsQuality != null ? { quality: cloudsQuality } : {}),
+          // 【2026-10-08 白点排查】?cloudsFrameUnfreeze=1 静止帧 frame 解冻（STBN 相位
+          // 轮换+resolve 多帧平均——march 采样方差白点的时序抑制判别实验）
+          ...(getString('cloudsFrameUnfreeze') === '1' ? { frameUnfreeze: true } : {}),
           ...(cloudsUpscale != null ? { upscaleDivisor: cloudsUpscale } : {}),
           // 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（缺省 1=空区步同款）
           ...(getNumber('cloudsHitMipBoost') != null
@@ -687,7 +690,7 @@ async function main(): Promise<void> {
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
-          ...(getNumber('cloudsNightAmbient') != null || getNumber('cloudsNightRetreat') != null || getNumber('cloudsMotionShaft') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null || getNumber('cloudsShaftStep') != null
+          ...(getNumber('cloudsNightAmbient') != null || getNumber('cloudsNightRetreat') != null || getNumber('cloudsMotionShaft') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null || getNumber('cloudsShaftStep') != null || getNumber('cloudsPowderScale') != null
             ? {
                 parameters: {
                   // 【2026-09-05 P1 光柱 march 步长】?cloudsShaftStep=<米>（缺省 100；
@@ -703,6 +706,11 @@ async function main(): Promise<void> {
                   // 纬度气候带强度（0=关纯随机分布，默认 1 全带）
                   ...(getNumber('cloudsClimateBands') != null
                     ? { climateBands: getNumber('cloudsClimateBands')! }
+                    : {}),
+                  // 【2026-10-08 白点排查】?cloudsPowderScale=N powder 项强度（缺省 0.8；
+                  // 0=关 powder 乘子——extinction 敏感带亮度跳变 0.2↔1.0 的单变量判别）
+                  ...(getNumber('cloudsPowderScale') != null
+                    ? { powderScale: getNumber('cloudsPowderScale')! }
                     : {}),
                   ...(getNumber('cloudsNightAmbient') != null
                     ? { nightAmbient: getNumber('cloudsNightAmbient')! }

@@ -216,6 +216,14 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   /** 渐隐终止高度（米，缺省 3e5=300km）：以上全隐。 */
   heightFadeEnd?: number
   /**
+   * 【2026-10-08 白点排查实验旋钮】静止帧 frame 解冻（缺省 false=保持 M4 静止冻结）：
+   * true 时相机静止也递增 frame——STBN/相位逐帧轮换 → 逐帧噪声图案不同 → resolve
+   * temporalAlpha 混合多帧平均（白点=march 能量积分采样方差的时序抑制判别实验）。
+   * 代价：静止画面可能重现 M4 当年的相位轮换可见抖动（本次实验要测的正是这个权衡）。
+   * demo `?cloudsFrameUnfreeze=1`。
+   */
+  frameUnfreeze?: boolean
+  /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
    * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
@@ -826,7 +834,7 @@ function buildCloudsStageImpl(
           pixelDatatype: resolveCloudsHdrDatatype(scene),
           colorBuffer: cloudsPass.colorTexture,
           depthVelocityBuffer: cloudsPass.depthVelocityTexture,
-          frame: () => params.frame,
+          frame: () => params.marchFrame ?? params.frame,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,
@@ -865,9 +873,20 @@ function buildCloudsStageImpl(
       // 收益主要在运动中）。判定：positionWC 与上帧差 < 0.01m（远小于 1px 的世界投影）。
       resolvePass?.swapBuffers()
       if (temporal || shadowTemporal) {
-        if (prevCameraPos != null && Cartesian3.distance(camera.positionWC, prevCameraPos) < 0.01) {
-          // 静止：frame 不递增（jitter/STBN 相位冻结）
-        } else {
+        const still =
+          prevCameraPos != null && Cartesian3.distance(camera.positionWC, prevCameraPos) < 0.01
+        // 【2026-10-08 白点排查】marchFrame 与 frame 双计数拆分：
+        // - frame：原语义（静止冻结）——shadow/BSM 端噪声相位（全端解冻实测 BSM 帧间
+        //   去相关 → 主 march 光深跳动 → 暗斑闪烁，2026-10-08 判别实验）。
+        // - marchFrame：march/resolve 端——frameUnfreeze 时静止也递增（STBN 相位轮换 →
+        //   逐帧噪声图案去相关 → resolve 混合=多帧平均，白点=march 能量积分采样方差的
+        //   时序抑制）。未开启时与 frame 同步递增（行为与旧版逐位一致）。
+        if (params.marchFrame == null) params.marchFrame = params.frame
+        if (options.frameUnfreeze === true || !still) {
+          params.marchFrame++
+        }
+        if (!still) {
+          // 运动：frame 递增；静止冻结（jitter/BSM 相位恒定，M4 语义不变）
           params.frame++
         }
         // prevCameraPos 在下方 temporal 分支 prevCamera 快照处一并更新（同一 if 内）

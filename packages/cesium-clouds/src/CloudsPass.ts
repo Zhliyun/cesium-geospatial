@@ -525,8 +525,10 @@ export function createCloudsPass(
     weatherAtlasTexture: () => state.atlasTexture ?? dummyWeatherAtlas,
 
     // D7 frame 拆分：march 的 stbn 噪声相位只在 temporal 开时跟随 params.frame 递增
-    //（无 resolve 平滑时逐帧换相位 = 回归闪烁；M3 行为 = 恒 0）
-    frame: () => (temporalUpscale ? params.frame : 0),
+    //（无 resolve 平滑时逐帧换相位 = 回归闪烁；M3 行为 = 恒 0）。
+    // 【2026-10-08 白点排查】frameUnfreeze 时 march 端用独立 marchFrame（静止也轮换，
+    // resolve 多帧平均）；shadow/BSM 端保持 frame（见 createCloudsStage onPreRender）。
+    frame: () => (temporalUpscale ? params.marchFrame ?? params.frame : 0),
 
     // 相机/场景（每帧闭包；cameraHeight/resolution/targetUvScale/mipLevelScale 为 clouds.frag 专有）
     cameraHeight,
