@@ -28,6 +28,10 @@ uniform float varianceGamma;
 uniform float temporalAlpha;
 uniform float temporalDisocclusion;
 uniform vec2 jitterOffset;
+// 【2026-10-08 白点治理】输出端孤点中值滤波强度（0=关缺省零回归；1=全替换）。
+// 白点=march 能量积分采样方差的 1px 亮度尖峰（伴生暗斑族对称），时序平均
+// （frameUnfreeze）消掉 ~95% 后的残余为每帧随机注入的稳态——邻域中值直接替换。
+uniform float u_spatialDespeckle;
 
 in vec2 vUv;
 
@@ -268,6 +272,36 @@ void main() {
   #else // TEMPORAL_UPSCALE
   temporalAntialiasing(coord, outputColor, outputShadowLength);
   #endif // TEMPORAL_UPSCALE
+
+  // 【2026-10-08 白点治理】孤点中值替换（u_spatialDespeckle>0 才走，全屏一致分支）：
+  // 当前像素 luma 与 current 3×3 邻域中值差超阈（0.1 线性域）= 孤立亮/暗点 → 中值替换。
+  // 中值保边：云体低频结构与真实边缘不受损；9 texelFetch+插入排序成本 ~0.3ms/1080p。
+  if (u_spatialDespeckle > 0.0) {
+    float lumas[9];
+    vec3 colors[9];
+    for (int i = 0; i < 9; ++i) {
+      colors[i] = texelFetch(colorBuffer, coord + neighborOffsets[i], 0).rgb;
+      lumas[i] = dot(colors[i], vec3(0.299, 0.587, 0.114));
+    }
+    for (int i = 1; i < 9; ++i) {
+      float lumaK = lumas[i];
+      vec3 colorK = colors[i];
+      int j = i - 1;
+      while (j >= 0 && lumas[j] > lumaK) {
+        lumas[j + 1] = lumas[j];
+        colors[j + 1] = colors[j];
+        --j;
+      }
+      lumas[j + 1] = lumaK;
+      colors[j + 1] = colorK;
+    }
+    vec3 medianColor = colors[4];
+    float lumaOut = dot(outputColor.rgb, vec3(0.299, 0.587, 0.114));
+    float lumaMedian = dot(medianColor, vec3(0.299, 0.587, 0.114));
+    if (abs(lumaOut - lumaMedian) > 0.1) {
+      outputColor.rgb = mix(outputColor.rgb, medianColor, u_spatialDespeckle);
+    }
+  }
 
   #if defined(SHADOW_LENGTH) && defined(DEBUG_SHOW_SHADOW_LENGTH)
   outputColor = vec4(turbo(outputShadowLength * 0.05), 1.0);

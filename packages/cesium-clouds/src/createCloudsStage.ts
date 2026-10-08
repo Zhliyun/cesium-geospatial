@@ -224,6 +224,11 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   frameUnfreeze?: boolean
   /**
+   * 【2026-10-08 白点治理】resolve 输出端孤点中值滤波强度（0=关缺省零回归；1=全替换）。
+   * 配合 frameUnfreeze 使用（时序平均消 ~95%，滤波清残余稳态孤点）。demo `?cloudsDespeckle=1`。
+   */
+  spatialDespeckle?: number
+  /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
    * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
@@ -835,6 +840,8 @@ function buildCloudsStageImpl(
           colorBuffer: cloudsPass.colorTexture,
           depthVelocityBuffer: cloudsPass.depthVelocityTexture,
           frame: () => params.marchFrame ?? params.frame,
+          // 【2026-10-08 白点治理】输出端孤点中值滤波（demo ?cloudsDespeckle=1）
+          spatialDespeckle: options.spatialDespeckle,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,

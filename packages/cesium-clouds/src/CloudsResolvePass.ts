@@ -52,6 +52,12 @@ export interface CloudsResolvePassOptions {
   /** temporal 混合 α（three 默认 0.1；upscale 分支不消费此值，编译进 TAA 分支）。 */
   temporalAlpha?: number
   /**
+   * 【2026-10-08 白点治理】输出端孤点中值滤波强度（0=关缺省；1=全替换）——
+   * 3×3 邻域中值替换孤立亮/暗点（march 采样方差白点的显示端清除）。
+   * demo `?cloudsDespeckle=1`。
+   */
+  spatialDespeckle?: number
+  /**
    * disocclusion rejection 阈值（本项目 2026-09-02 黑块修复新增，默认 0.5；>1 禁用）。
    * |current.a − history.a| 超阈 = 遮挡关系翻转，拒绝 history 直出 current。
    */
@@ -130,7 +136,8 @@ export function createCloudsResolvePass(
     frame: options.frame,
     varianceGamma: () => varianceGamma,
     temporalAlpha: () => temporalAlpha,
-    temporalDisocclusion: () => temporalDisocclusion
+    temporalDisocclusion: () => temporalDisocclusion,
+    u_spatialDespeckle: () => options.spatialDespeckle ?? 0
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——
