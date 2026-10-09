@@ -185,7 +185,13 @@ MediaSample sampleMedia(
   // P1：+u_shapeWindOffset——云团 coverage 平流（u_windOffset）时内部三维结构跟随漂移
   //（此前 shape 纹理完全静态：轮廓动而内部花纹焊死）。纹理域 mod 1，CPU 侧算好。
   vec3 shapePosition = (position + turbulence) * shapeRepeat + shapeOffset + u_shapeWindOffset;
-  float shape = texture(shapeTexture, shapePosition).r;
+  // 【2026-10-09 颗粒带根治 E2】shape 采样显式 LOD：march 循环内隐式导数失效（相邻
+  // 像素循环进度不同）→ 全分辨率下 LOD≈0 → shape 128³ 高频全频注入有效密度 → 云缘
+  // extinction 像素级交替（debug13 v2 直显实锤）→ 光照放大=颗粒带。上游同款隐式但
+  // N=4 半分 march 的 texel 粗→隐式 LOD 反而高（意外平滑）——N=1 全分下必须显式。
+  // 换算 ×1.5（用户现象「越远颗粒越强」=缩小采样欠奈奎斯特，weather mip 尺度对
+  // shape 高频不足——加大远云压制；近云 mip≈0-1 域受影响小）。
+  float shape = textureLod(shapeTexture, shapePosition, mipLevel * 1.5).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
   #ifdef DEBUG_SHOW_SAMPLE_COUNT
