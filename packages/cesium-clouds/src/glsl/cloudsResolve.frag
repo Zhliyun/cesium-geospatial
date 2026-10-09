@@ -291,30 +291,26 @@ void main() {
         ++k;
       }
     }
-    for (int i = 1; i < 25; ++i) {
-      float lumaK = lumas[i];
-      vec3 colorK = colors[i];
-      int j = i - 1;
-      while (j >= 0 && lumas[j] > lumaK) {
-        lumas[j + 1] = lumas[j];
-        colors[j + 1] = colors[j];
-        --j;
-      }
-      lumas[j + 1] = lumaK;
-      colors[j + 1] = colorK;
-    }
     vec3 meanColor = vec3(0.0);
     float meanA = 0.0;
     for (int i = 0; i < 25; ++i) { meanColor += colors[i]; meanA += alphas[i]; }
     meanColor /= 25.0;
     meanA /= 25.0;
     float lumaOut = dot(outputColor.rgb, vec3(0.299, 0.587, 0.114));
-    float lumaMedian = dot(meanColor, vec3(0.299, 0.587, 0.114));
-    // 【α 通道同滤】云缘半透明带的 1-2px 白色喷溅=α（transmittance 积分）像素方差
-    // 经 overlay mix 直接显示——rgb 滤波打不到它（2026-10-09 放大对比实锤）。
-    if (abs(lumaOut - lumaMedian) > 0.05 || abs(outputColor.a - meanA) > 0.02) {
-      outputColor.rgb = mix(outputColor.rgb, meanColor, u_spatialDespeckle);
-      outputColor.a = mix(outputColor.a, meanA, u_spatialDespeckle);
+    float lumaMean = dot(meanColor, vec3(0.299, 0.587, 0.114));
+    // 【2026-10-09 分通道方向性滤波】rgb=对称（亮喷溅+黑点都治——黑点=暗离群，
+    // 单侧版实测 5950m 黑点回潮 28.0）；α=单侧只填透明洞——对称 α 替换会在云边界
+    // 内侧把高 α 拉向跨边界低均值=云啃成半透明透出暗地形（3021m 层内实测黑方块）。
+    // 替换量∝离群幅度（连续化防色带）。
+    float lumDiff = lumaOut - lumaMean;
+    if (abs(lumDiff) > 0.05) {
+      outputColor.rgb = mix(outputColor.rgb, meanColor,
+        min(1.0, abs(lumDiff) * 4.0) * u_spatialDespeckle);
+    }
+    float aDeficit = meanA - outputColor.a;
+    if (aDeficit > 0.05) {
+      outputColor.a = mix(outputColor.a, meanA,
+        min(1.0, aDeficit * 4.0) * u_spatialDespeckle);
     }
   }
 
