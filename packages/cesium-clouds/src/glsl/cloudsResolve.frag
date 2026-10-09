@@ -303,7 +303,7 @@ void main() {
     // 内侧把高 α 拉向跨边界低均值=云啃成半透明透出暗地形（3021m 层内实测黑方块）。
     // 替换量∝离群幅度（连续化防色带）。
     float lumDiff = lumaOut - lumaMean;
-    if (abs(lumDiff) > 0.05) {
+    if (abs(lumDiff) > 0.02) {
       outputColor.rgb = mix(outputColor.rgb, meanColor,
         min(1.0, abs(lumDiff) * 4.0) * u_spatialDespeckle);
     }
