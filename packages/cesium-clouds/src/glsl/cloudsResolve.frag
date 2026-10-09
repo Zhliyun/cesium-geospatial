@@ -233,7 +233,10 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
     return; // Disocclusion rejection
   }
   vec4 clippedColor = varianceClipping(colorBuffer, coord, currentColor, historyColor);
-  outputColor = mix(clippedColor, currentColor, temporalAlpha);
+  // 【2026-10-09 远云平均自适应】α 按云前距离衰减：远云视差小（屏幕近乎静止，可狠平均）
+  // 且欠采样噪声幅度大（需要狠平均）——双契合。50km→α/2 起步（2e-5/米）。
+  float aEff = temporalAlpha / (1.0 + max(0.0, depthVelocity.r) * 2e-5);
+  outputColor = mix(clippedColor, currentColor, aEff);
   // 【outputColorSanityGuard】NaN 兜底：任何上游残留 NaN（含 mix 的 IEEE 传播）直出 current。
   if (any(isnan(outputColor.rgb))) {
     outputColor = currentColor;
