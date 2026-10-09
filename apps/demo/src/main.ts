@@ -613,6 +613,10 @@ async function main(): Promise<void> {
           // 治白点；≤N 冻结防云缘闪动；0=全轮换）
           ...(getNumber('cloudsUnfreezeMip') != null
             ? { unfreezeMipThreshold: getNumber('cloudsUnfreezeMip')! } : {}),
+          // 【2026-10-09 颗粒带优化】?cloudsWeatherBias=N weather 密度场低通偏置（0=关；
+          // 0.5=频率减半——压云缘颗粒带，过大云细节变糊）
+          ...(getNumber('cloudsWeatherBias') != null
+            ? { weatherMipBias: getNumber('cloudsWeatherBias')! } : {}),
           ...(cloudsUpscale != null ? { upscaleDivisor: cloudsUpscale } : {}),
           // 【2026-09-04 甲内近水平 march LOD】云内步 mip 调制倍率（缺省 1=空区步同款）
           ...(getNumber('cloudsHitMipBoost') != null
@@ -699,7 +703,7 @@ async function main(): Promise<void> {
           // 0 = 关闭回退纯黑夜间云）——调参验收用；?moonLightScale= 云月光倍率（T5
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
-          ...(getNumber('cloudsNightAmbient') != null || getNumber('cloudsNightRetreat') != null || getNumber('cloudsMotionShaft') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null || getNumber('cloudsShaftStep') != null || getNumber('cloudsPowderScale') != null
+          ...(getNumber('cloudsNightAmbient') != null || getNumber('cloudsNightRetreat') != null || getNumber('cloudsMotionShaft') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null || getNumber('cloudsShaftStep') != null || getNumber('cloudsPowderScale') != null || getNumber('cloudsWeatherBias') != null
             ? {
                 parameters: {
                   // 【2026-09-05 P1 光柱 march 步长】?cloudsShaftStep=<米>（缺省 100；

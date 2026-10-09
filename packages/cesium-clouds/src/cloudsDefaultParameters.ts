@@ -96,6 +96,12 @@ export interface CloudsParameters {
    * 拆分版行为）。demo `?cloudsUnfreezeMip=`。
    */
   unfreezeMipThreshold?: number
+  /**
+   * 【2026-10-09 颗粒带优化】weather 采样 mip 偏置（密度场低通预滤波，0=关缺省零回归）。
+   * 上游对照实锤云缘颗粒带为固有观感但我们的更强——密度场高频是光照放大的输入，
+   * mip 偏置直接压高频。副作用：偏置过大云整体细节变糊。demo `?cloudsWeatherBias=`。
+   */
+  weatherMipBias?: number
   /** targetUvScale：M2 全分（1,1）；M4 1/4 分 march 时 (0.25, 0.25)。 */
   targetUvScale: Cartesian2
   /** mipLevelScale：texture mip 级别缩放（three CloudsMaterial 默认 1）。 */

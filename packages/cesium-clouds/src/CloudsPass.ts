@@ -307,6 +307,8 @@ export function buildSharedCloudsUniforms(
     frame: () => params.frame,
     // 【2026-10-08 白点治理】STBN 相位分域阈值（缺省 0=全轮换；?cloudsUnfreezeMip= 标定）
     u_unfreezeMipThreshold: () => params.unfreezeMipThreshold ?? 0.0,
+    // 【2026-10-09 颗粒带优化】weather 密度场低通偏置（缺省 0=关；?cloudsWeatherBias=）
+    u_weatherMipBias: () => params.weatherMipBias ?? 0.0,
     stbnTexture: () => weather.stbn
   }
 }

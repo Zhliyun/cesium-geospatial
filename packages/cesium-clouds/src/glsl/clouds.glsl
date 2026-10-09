@@ -2,6 +2,9 @@
 // 共享此声明——shadow 端 getSTBN 未调用→uniform 不活跃→uniformMap 缺绑不崩）。
 uniform float u_unfreezeMipThreshold;
 
+// 【2026-10-09 颗粒带优化】weather 采样 mip 偏置（密度场低通）：0=关缺省零回归。
+uniform float u_weatherMipBias;
+
 float getSTBN(const float mipLevel) {
   ivec3 size = textureSize(stbnTexture, 0);
   vec3 scale = 1.0 / vec3(size);
@@ -98,9 +101,12 @@ WeatherSample sampleWeather(const vec2 uv, const vec3 position, const float heig
   weather.heightFraction = remapClamped(vec4(height), minLayerHeights, maxLayerHeights);
 
   // 3D atlas 采样（spec §4）：z=u_atlasT 相邻切片 LINEAR 插值；平流 tile 单位 mod 1
+  // 【2026-10-09 颗粒带优化】u_weatherMipBias：weather 采样 mip 偏置（密度场低通预滤波）
+  // ——上游对照实锤云缘颗粒带为固有观感但我们的更强（用户目验）；密度场高频是光照放大
+  // 的输入（debug=13 直显平滑但 remap 后梯度陡），mip+bias 直接压高频。0=关（逐位回归）。
   vec3 weatherCoord = vec3(uv * localWeatherRepeat + localWeatherOffset + u_windOffset, u_atlasT);
   vec4 localWeather = pow(
-    textureLod(weatherAtlasTexture, weatherCoord, mipLevel).LOCAL_WEATHER_CHANNELS,
+    textureLod(weatherAtlasTexture, weatherCoord, mipLevel + u_weatherMipBias).LOCAL_WEATHER_CHANNELS,
     weatherExponents
   );
   // 纬度气候带（spec §5.4，采样侧——march 手上有真实 position）

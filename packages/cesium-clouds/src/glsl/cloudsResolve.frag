@@ -279,11 +279,14 @@ void main() {
   // 且窗更大覆盖 2px 簇；25 texelFetch+插入排序成本 ~1ms/1080p（resolve 全屏 pass）。
   if (u_spatialDespeckle > 0.0) {
     float lumas[25];
+    float alphas[25];
     vec3 colors[25];
     int k = 0;
     for (int dy = -2; dy <= 2; ++dy) {
       for (int dx = -2; dx <= 2; ++dx) {
-        colors[k] = texelFetch(colorBuffer, coord + ivec2(dx, dy), 0).rgb;
+        vec4 cn = texelFetch(colorBuffer, coord + ivec2(dx, dy), 0);
+        colors[k] = cn.rgb;
+        alphas[k] = cn.a;
         lumas[k] = dot(colors[k], vec3(0.299, 0.587, 0.114));
         ++k;
       }
@@ -300,11 +303,18 @@ void main() {
       lumas[j + 1] = lumaK;
       colors[j + 1] = colorK;
     }
-    vec3 medianColor = colors[12];
+    vec3 meanColor = vec3(0.0);
+    float meanA = 0.0;
+    for (int i = 0; i < 25; ++i) { meanColor += colors[i]; meanA += alphas[i]; }
+    meanColor /= 25.0;
+    meanA /= 25.0;
     float lumaOut = dot(outputColor.rgb, vec3(0.299, 0.587, 0.114));
-    float lumaMedian = dot(medianColor, vec3(0.299, 0.587, 0.114));
-    if (abs(lumaOut - lumaMedian) > 0.1) {
-      outputColor.rgb = mix(outputColor.rgb, medianColor, u_spatialDespeckle);
+    float lumaMedian = dot(meanColor, vec3(0.299, 0.587, 0.114));
+    // 【α 通道同滤】云缘半透明带的 1-2px 白色喷溅=α（transmittance 积分）像素方差
+    // 经 overlay mix 直接显示——rgb 滤波打不到它（2026-10-09 放大对比实锤）。
+    if (abs(lumaOut - lumaMedian) > 0.05 || abs(outputColor.a - meanA) > 0.02) {
+      outputColor.rgb = mix(outputColor.rgb, meanColor, u_spatialDespeckle);
+      outputColor.a = mix(outputColor.a, meanA, u_spatialDespeckle);
     }
   }
 
