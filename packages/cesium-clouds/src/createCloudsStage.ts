@@ -1155,7 +1155,11 @@ function buildCloudsStageImpl(
           matricesFrozen = true
         }
         if (freezeActive || changed || shadowTemporal) {
-          shadowPass.render()
+          // 【F2 太空跳过】fade≈0（overlay 全隐）时 BSM bake 白跑——shadow.frag 同款
+          // marchClouds 全屏级联，太空域成本与主 march 同量级。
+          if (fadeState.value > 0.02) {
+            shadowPass.render()
+          }
         }
       }
     }
