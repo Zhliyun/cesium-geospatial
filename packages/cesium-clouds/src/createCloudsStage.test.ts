@@ -763,10 +763,11 @@ describe('M4 T7 temporal 编排', () => {
     const resolveOrder = (createCloudsResolvePass as any).mock.invocationCallOrder.at(-1)
     expect(resolveOrder).toBeGreaterThan(marchOrder)
     expect(scene.primitives.add).toHaveBeenCalledWith(resolvePassProbe.instances[0].primitive)
-    // resolve pass 构造参数：全分尺寸 + march att0/att1 + frame 闭包 + three 默认参数
+    // resolve pass 构造参数：与 march RT 同尺寸（F2 超分：resolve 在超分域 TAA/滤波，
+    // overlay LINEAR 缩回屏幕——不再硬编码 drawingBuffer）+ march att0/att1 + frame 闭包
     const opts = resolvePassProbe.calls[0]
-    expect(opts.width).toBe(1920)
-    expect(opts.height).toBe(1080)
+    expect(opts.width).toBe(handle!.cloudsPass.colorTexture.width)
+    expect(opts.height).toBe(handle!.cloudsPass.colorTexture.height)
     expect(opts.colorBuffer._texture.id).toBe('att0')
     expect(opts.depthVelocityBuffer._texture.id).toBe('att1')
     expect(opts.varianceGamma).toBe(2)

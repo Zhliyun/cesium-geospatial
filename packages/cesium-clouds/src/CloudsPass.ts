@@ -197,6 +197,16 @@ export interface CloudsPassOptions extends CloudsMainOptions {
    * options.upscaleDivisor 传同值。
    */
   upscaleDivisor?: 1 | 2 | 4
+  /**
+   * 【2026-10-09 F2 颗粒带架构收尾】march RT 超分（缺省 1=关零回归）：march/resolve
+   * RT 以 ceil(screen×scale) 渲染，overlay LINEAR 下采样回屏幕——每屏幕像素 >1 个
+   * march 采样，密度边缘的采样离散化方差按 √n 降（云缘颗粒带架构级收尾，
+   * spec 2026-10-09-clouds-march-supersampling）。仅 temporalUpscale=false（N=1）时
+   * 生效（与 divisor 低分语义互斥，同传时超分被忽略）；成本=march 像素 ×scale²
+   * （1.5×=2.25×）。overlay 采样模式由 createCloudsStage 按 scale>1 切 LINEAR。
+   * demo `?cloudsSuper=1.5`。
+   */
+  supersampleScale?: 1 | 1.25 | 1.5
 }
 
 /**
@@ -382,8 +392,18 @@ export function createCloudsPass(
   const temporalUpscale = options.temporalUpscale === true
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
-  const marchWidth = temporalUpscale ? Math.ceil(width / upscaleDivisor) : width
-  const marchHeight = temporalUpscale ? Math.ceil(height / upscaleDivisor) : height
+  // 【F2 超分】仅 N=1（temporalUpscale=false）允许；与 divisor 低分语义互斥。
+  const supersampleScale =
+    !temporalUpscale &&
+    (options.supersampleScale === 1.25 || options.supersampleScale === 1.5)
+      ? options.supersampleScale
+      : 1
+  const marchWidth = temporalUpscale
+    ? Math.ceil(width / upscaleDivisor)
+    : Math.ceil(width * supersampleScale)
+  const marchHeight = temporalUpscale
+    ? Math.ceil(height / upscaleDivisor)
+    : Math.ceil(height * supersampleScale)
 
   // ── HDR pixel datatype 检测（内联，对齐 core resolvePostHdrDatatype）──
   // colorTex 需 HDR 承载线性云 radiance（applyAerialPerspective 输出线性 >1 段）；depthVel/shadowLen
@@ -504,8 +524,8 @@ export function createCloudsPass(
   // M4 T6（plan D3/D10）：temporal 时 resolution = lowRes*divisor（对齐全分等效——three 语义：
   // 噪声种子 gl_FragCoord+jitter*resolution 的量纲基底、ray 重建 jitter 偏移基底；
   // T1 起 divisor 可为 2）；非 temporal = drawingBuffer（M2 语义）。
-  const resolutionFullW = temporalUpscale ? marchWidth * upscaleDivisor : width
-  const resolutionFullH = temporalUpscale ? marchHeight * upscaleDivisor : height
+  const resolutionFullW = temporalUpscale ? marchWidth * upscaleDivisor : marchWidth
+  const resolutionFullH = temporalUpscale ? marchHeight * upscaleDivisor : marchHeight
   const resolutionScratch = new Cartesian2(resolutionFullW, resolutionFullH)
   const resolution = (): Cartesian2 => {
     resolutionScratch.x = resolutionFullW
@@ -613,7 +633,12 @@ export function createCloudsPass(
     uniformMap,
     mrtColorTextures: mrtTextures,
     globeDepthTexture,
-    viewport: temporalUpscale ? new BoundingRectangle(0, 0, marchWidth, marchHeight) : undefined
+    // 【F2 超分】RT 尺寸≠屏幕（低分或超分）时 viewport 必须显式=march 尺寸——
+    // undefined 继承 drawingBuffer：低分被裁、超分只填左下屏幕区域。
+    viewport:
+      marchWidth !== width || marchHeight !== height
+        ? new BoundingRectangle(0, 0, marchWidth, marchHeight)
+        : undefined
   })
   const primitives = scene.primitives as unknown as {
     add: (p: VolumetricPrimitive) => void

@@ -224,6 +224,13 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   frameUnfreeze?: boolean
   /**
+   * 【F2 颗粒带架构收尾】march RT 超分（1=关缺省；1.25/1.5）——march/resolve RT 以
+   * ceil(screen×scale) 渲染+overlay LINEAR 下采样，密度边缘采样方差按 √n 降。
+   * 仅 N=1（upscaleDivisor=1）生效；成本=march 像素 ×scale²。demo `?cloudsSuper=`。
+   * spec：2026-10-09-clouds-march-supersampling-design.md 方案 A。
+   */
+  supersampleScale?: 1 | 1.25 | 1.5
+  /**
    * 【2026-10-08 白点治理】resolve 输出端孤点中值滤波强度（0=关缺省零回归；1=全替换）。
    * 配合 frameUnfreeze 使用（时序平均消 ~95%，滤波清残余稳态孤点）。demo `?cloudsDespeckle=1`。
    */
@@ -834,8 +841,9 @@ function buildCloudsStageImpl(
     const resolvePass: CloudsResolvePass | undefined = temporal
       ? createCloudsResolvePass({
           context,
-          width: context.drawingBufferWidth,
-          height: context.drawingBufferHeight,
+          // 【F2 超分】resolve 与 march 同尺寸（超分域 TAA/滤波）——overlay LINEAR 缩回屏幕
+          width: cloudsPass.colorTexture.width,
+          height: cloudsPass.colorTexture.height,
           pixelDatatype: resolveCloudsHdrDatatype(scene),
           colorBuffer: cloudsPass.colorTexture,
           depthVelocityBuffer: cloudsPass.depthVelocityTexture,
@@ -1279,7 +1287,12 @@ export function createCloudsStage(
         )
       }
     },
-    sampleMode: PostProcessStageSampleMode.NEAREST,
+    // 【F2 超分】scale>1 时 resolve 输出=超分尺寸——overlay LINEAR 下采样回屏幕
+    //（NEAREST 会跳采样丢超分收益）；scale=1 保持 NEAREST（云边缘锐利+input dithering 透传）。
+    sampleMode:
+      (options.supersampleScale ?? 1) > 1
+        ? PostProcessStageSampleMode.LINEAR
+        : PostProcessStageSampleMode.NEAREST,
     pixelFormat: PixelFormat.RGBA,
     pixelDatatype: resolveCloudsHdrDatatype(scene)
   })
