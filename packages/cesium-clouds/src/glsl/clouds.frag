@@ -699,6 +699,13 @@ vec4 marchClouds(
     MediaSample media = sampleMedia(weather, position, uv, mipLevel, marchJitter, sampleCount);
 
     if (media.extinction > minExtinction) {
+      // 【2026-10-09 颗粒带判别 v2】media.extinction 直显（shape 3D 修正后的有效密度，
+      // extinction×0.1 灰度）：此前误只直显 weather.density（shape 修正前，平滑结论
+      // 只覆盖 weather 场）。若本直显有颗粒=shape 高频显形（治法=shape 采样显式 LOD）；
+      // 仍平滑则颗粒在光照/积分域。6ca4439 漏 add 本文件致探针 shader 侧丢失，此处补。
+      #ifdef DEBUG_SHOW_WEATHER
+      return vec4(vec3(min(1.0, media.extinction * 0.1)), 1.0);
+      #endif
       // 云内步长恢复（见 cloudStepSize 注释）：空隙/无云的指数放大不进云内采样序列。
       stepSize = cloudStepSize;
       vec3 skyIrradiance;
