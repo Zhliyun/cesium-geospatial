@@ -274,16 +274,21 @@ void main() {
   #endif // TEMPORAL_UPSCALE
 
   // 【2026-10-08 白点治理】孤点中值替换（u_spatialDespeckle>0 才走，全屏一致分支）：
-  // 当前像素 luma 与 current 3×3 邻域中值差超阈（0.1 线性域）= 孤立亮/暗点 → 中值替换。
-  // 中值保边：云体低频结构与真实边缘不受损；9 texelFetch+插入排序成本 ~0.3ms/1080p。
+  // 当前像素 luma 与邻域中值差超阈（0.1 线性域）= 孤立亮/暗点 → 中值替换。
+  // 【5×5 窗】云缘颗粒带密度高（>44%），3×3 中值（抗 44%）失效——5×5 中值抗 ~52%
+  // 且窗更大覆盖 2px 簇；25 texelFetch+插入排序成本 ~1ms/1080p（resolve 全屏 pass）。
   if (u_spatialDespeckle > 0.0) {
-    float lumas[9];
-    vec3 colors[9];
-    for (int i = 0; i < 9; ++i) {
-      colors[i] = texelFetch(colorBuffer, coord + neighborOffsets[i], 0).rgb;
-      lumas[i] = dot(colors[i], vec3(0.299, 0.587, 0.114));
+    float lumas[25];
+    vec3 colors[25];
+    int k = 0;
+    for (int dy = -2; dy <= 2; ++dy) {
+      for (int dx = -2; dx <= 2; ++dx) {
+        colors[k] = texelFetch(colorBuffer, coord + ivec2(dx, dy), 0).rgb;
+        lumas[k] = dot(colors[k], vec3(0.299, 0.587, 0.114));
+        ++k;
+      }
     }
-    for (int i = 1; i < 9; ++i) {
+    for (int i = 1; i < 25; ++i) {
       float lumaK = lumas[i];
       vec3 colorK = colors[i];
       int j = i - 1;
@@ -295,7 +300,7 @@ void main() {
       lumas[j + 1] = lumaK;
       colors[j + 1] = colorK;
     }
-    vec3 medianColor = colors[4];
+    vec3 medianColor = colors[12];
     float lumaOut = dot(outputColor.rgb, vec3(0.299, 0.587, 0.114));
     float lumaMedian = dot(medianColor, vec3(0.299, 0.587, 0.114));
     if (abs(lumaOut - lumaMedian) > 0.1) {
