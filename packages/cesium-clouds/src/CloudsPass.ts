@@ -134,6 +134,12 @@ export interface CloudsFrameState {
    */
   shadowBudgetMult?: number
   /**
+   * 【2026-10-09 F2 太空跳过】高度渐隐缓存（createCloudsStage preRender 更新）：
+   * 0=overlay 全隐（太空）——march/resolve 的 prim enabled 闭包读它跳过 draw。
+   * undefined 视为 1（恒启用）。
+   */
+  cloudsFade?: number
+  /**
    * P4 兜底光柱步幅乘数（2026-09-21；createCloudsStage preRender 每帧按当地太阳仰角更新，
    * 缺省 2=P3 静态行为）。clouds.frag 兜底分支 u_shadowFallbackStepScale 消费
    * （CloudsPass.ts uniform map 闭包读取；standalone CloudsPass 未设时走同值 fallback）。
@@ -207,6 +213,11 @@ export interface CloudsPassOptions extends CloudsMainOptions {
    * demo `?cloudsSuper=1.5`。
    */
   supersampleScale?: 1 | 1.25 | 1.5
+  /**
+   * 【2026-10-09 F2】逐帧启用闭包（缺省恒启用）：false 时 march update 不压 command
+   * （零 draw）——太空域 overlay heightFade 全隐时跳过白跑 march（超分下成本放大）。
+   */
+  enabled?: () => boolean
 }
 
 /**
@@ -633,6 +644,7 @@ export function createCloudsPass(
     uniformMap,
     mrtColorTextures: mrtTextures,
     globeDepthTexture,
+    enabled: options.enabled,
     // 【F2 超分】RT 尺寸≠屏幕（低分或超分）时 viewport 必须显式=march 尺寸——
     // undefined 继承 drawingBuffer：低分被裁、超分只填左下屏幕区域。
     viewport:

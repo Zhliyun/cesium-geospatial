@@ -56,6 +56,12 @@ export interface VolumetricPrimitiveOptions {
   /** 可选：globe depth 闭包（云 getRayDistanceToScene 用，spec 附录 F5）。
    *  调用方注入 `() => scene._view?.globeDepth?.depthStencilTexture`（隔离私有 API）。 */
   globeDepthTexture?: () => Texture | undefined
+  /**
+   * 【2026-10-09 F2】可选逐帧启用闭包（缺省恒启用）：返回 false 时 update 直接返回
+   * 不压 command（零 draw 零 GPU 成本）——云链路太空域跳过 march/resolve/shadow 用
+   * （overlay heightFade 全隐时 march 白跑，超分下成本放大）。
+   */
+  enabled?: () => boolean
   /** 可选：pass 值（默认 VOXELS=10）。云主 march 走 VOXELS（globe 后 PostProcess 前执行）。 */
   pass?: number
   /**
@@ -146,6 +152,7 @@ export function createVolumetricPrimitive(
   const primitive: VolumetricPrimitive = {
     update(frameState: unknown): void {
       if (destroyed) return
+      if (options.enabled && !options.enabled()) return
       // 排序球心跟随相机（见 VOXELS_SORT_BOUNDING_VOLUME 注释——固定球心会被段区间分配剔除）
       const fs = frameState as {
         commandList: { push: (c: DrawCommand) => void }

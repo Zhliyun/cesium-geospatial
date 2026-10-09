@@ -558,7 +558,9 @@ function buildCloudsStageImpl(
   luts: AtmosphereLUTs,
   weather: WeatherTextures,
   options: CloudsStageOptions,
-  applied: AppliedCloudsQuality
+  applied: AppliedCloudsQuality,
+  /** 【F2】高度渐隐共享状态（handle 级对象——overlay u_heightFade 与三 pass enabled 读，preRender 写）。 */
+  fadeState: { value: number }
 ): CloudsStageImpl {
   const ellipsoid = scene.globe.ellipsoid
   // Cesium 公开 .d.ts 缺 drawingBufferWidth/Height（同 CloudsPass/ShadowPass 局部 augment 模式）
@@ -747,6 +749,7 @@ function buildCloudsStageImpl(
     // define 单源投影——漏传则 low 档主 march define 恒 3）。
     const cloudsPass = createCloudsPass(scene, luts, weather, state, {
       ...options,
+      enabled: () => fadeState.value > 0.02,
       shapeDetail: applied.main.shapeDetail,
       turbulence: applied.main.turbulence,
       accurateSunSkyLight: applied.main.accurateSunSkyLight,
@@ -853,7 +856,8 @@ function buildCloudsStageImpl(
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,
-          upscaleDivisor: applied.upscaleDivisor
+          upscaleDivisor: applied.upscaleDivisor,
+          enabled: () => fadeState.value > 0.02
         })
       : undefined
     if (resolvePass != null) {
@@ -878,6 +882,18 @@ function buildCloudsStageImpl(
     const onPreRender = (time: JulianDate): void => {
       const camera = scene.camera
 
+      // 【F2 太空跳过】高度渐隐值入共享 fadeState（overlay u_heightFade 与三 pass enabled
+      // 同源）——fade≈0（overlay 全隐，如太空俯视）时三 pass enabled=false 跳过
+      // march/resolve draw（零 GPU 成本；超分下白跑成本 ×scale² 放大）。heightFade=false
+      // 时恒 1=恒启用。
+      fadeState.value = options.heightFade === false
+        ? 1
+        : computeCloudsHeightFade(
+              // ?? 0：mock/异常时按地面（fade=1 恒启用）——测试行为与旧版一致
+              camera.positionCartographic?.height ?? 0,
+              options.heightFadeStart ?? CLOUDS_HEIGHT_FADE_START_DEFAULT,
+              options.heightFadeEnd ?? CLOUDS_HEIGHT_FADE_END_DEFAULT
+            )
       // ── M4 temporal：swap 最前（D2：swap 后 history=上帧输出、resolve=待写）+ frame 递增
       //    （D7：单端全关时不递增；march/BSM 生成端的 frame uniform 已按各端开关拆分绑定）──
       // 【静止冻结 2026-09-02】相机静止时 frame 不递增——Bayer jitter/STBN 相位恒定 →
@@ -1239,7 +1255,8 @@ export function createCloudsStage(
   // ── 首次 impl（spec §7）：applied 由顶层解析喂 buildImpl；setQuality 换档时以
   //    「创建时用户显式 options + 新 quality」重新 resolve（用户显式参数保留，§5）──
   const initialQuality = options.quality ?? 'high'
-  let impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(initialQuality, options))
+  const fadeState = { value: 1 }
+  let impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(initialQuality, options), fadeState)
   let currentQuality: CloudsQualityPreset = initialQuality
   let destroyed = false
   // T6：激活中的天气预设记在 handle 侧——setQuality 重建 impl（params/state 全新）后重放，
@@ -1278,13 +1295,8 @@ export function createCloudsStage(
       // ±35m ≪ 天气纹素（~100km），整下半球同纹素，白板/见地二态皆密度场诚实输出
       // （ext≥0.1/m 直读实证）。病态像素由 overlay NaN 消毒兜底（黑楔→透明/暗纱）。
       u_heightFade: () => {
-        if (options.heightFade === false) return 1
-        const carto = scene.camera.positionCartographic
-        return computeCloudsHeightFade(
-          carto.height,
-          options.heightFadeStart ?? CLOUDS_HEIGHT_FADE_START_DEFAULT,
-          options.heightFadeEnd ?? CLOUDS_HEIGHT_FADE_END_DEFAULT
-        )
+        // 【F2】读 preRender 缓存（state 同帧值；原每帧重算语义等价）
+        return fadeState.value
       }
     },
     // 【F2 超分】scale>1 时 resolve 输出=超分尺寸——overlay LINEAR 下采样回屏幕
@@ -1346,7 +1358,7 @@ export function createCloudsStage(
       if (next === currentQuality) return
       impl.destroy()
       try {
-        impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(next, options))
+        impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(next, options), fadeState)
         currentQuality = next
         // T6：激活中的预设重放到新 impl（跨换档保持；undefined=无预设，新 impl 天然缺省态）
         if (activePreset != null) impl.setWeatherPreset(activePreset)

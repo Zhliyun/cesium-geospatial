@@ -58,6 +58,11 @@ export interface CloudsResolvePassOptions {
    */
   spatialDespeckle?: number
   /**
+   * 【2026-10-09 F2】逐帧启用闭包（缺省恒启用）：false 时 resolve update 不压 command
+   * ——与 march enabled 同源（overlay heightFade 全隐时全链跳过）。
+   */
+  enabled?: () => boolean
+  /**
    * disocclusion rejection 阈值（本项目 2026-09-02 黑块修复新增，默认 0.5；>1 禁用）。
    * |current.a − history.a| 超阈 = 遮挡关系翻转，拒绝 history 直出 current。
    */
@@ -159,7 +164,8 @@ export function createCloudsResolvePass(
       fragmentShaderSource,
       uniformMap,
       mrtColorTextures: [tex],
-      viewport: fullViewport
+      viewport: fullViewport,
+      enabled: options.enabled
     })
   let resolvePrim = mkPrim(resolveTex)
   let primB = mkPrim(historyTex)
