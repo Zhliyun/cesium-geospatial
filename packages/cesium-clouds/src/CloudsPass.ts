@@ -392,18 +392,16 @@ export function createCloudsPass(
   const temporalUpscale = options.temporalUpscale === true
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
-  // 【F2 超分】仅 N=1（temporalUpscale=false）允许；与 divisor 低分语义互斥。
+  // 【F2 超分】与 divisor 低分语义互斥（divisor>1 时强制关）；temporal（TAA 平均）不冲突
+  // 可叠加——temporalUpscale 宏只由 upscaleDivisor>1 决定（resolve 分支选择），尺寸独立。
   const supersampleScale =
-    !temporalUpscale &&
-    (options.supersampleScale === 1.25 || options.supersampleScale === 1.5)
-      ? options.supersampleScale
-      : 1
-  const marchWidth = temporalUpscale
-    ? Math.ceil(width / upscaleDivisor)
-    : Math.ceil(width * supersampleScale)
-  const marchHeight = temporalUpscale
-    ? Math.ceil(height / upscaleDivisor)
-    : Math.ceil(height * supersampleScale)
+    upscaleDivisor > 1
+      ? 1
+      : options.supersampleScale === 1.25 || options.supersampleScale === 1.5
+        ? options.supersampleScale
+        : 1
+  const marchWidth = Math.ceil((width * supersampleScale) / upscaleDivisor)
+  const marchHeight = Math.ceil((height * supersampleScale) / upscaleDivisor)
 
   // ── HDR pixel datatype 检测（内联，对齐 core resolvePostHdrDatatype）──
   // colorTex 需 HDR 承载线性云 radiance（applyAerialPerspective 输出线性 >1 段）；depthVel/shadowLen
@@ -536,9 +534,11 @@ export function createCloudsPass(
   // M4 T6：temporal 时 targetUvScale = lowRes*divisor/drawingBuffer（低分 UV → 全分 depth 纹理
   // 子区域；ceil 后 *divisor 可能 > 全分故 <1——three CloudsMaterial.setSize 同款修正）、
   // mipLevelScale = 1/divisor（低分 march 采样 weather 提对应 mip 级）。
+  // 【F2 超分】分母补 supersampleScale：depth 全分采样 uv=vUv（相对位置一致，scale 恒≈1，
+  // 仅 ceil 微修正）——超分时 marchWidth>screen，原公式会给出 >1 的越界 scale。
   const targetUvScaleTemporal = new Cartesian2(
-    (marchWidth * upscaleDivisor) / width,
-    (marchHeight * upscaleDivisor) / height
+    (marchWidth * upscaleDivisor) / (width * supersampleScale),
+    (marchHeight * upscaleDivisor) / (height * supersampleScale)
   )
 
   const uniformMap: { [name: string]: () => unknown } = {
