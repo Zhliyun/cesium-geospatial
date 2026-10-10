@@ -111,6 +111,10 @@
 
 **下一步（可直接接手，约 20-30 分钟）**：把 `historyColor` 的采样从 `texture(colorHistoryBuffer, prevUv)`（bilinear）临时改为 `texelFetch(colorHistoryBuffer, ivec2(vUv * texSize), 0)`（点采样）做对照——若 11% 显著下降 → 定位为**重投影插值抖动**（prevUv 的亚像素偏移在 bilinear 下每帧取到不同混合比）；若不变 → 转向 Cesium PostProcess/primitive 的纹理绑定时机与本帧渲染顺序的交互（swap 在 preRender 开头 vs resolve 在 VOXELS pass 实际执行之间可能有其他消费者）。
 
+**2026-10-10 v14 对照（插值方式排除）**：history 采样 `texture()`（bilinear）→ `texelFetch()`（点采样）→ **8.21%**（比 bilinear 的 6.06% 更差）→ **重投影插值抖动排除**（点采样反而更差，说明 bilinear 的平滑在起正向作用）。
+
+**6% 基础噪声的当前状态（累计排除）**：velocity（未命中/命中双侧）、view/projection 矩阵一致性（view 完全一致、projection 差异仅深度项）、jitter（JS 置 0 后仍 6.06%）、STBN（冻结后同值）、despeckle（开关无差）、history 插值方式（texelFetch 更差）、云内容维度（覆盖率/质量档/shapeDetail/密度低通）。**剩余嫌疑**：Cesium 渲染链的时序交互——march 写 `colorBuffer` → resolve 读 → overlay 读 resolve 的链路上任一环的纹理绑定/执行顺序偏移，或 BSM/shadow 端更新间接影响（`freezeActive || changed || shadowTemporal` 分支）。
+
 **下一个探针设计（可直接接手，约 30-45 分钟）**：
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
