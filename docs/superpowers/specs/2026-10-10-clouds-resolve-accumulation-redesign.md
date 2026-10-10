@@ -95,6 +95,12 @@
 
 **下一步（可直接接手，约 30-60 分钟）**：核对 **JS 侧 `camera.viewMatrix` / `camera.frustum.projectionMatrix`（preRender 时刻快照）与 shader 侧 `czm_view` / `czm_projection` 的一致性**——Cesium 可能在 preRender 之后更新相机矩阵，或 multi-frustum 分段使 shader 的 `czm_*` 与 JS 快照不同源；若不同源，构造 reprojectionMatrix 用的矩阵与渲染用的矩阵不一致 → 重投影系统性错位。验证手段：把 JS 侧矩阵作为 uniform 传入，shader 内与 `czm_view` 逐元素比较直显差值。
 
+**2026-10-10 v9/v10 探针结果（矩阵一致性）**：
+- JS `camera.viewMatrix` vs shader `czm_view`：**完全一致**（差值 ×1000 全黑）→ 排除「矩阵快照/域不同源」
+- JS `camera.frustum.projectionMatrix` vs shader `czm_projection`：**有 ~2e-4 的最大元素差**（未命中区深红）→ 很可能是 Cesium **multi-frustum 分段矩阵**与 JS 完整投影矩阵的**深度项（m22/m23）差异**
+
+→ 投影矩阵的 xy 项通常与 near/far 无关（只与 fov/aspect），故**深度项差异是否传导到 velocity 的 xy 需下一步单独探针确认**（例如只比较 m00/m11/m02/m12）。若确认 xy 一致，则 77px 的源头仍在别处（下一步检查 `ecefToWorld` 的转换矩阵实际取值、以及 `cameraPosition`/`rayDirection` 的域一致性）。
+
 **下一个探针设计（可直接接手，约 30-45 分钟）**：
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
