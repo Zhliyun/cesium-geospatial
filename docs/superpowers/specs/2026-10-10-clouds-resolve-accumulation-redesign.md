@@ -142,6 +142,12 @@
 
 **下一步（可直接接手）**：改进标记实验——**所有分支统一输出标记**（在 `main()` 里对最终 `outputColor` 覆盖 `outputColor.r = mod(float(frame), 2.0)`），使 history 全为标记；再直显 history 逐帧比对，即可无歧义判定 history 落后几帧或从未更新。若确认为「从未更新」→ 检查 resolve primitive 的 FBO 是否真的指向 `resolveTex`（`createVolumetricPrimitive` 的 `mrtColorTextures` 在 swap 后是否随引用轮换更新——**外壳 `shell` 转发的是 `resolvePrim`，但 FBO 在创建时绑定，swap 只换引用**，此处需实证）。
 
+**2026-10-10 v19 运行时探针（未完成，附坑）**：实现了 `window.__cloudsProbeMark` 驱动的运行时切换探针（uniform 控制、无需重编译：0=正常 / 1=输出帧标记 / 2=直显 history.r），两阶段切换本身成功（`page.evaluate` 正常返回），但**画面白屏**——新 uniform 的引入导致渲染中断，未取到读数。
+
+**坑记录（新增 uniform 类探针必读）**：给 resolve shader 新增 uniform 时需同步确认 Cesium 的 uniform 绑定路径；本次经 `globalThis` 闭包注入即中断渲染。**教训：探针改动应分两步冒烟**（先只加 uniform 与绑定、确认画面正常，再加逻辑），一次性引入「新 uniform + 新逻辑」会掩盖失败原因。
+
+**下一轮建议**：重做 v19 时先验证 uniform 冒烟，或改用**已有的 uniform 复用**（如以 `u_spatialDespeckle` 的特定值编码探针模式）规避新增绑定。
+
 **下一个探针设计（可直接接手，约 30-45 分钟）**：
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
