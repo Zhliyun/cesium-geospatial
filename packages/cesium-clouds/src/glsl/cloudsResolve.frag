@@ -108,7 +108,15 @@ vec4 getClosestFragment(const ivec2 coord) {
     // 深度悬殊（>2× 或 <0.5×）= 跨层 texel，velocity 不可借。同质条件并入 min 竞争
     //（unroll 展开后无循环上下文，不能用 continue——glslang 'continue statement
     // only allowed in loops'）。
-    if (neighbor.r <= centerDepth * 2.0 && centerDepth * 2.0 <= neighbor.r && neighbor.r < result.r) {
+    // 【2026-10-10 条件修正】原 `centerDepth * 2.0 <= neighbor.r` 是笔误（与前半条
+    // `neighbor.r <= centerDepth * 2.0` 联立要求恰好相等，恒 false）→ 同质邻居借用
+    // 永久失效、恒退自身 velocity（注释声明的 closest 边缘语义从未生效）。修正为
+    // 下界 `neighbor.r >= centerDepth * 0.5`（浅于一半即跨层）。
+    if (
+      neighbor.r <= centerDepth * 2.0 &&
+      neighbor.r >= centerDepth * 0.5 &&
+      neighbor.r < result.r
+    ) {
       result = neighbor;
     }
   }
