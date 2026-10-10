@@ -81,7 +81,37 @@
 
 **探针工程坑（今日两次踩）**：① shader 内删 uniform 使用项 → uniform 被 GLSL 优化移除 → 与 uniformMap 冲突 → **整页白屏**（诊断请改 JS 侧置值，勿删 shader 项）；② 探针值读数必须经 tonemap 反推（线性 0.4 ≈ sRGB 0.68）。
 
-## 4. 方案候选
+## 3.1 基础噪声发现（第二个独立线索，2026-10-10）
+
+把 jitter 置 0（JS 侧）**且** STBN 冻结（`cloudsUnfreezeMip=99`）后，云区输出仍每帧变 **6.06%**（同条件 cov=0 全无云仅 **0.169%**）。
+
+→ **march 输入完全确定的情况下，云区输出仍在抖动** → **resolve 自身在确定输入下产生 ~6% 帧间变化**。这与「march 对 ray 微扰敏感 3.7×」**并列，是两个独立问题**。
+
+**2026-10-10 追加（v7/v8 探针）**：
+- v7 整帧直显 `historyColor` → 19.1%（形成 `history ← reproject(history)` 自循环，静止+jitter=0 下本应恒等 0%）→ **重投影非恒等**
+- v8 整帧直显 `|depthVelocity.gb|×50` → **云区 velocity ≥ 0.02 UV（~77px）**（静止 + jitter=0，应 0）
+
+→ **世界域重投影有明显错位，是 6% 基础噪声的直接来源**。相关代码：命中分支 `frontPositionWorld = ecefToWorld(frontPosition)` → `reprojectionMatrix × vec4(frontPositionWorld, 1.0)`（`reprojectionMatrix` 在 JS 侧由 `camera.viewMatrix` / `camera.frustum.projectionMatrix` 构造，见 `temporalMath.ts::buildReprojectionMatrices`）。本仓库 `worldToECEF = identity`（矩阵域已是 ECEF），故 `ecefToWorld` 非问题点。
+
+**下一步（可直接接手，约 30-60 分钟）**：核对 **JS 侧 `camera.viewMatrix` / `camera.frustum.projectionMatrix`（preRender 时刻快照）与 shader 侧 `czm_view` / `czm_projection` 的一致性**——Cesium 可能在 preRender 之后更新相机矩阵，或 multi-frustum 分段使 shader 的 `czm_*` 与 JS 快照不同源；若不同源，构造 reprojectionMatrix 用的矩阵与渲染用的矩阵不一致 → 重投影系统性错位。验证手段：把 JS 侧矩阵作为 uniform 传入，shader 内与 `czm_view` 逐元素比较直显差值。
+
+**下一个探针设计（可直接接手，约 30-45 分钟）**：
+1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
+   - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
+   - history 稳定而输出变 → **AABB / 混合链**问题
+2. 探针须整帧替换（**分区探针会把 history 写成 current 造成读数污染**，见勘误）；jitter 置 0 用 JS 侧（shader 删项会崩）
+
+## 3.2 云内容维度已全排除（2026-10-10）
+
+| 对照 | 读数 | 结论 |
+|---|---|---|
+| cov=0（全无云） | 0.169% | 抖动纯属云区 |
+| cov 0.20 / 0.30 / 0.45 | 3.6% / 11.3% / 33.2% | 云缘像素占比决定暴露面 |
+| 质量档 medium / high / ultra | 23.5% / 33.2% / 36.0% | **采样越多越闪**（精确 march 更如实反映 ray 微扰） |
+| shapeDetail=0 | 34.1% | 高频密度细节非主因 |
+| weatherBias=2（密度低通） | 27.6% | 轻微，非主因 |
+| jitter=0 | 6.87% | jitter 是主贡献（-79%） |
+| jitter=0 + STBN 冻结 | 6.06% | **基础噪声，见 3.1** |
 
 - **A（取证）**：测上游 current 的帧间变化 → 分流 march 侧 / resolve 侧
 - **B（march 侧方案）**：审查并对齐 march 特有加码；若 jitter 敏感性来自「低分 + 我们的采样序列」，考虑 jitter 幅度标定（对当前场景降幅）
