@@ -214,6 +214,10 @@
 **下一步（约 30 分钟）**：验证 rejection 像素的输出是否写入 history——把 rejection 分支的输出改为显著标记（如 `vec4(0.0, 0.5, 0.0, 1.0)`），观察下一帧该像素的 history 是否随之变化；若不变，即坐实「rejection 分支的输出未进入 history」，修复方向随之明确。
 
 **备用路径**：用 WebGL 调试工具（Spector.js 类）逐 draw call 检查 resolve pass 的实际渲染目标与写入范围（超出截图探针能力）。
+
+**2026-10-10 v25（未完成，因模式切换方式不可行）**：原设计为「模式 6（disocclusion rejection 输出绿，跑 3 秒）→ 模式 3（直显 history 的 RG）」两阶段观察。但**模式通过 URL 参数切换**（本次未保留 window 闭包），而 URL 切换会**重载页面 → history 重置** → 验证无效。
+
+**修法（下次第一步）**：按 v20/v22 的做法重加 `window.__cloudsProbeMark` 闭包（`u_spatialDespeckle` 从 `globalThis` 读取），即可在同页面内切换模式 6 → 模式 3；观察浓云区在模式 3 下的 history 是否显示绿色即可判定「rejection 输出是否写入 history」。
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
    - history 稳定而输出变 → **AABB / 混合链**问题
