@@ -101,6 +101,10 @@
 
 → 投影矩阵的 xy 项通常与 near/far 无关（只与 fov/aspect），故**深度项差异是否传导到 velocity 的 xy 需下一步单独探针确认**（例如只比较 m00/m11/m02/m12）。若确认 xy 一致，则 77px 的源头仍在别处（下一步检查 `ecefToWorld` 的转换矩阵实际取值、以及 `cameraPosition`/`rayDirection` 的域一致性）。
 
+**2026-10-10 v12 探针（**勘误**）**：v8 的 velocity 探针**只在未命中分支**（云区走正常渲染，图上云区显示的白色是云本身、不是探针值——**此前「云区 77px」的判读有误**）。补测**命中（云）分支**：velocity 实测**小**（青色，|v|×50 < 1）→ **velocity 两侧均正常，排除**。
+
+→ **6% 基础噪声的来源仍未定位**。累计排除：velocity（双侧）、view/projection 矩阵一致性（view 完全一致、projection 差异仅在深度项不影响 NDC.xy）、jitter（JS 置 0 后仍 6.06%）、STBN（冻结后同值）、despeckle（开关无差）、云内容维度（覆盖率/质量档/shapeDetail/密度低通全排除）。**下一步建议**：整帧直显 `clippedColor`（AABB 输出）与 `outputColor`（最终输出）分别连拍，判定 6% 是否来自 varianceClipping 的 AABB 逐帧移动（在确定输入下，AABB 若只依赖 current 邻域则应稳定——若仍在动，说明邻域采样本身引入了帧间差）。
+
 **下一个探针设计（可直接接手，约 30-45 分钟）**：
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
