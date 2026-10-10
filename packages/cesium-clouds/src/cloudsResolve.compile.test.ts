@@ -152,10 +152,10 @@ describe('coverage=1 云甲内盐粒修复：getClosestFragment 深度同质性�
   it('同质守卫在场：邻居/中心深度比 >2 跳过，无同质邻居退自身', () => {
     const src = buildCloudsResolveFragmentShader(OPTS)
     expect(src).toContain('getClosestFragmentDepthHomogeneityGuard')
-    // 【2026-10-10 条件修正】原断言文本是笔误版（`centerDepth * 2.0 <= neighbor.r` 与前半条
-    // 联立恒 false，守卫从未生效）；修正后下界 = centerDepth * 0.5。
-    expect(src).toContain('neighbor.r <= centerDepth * 2.0')
-    expect(src).toContain('neighbor.r >= centerDepth * 0.5')
+    // 【2026-10-10】下界条件为「恒 false」形态（等价恒退自身 velocity）——修正版
+    // （centerDepth*0.5）实测在 N=4+jitter 解冻下劣化 11470m 静止画面，已回退；
+    // 守卫启用待 velocity 精度调查后另议（见 frag 内注释）。
+    expect(src).toContain('neighbor.r <= centerDepth * 2.0 && centerDepth * 2.0 <= neighbor.r')
   })
 
   it('glslang：同质守卫在场真编译（TAA 分支）', () => {

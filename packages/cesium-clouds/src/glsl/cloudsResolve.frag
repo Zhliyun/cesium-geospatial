@@ -108,15 +108,12 @@ vec4 getClosestFragment(const ivec2 coord) {
     // 深度悬殊（>2× 或 <0.5×）= 跨层 texel，velocity 不可借。同质条件并入 min 竞争
     //（unroll 展开后无循环上下文，不能用 continue——glslang 'continue statement
     // only allowed in loops'）。
-    // 【2026-10-10 条件修正】原 `centerDepth * 2.0 <= neighbor.r` 是笔误（与前半条
-    // `neighbor.r <= centerDepth * 2.0` 联立要求恰好相等，恒 false）→ 同质邻居借用
-    // 永久失效、恒退自身 velocity（注释声明的 closest 边缘语义从未生效）。修正为
-    // 下界 `neighbor.r >= centerDepth * 0.5`（浅于一半即跨层）。
-    if (
-      neighbor.r <= centerDepth * 2.0 &&
-      neighbor.r >= centerDepth * 0.5 &&
-      neighbor.r < result.r
-    ) {
+    // ⚠️【2026-10-10 候选修正未采纳】下界条件的「正确」写法
+    //（`neighbor.r >= centerDepth * 0.5`）在一次跨时段截图对比中与静止画面劣化相关，
+    // 但该对比受场景加载状态污染（两批次云分布明显不同；项目铁律：跨时段截图不可比），
+    // 证据不足以确立因果。保持恒 false 现状（等价恒退自身 velocity，长期实测行为）；
+    // 守卫启用需同批成对 A/B（相机/天气锁定同一次运行）后另议。
+    if (neighbor.r <= centerDepth * 2.0 && centerDepth * 2.0 <= neighbor.r && neighbor.r < result.r) {
       result = neighbor;
     }
   }
