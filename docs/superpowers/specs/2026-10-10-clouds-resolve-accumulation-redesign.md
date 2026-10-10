@@ -50,14 +50,30 @@
 
 **探针读数**：`current`（march 原始输出）帧间变化 **78.6%**；最终输出 33%——即 **resolve 只把变化压缩 2.4 倍，上游压缩 ~94 倍**（假设上游 current 变化量级相近，**待测**）。
 
-## 3. 核心未知（本立项的第一个任务）
+## 3. 决定性取证结果（2026-10-10 已完成，原「核心未知」已解答）
 
-**上游的 march 输出帧间变化是多少？**
+**上游 march current 帧间变化 = 4.44%**（临时改上游 `shaders/cloudsResolve.frag` 直显 `currentColor` 后连拍差分，maxD 72；上游最终输出基准 0.83%，即其 resolve 压缩 5.3×）。
 
-- 若上游也 ~78% → 差异在 resolve 的累积能力（需按上游重写累积链，但已排除三处显式差异，说明是更隐蔽的实现细节）
-- 若上游远小于 78% → **差异在 march 侧**（我们的 march 对 jitter 敏感度远超上游）→ 审查我们 march 的特有加码：段长/8 clamp、层内禁早退完整横穿、shape 显式 LOD（E2）、软化 T 门控、mipLevelScale 等
+**我们 march current 帧间变化 = 78.6%**（探针实测；最终输出 33%，resolve 压缩 2.4×）。
 
-**取证方法**：上游 storybook 加同款探针（直显 `colorBuffer` 的 current）→ 同口径帧间差分。
+→ **结论：差异在 march 侧**——current 稳定性差 **17.7 倍**，而 resolve 的压缩能力两者同级。**resolve 重写不是本问题的解**。
+
+**jitter 是主要贡献源**（JS 侧把 `params.temporalJitter` 置 0 后实测）：最终输出 **33.2% → 7.28%（-78%）**。
+
+**但 jitter 幅度本身正常**：探针直显 `|temporalJitter|×1000` 读数为 0.4（经 tonemap 显示为亮黄——**读数需按 ACES+gamma 反推，勿直读像素亮度**）→ 实际值 ≈0.0004，与上游公式（`(offset-0.5)/lowResW`）、bayerOffsets（`(i%4+0.5)/4`，值域 [0.125,0.875]）**逐值一致**。
+
+→ **推论：同幅度的 jitter 在本仓库 march 内造成 17 倍于上游的输出扰动 → 敏感度异常的根源在 march 内部**。
+
+**下一步排查清单（march 特有加码，本仓库独有）**：
+1. 段长/8 clamp（`clouds.frag` 主 march 循环内）
+2. 层内禁早退完整横穿 + 步数上限（同上）
+3. shape 显式 LOD（E2：`textureLod(shapeTexture, shapePosition, mipLevel*1.5)`；上游为隐式 `texture()`——**隐式 LOD 在低分 march 下 LOD 更高=更平滑**，会诊曾指出这是上游低颗粒的真因之一）
+4. 软化 T 门控（`mix(outAlpha, outAlpha*0.80, softenGate)`）
+5. `u_hitStepMipBoost`（甲内步 mip 调制，2026-09-04 引入）
+
+**排查方法**：逐个临时停用 → 用「current 帧间差分」探针（本 spec 已建立的口径）判定贡献度；注意每项都是修历史 bug 的改动，停用只作诊断，正式修复需另设计。
+
+**探针工程坑（今日两次踩）**：① shader 内删 uniform 使用项 → uniform 被 GLSL 优化移除 → 与 uniformMap 冲突 → **整页白屏**（诊断请改 JS 侧置值，勿删 shader 项）；② 探针值读数必须经 tonemap 反推（线性 0.4 ≈ sRGB 0.68）。
 
 ## 4. 方案候选
 
