@@ -190,6 +190,22 @@
 → **history 部分未更新，且集中在云区**（三次独立确认：v18/v20/v22）。**现象确凿，但云区与非云区在 resolve 链上找不到对应的代码分支差异**（探针模式下 rejection 条件也不触发：探针输出 a=1 与 history.a 差异为 0）。
 
 **接手建议**：下一步应怀疑**更底层**的机制——例如云区像素的 `depthVelocity.r`（云距）与 `getClosestFragment` 的交互使 `prevUv` 落到纹理外（越界 → 直出 current → 不写标记，但画面仍显示正常的云），或 resolve pass 的绘制在云区被其他 pass 覆盖。**验证思路**：直显 `prevUv` 是否越界（`step(0.0, prevUv.x) * step(prevUv.x, 1.0)` 类的掩码），与黑区分布比对。
+
+**2026-10-10 v23（prevUv 越界假设 → 排除）**：整帧直显越界掩码（越界=红、未越界=绿，经 `?cloudsDespeckle=4` 触发）→ 实测**画面几乎全绿**，红色仅出现在画面边缘 1-2 像素（属正常行为）。
+
+→ **云区像素的 `prevUv` 并未越界** → 「越界 rejection 导致云区不写 history」**排除**。
+
+## 3.9 今日收尾状态（2026-10-10，26 轮实验）
+
+**已确证的现象**：resolve 的 history 在**云区像素上未收到上帧输出**（v18/v20/v22 三次独立确认，黑区恒呈云形）。
+
+**已排除（12 类，全部实测）**：swap 轮换（`SWAP-CHANGED` 运行时确认）、早退分支（v22 无红/黄）、**prevUv 越界**（v23）、view/projection 矩阵一致性、velocity（双侧）、jitter 相位、STBN 相位、despeckle、history 插值方式（texelFetch 更差）、云内容维度（覆盖率/质量档/shapeDetail/密度低通）、march 特有加码中可验者、AABB γ。
+
+**未解释**：云区与非云区在 resolve 链上找不到对应的代码分支差异。
+
+**接手建议（下次开场直接执行）**：
+1. **在 resolve 的写入侧验证**——把探针改为「除云区外写入标记」的反向验证：直显 `currentColor.a`（云透明度）与黑区分布比对，确认黑区是否严格等于 `a > 阈值` 的区域；若是，则问题的触发条件被锁定为「云的不透明度」，据此在 resolve 链上找与该量相关的分支。
+2. 若仍无解，考虑**用 WebGL 调试工具**（如 Spector.js）逐 draw call 检查 resolve pass 的实际渲染目标与写入范围——这超出截图探针能力，是本问题剩余部分所需的工具。
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
    - history 稳定而输出变 → **AABB / 混合链**问题
