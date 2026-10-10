@@ -243,6 +243,16 @@
 **教训（重要）**：该修复的前提是「不 rejection 后 history 会累积」，但 **history 累积依赖写入**——而「rejection 分支的输出为何未写入 history」正是今天**未查清的最后一环**。**在写入问题解决前，修判据无效甚至有害**（浓云区从「稳定的直出 current」变成「被未建立 history 的 AABB 拉扯」，抖动反而增大）。
 
 **下一步（正确顺序）**：**先解决「输出未写入 history」**（今天的最后未解），再考虑判据调整。建议的查法：在 `CloudsResolvePass` 中用页面内脚本直接读回两张纹理的内容（`gl.readPixels` 或让 primitive 的 FBO 显式 `readPixels`），比对「本帧写入的纹理」与「下帧读作 history 的纹理」是否同一张——这一步能一次性判定写入链的哪一环断裂，超出 shader 探针能力但可用 JS + WebGL API 完成。
+
+**2026-10-10 v27（链一致性判据：CHAIN-OK，JS 侧全对）**：在 `swapBuffers` 内比较「本帧将读的 history 纹理句柄」与「上帧将写的 resolve 纹理句柄」→ 读数恒为 **`CHAIN-OK`**。
+
+→ **JS 侧纹理轮换链完全正确**。至此 JS 侧全部可验证环节——swap 三引用轮换、FBO 构造（每 primitive 一张、与引用对齐）、`colorHistoryBuffer` 闭包绑定、链一致性——**逐项通过**。而 shader 侧现象（rejection 输出未进 history）与之**矛盾**。
+
+**矛盾的解释假说（剩余）**：
+1. 「声明的纹理 ≠ FBO 实际写入的纹理」（默认 FBO 状态、draw buffer 映射等在运行时偏离代码意图）
+2. Cesium 的 primitive 执行顺序/Cesium 侧渲染状态与我们的假设不同（如 resolve 的绘制被重定向）
+
+**结论**：矛盾已超出 JS 侧可观测范围 → **必须使用 WebGL 层工具**（`readPixels` 直读纹理内容，或 Spector.js 逐 draw call 检查渲染目标）——这是本问题的**最终剩余手段**。
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
    - history 稳定而输出变 → **AABB / 混合链**问题
