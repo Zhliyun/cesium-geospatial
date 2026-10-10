@@ -1017,8 +1017,16 @@ function buildCloudsStageImpl(
       //（multi-frustum 分段前，velocity 数学只用投影 xy 系数与 w → 分段无关，plan D5）。
       // 写入 params 的既有 Matrix4 实例（clone 覆写不换引用——uniformMap 闭包持引用）。
       if (temporal) {
+        // 【2026-10-10 低分 march 方块修复】jitter 相位跟随 marchFrame（frameUnfreeze 时
+        // 静止也轮换）——仅低分 march（divisor>1）需要：上游靠 16 相位相机子像素抖动把
+        // 低分网格升到全分时域超采样（每 texel 每帧采不同子位置 → resolve 平均抹平 2×2
+        // 方块）；M4 静止冻结把 jitter 相位一起冻死 → 采样位置恒定 → 方差确定性 → 近景
+        // 密集方块显形（上游无此问题：frame 无条件递增）。全分（N=1）保持 frame 语义
+        //（静止冻结是 2026-09-02 抖动修复的一环，零回归）。
+        const jitterFrame =
+          applied.upscaleDivisor > 1 ? params.marchFrame ?? params.frame : params.frame
         computeTemporalJitter(
-          params.frame,
+          jitterFrame,
           cloudsPass.marchWidth,
           cloudsPass.marchHeight,
           params.temporalJitter
