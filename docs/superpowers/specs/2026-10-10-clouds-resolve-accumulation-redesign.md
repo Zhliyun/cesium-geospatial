@@ -129,6 +129,19 @@
 
 **下一步（可直接接手）**：验证 history 纹理内容是否为「上帧输出」——建议做法：主路径输出编码一个每帧交替的标记（如 `frame%2`），并在 history 采样后直显 `historyColor` 的对应通道，**在同一帧内用两次截图对照**（或用 readPixels 逐帧读取）判定 history 是「上帧值」还是「同帧值」；若为同帧值 → ping-pong/绑定链错位坐实。
 
+**2026-10-10 v18 标记验证（history 链缺陷坐实）**：主路径输出改为 `vec4(frame%2, historyColor.r, 0, 1)`：
+
+- **绿色 (R=0, G=1)**：history.r = 1 = 上帧标记 → 该区 history 正常
+- **黑色 (R=0, G=0)**：history.r 与当前标记相同 → **未读到上帧输出**
+
+实测画面**绿+黑混合，且黑色区域对应云的位置**；云区像素**走主路径**（其输出已是标记），故其下帧 history.r **本应为 1，实测 0** → **云区的 history 确实未读到上帧主路径输出**。
+
+〔设计缺陷说明〕早退分支（Bayer 直通/越界/rejection）未一并染色，故非云区的绿/黑判读不可靠；但**云区部分（主路径）的结论有效**。
+
+→ **history 链在云区存在实质缺陷**。代码层已核查无果（swap 三引用轮换、`colorHistoryBuffer` 闭包、ping-pong 对齐，v9-v14），缺陷指向 **Cesium primitive 运行时执行顺序或纹理绑定状态**（非源码逻辑）。
+
+**下一步（可直接接手）**：改进标记实验——**所有分支统一输出标记**（在 `main()` 里对最终 `outputColor` 覆盖 `outputColor.r = mod(float(frame), 2.0)`），使 history 全为标记；再直显 history 逐帧比对，即可无歧义判定 history 落后几帧或从未更新。若确认为「从未更新」→ 检查 resolve primitive 的 FBO 是否真的指向 `resolveTex`（`createVolumetricPrimitive` 的 `mrtColorTextures` 在 swap 后是否随引用轮换更新——**外壳 `shell` 转发的是 `resolvePrim`，但 FBO 在创建时绑定，swap 只换引用**，此处需实证）。
+
 **下一个探针设计（可直接接手，约 30-45 分钟）**：
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
