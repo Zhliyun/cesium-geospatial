@@ -844,9 +844,12 @@ function buildCloudsStageImpl(
     const resolvePass: CloudsResolvePass | undefined = temporal
       ? createCloudsResolvePass({
           context,
-          // 【F2 超分】resolve 与 march 同尺寸（超分域 TAA/滤波）——overlay LINEAR 缩回屏幕
-          width: cloudsPass.colorTexture.width,
-          height: cloudsPass.colorTexture.height,
+          // 【F2 超分】resolve 与 march 同尺寸（超分域 TAA/滤波）——overlay LINEAR 缩回屏幕。
+          // 【2026-10-10 会诊修复】divisor>1（降分 march）时 resolve 必须是全分：colorTexture
+          // 是低分 RT，沿用其尺寸会让 resolve 的 Bayer coord/divisor 与 velocity 映射落到错域
+          //（半分 RT 记全分 UV），N=2/N=4 路径产出污染数据（adf5e8a 引入，缺省 N=1 未暴露）。
+          width: applied.upscaleDivisor > 1 ? context.drawingBufferWidth : cloudsPass.colorTexture.width,
+          height: applied.upscaleDivisor > 1 ? context.drawingBufferHeight : cloudsPass.colorTexture.height,
           pixelDatatype: resolveCloudsHdrDatatype(scene),
           colorBuffer: cloudsPass.colorTexture,
           depthVelocityBuffer: cloudsPass.depthVelocityTexture,

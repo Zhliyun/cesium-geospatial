@@ -281,13 +281,22 @@ void main() {
   // 【5×5 窗】云缘颗粒带密度高（>44%），3×3 中值（抗 44%）失效——5×5 中值抗 ~52%
   // 且窗更大覆盖 2px 簇；25 texelFetch+插入排序成本 ~1ms/1080p（resolve 全屏 pass）。
   if (u_spatialDespeckle > 0.0) {
+    // 【2026-10-10 低分 march 域修复】邻域索引必须用 march 域坐标：coord 是 resolve RT
+    // 坐标（全分/超分域），colorBuffer 是 march RT（N=2/4 降分时低分）——直接用 coord
+    // 在 N>1 时越界 texelFetch（返回 0）→ 半屏黑点 + x=1/divisor 处竖分界
+    //（上界外像素邻域全 0 → 均值被拉黑 → 反向替换）。N=1/超分时两域重合，行为不变。
+    #ifdef TEMPORAL_UPSCALE
+      ivec2 despeckleCoord = lowResCoord;
+    #else
+      ivec2 despeckleCoord = coord;
+    #endif
     float lumas[25];
     float alphas[25];
     vec3 colors[25];
     int k = 0;
     for (int dy = -2; dy <= 2; ++dy) {
       for (int dx = -2; dx <= 2; ++dx) {
-        vec4 cn = texelFetch(colorBuffer, coord + ivec2(dx, dy), 0);
+        vec4 cn = texelFetch(colorBuffer, despeckleCoord + ivec2(dx, dy), 0);
         colors[k] = cn.rgb;
         alphas[k] = cn.a;
         lumas[k] = dot(colors[k], vec3(0.299, 0.587, 0.114));
