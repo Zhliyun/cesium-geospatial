@@ -218,6 +218,10 @@
 **2026-10-10 v25（未完成，因模式切换方式不可行）**：原设计为「模式 6（disocclusion rejection 输出绿，跑 3 秒）→ 模式 3（直显 history 的 RG）」两阶段观察。但**模式通过 URL 参数切换**（本次未保留 window 闭包），而 URL 切换会**重载页面 → history 重置** → 验证无效。
 
 **修法（下次第一步）**：按 v20/v22 的做法重加 `window.__cloudsProbeMark` 闭包（`u_spatialDespeckle` 从 `globalThis` 读取），即可在同页面内切换模式 6 → 模式 3；观察浓云区在模式 3 下的 history 是否显示绿色即可判定「rejection 输出是否写入 history」。
+
+**2026-10-10 v25b（同页切换已实现，但判读设计有缺陷）**：重加 window 闭包后同页切换成功（模式 6 跑 3 秒 → 模式 3），读数 = 黄 + 黑 + 灰蓝，**黄区呈云形**。**但判读设计有缺陷**：云色本身的 R/G 都接近 1（白云），与「绿标记的 G=1」混淆，无法区分两者。
+
+**修法（下次第一步）**：模式 6 的 rejection 输出改用**独特 alpha**（如 `vec4(0.0, 1.0, 0.0, 0.25)`，注意常规云为 a≈1、天空 a≈0），并增设**模式 7：直显 `vec3(history.a)`**——云区若显示 0.25 即证明 rejection 输出已写入 history（此时死锁假设不成立，需另找机制）；若不显示 0.25，则死锁假设坐实，修复方向为「让 rejection 分支的写入生效」或「rejection 时同步更新 history」。
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
    - history 稳定而输出变 → **AABB / 混合链**问题
