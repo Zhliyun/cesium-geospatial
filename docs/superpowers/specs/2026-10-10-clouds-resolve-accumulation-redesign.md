@@ -204,8 +204,16 @@
 **未解释**：云区与非云区在 resolve 链上找不到对应的代码分支差异。
 
 **接手建议（下次开场直接执行）**：
-1. **在 resolve 的写入侧验证**——把探针改为「除云区外写入标记」的反向验证：直显 `currentColor.a`（云透明度）与黑区分布比对，确认黑区是否严格等于 `a > 阈值` 的区域；若是，则问题的触发条件被锁定为「云的不透明度」，据此在 resolve 链上找与该量相关的分支。
-2. 若仍无解，考虑**用 WebGL 调试工具**（如 Spector.js）逐 draw call 检查 resolve pass 的实际渲染目标与写入范围——这超出截图探针能力，是本问题剩余部分所需的工具。
+
+**2026-10-10 v24（触发条件锁定，接手建议 1 已完成）**：模式 5 直显 `currentColor.a` → 画面 = 黑（a=0 天空）+ **白（a=1 浓云）** + 灰（云缘）。
+
+**与 v20 黑区比对：v20 的「history 未更新」区 ≈ v24 的浓云区（a ≈ 1）** → **触发条件 = 云的不透明度 a ≈ 1**。
+
+**与 disocclusion rejection 的关联（当前最强假设）**：`|currentColor.a − historyColor.a| > 0.5` 在「浓云（a=1）+ history 未建立（a=0）」时**恒触发** → 若 rejection 像素的输出未写回 history，即形成**自持死锁**（永远 rejection、永不累积）。代码上 rejection 分支的输出会写入 resolve RT（→ 下帧 history），故死锁的前提是「该写入未生效」——这与 v18/v20/v22 的观测互为印证。
+
+**下一步（约 30 分钟）**：验证 rejection 像素的输出是否写入 history——把 rejection 分支的输出改为显著标记（如 `vec4(0.0, 0.5, 0.0, 1.0)`），观察下一帧该像素的 history 是否随之变化；若不变，即坐实「rejection 分支的输出未进入 history」，修复方向随之明确。
+
+**备用路径**：用 WebGL 调试工具（Spector.js 类）逐 draw call 检查 resolve pass 的实际渲染目标与写入范围（超出截图探针能力）。
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
    - history 稳定而输出变 → **AABB / 混合链**问题
