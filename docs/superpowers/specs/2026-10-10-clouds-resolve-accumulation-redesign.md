@@ -148,7 +148,31 @@
 
 **下一轮建议**：重做 v19 时先验证 uniform 冒烟，或改用**已有的 uniform 复用**（如以 `u_spatialDespeckle` 的特定值编码探针模式）规避新增绑定。
 
-**下一个探针设计（可直接接手，约 30-45 分钟）**：
+**2026-10-10 v20 运行时探针（成功取到读数）**：改用**复用已有 `u_spatialDespeckle` 编码**（2 = 主路径输出统一帧标记 / 3 = 直显 `history.r`，despeckle 条件排除 >1.5 的值），同页面两阶段切换成功（`page.evaluate` 设置 `window.__cloudsProbeMark`）。
+
+**读数**：画面 = 红色（`history.r`=1 = 上帧标记，链正常）+ **黑色（`history.r`=0）**，**黑色区域呈云形** → **云区像素的输出未进入 history**（v18 结论在干净设计下复现）。
+
+**与 v17 形成的关键矛盾**：v17 掩码显示**主路径占画面 80-90%（含云区）**，但本探针显示**云区像素未写入标记** → 理解为：**云区像素虽走主路径，其输出却未进入下一帧读到的 history** → 问题不在「分支选择」，而在 **resolve 输出纹理的写入与下一帧 history 读取之间的对应关系**（纹理轮换/绑定在运行时未如源码逻辑那样对齐）。
+
+**新增工程坑（本轮）**：新增 uniform 会导致整页白屏（v19）；**复用已有 uniform 编码探针模式**是可行替代（v20 成功）。探针请优先复用现有 uniform。
+
+**下一轮建议**：在 `CloudsResolvePass` 的 `swapBuffers` 前后用页面内脚本打印/比对 `resolveTex`/`historyTex` 的 `_texture` 句柄（JS 侧可访问），验证运行时轮换是否与源码逻辑一致——若句柄未随 swap 更新，即坐实轮换失效。
+
+**2026-10-10 v21 决定性发现：history 落后 2 帧（swap 时机差一帧）**
+
+两个探针合起来锁定根因：
+
+1. **swap 句柄检查**（`swapBuffers` 内比较 `resolveTex._texture` 与上帧值并写入 `document.title`）→ **`SWAP-CHANGED`** → 纹理轮换**每帧确实发生**（排除「轮换失效」）。
+2. **标记读数反推落后帧数**（v20 的 `frame % 2` 标记 + `history.r` 直显）：
+   - 落后 **1 帧** → 画面应为**红或绿**（R ≠ G）
+   - 落后 **2 帧** → 画面应为**黄或黑**（R = G）
+   - **实测为黑** → **history 落后 2 帧**
+
+→ **根因：resolve 写入的纹理与下一帧被读作 history 的纹理错位一帧**。`swapBuffers` 在 **preRender 开头**执行，而 resolve 的实际渲染发生在该帧更晚，「本帧写入的纹理」要到「下下帧」才被当作 history 读取。
+
+**修复方向**：将 `swapBuffers` 移到本帧渲染完成之后（Cesium `postRender` 钩子），或与渲染顺序严格对齐的等价时机（参考上游：three 的 `render()` 内 render 完 resolve 才 swap）。修复后复测预期：**11470m cov0.45 帧间差分从 33% 显著下降**，接近 `frameUnfreeze=0` 的 0.016% 量级（余下为 jitter 项）。
+
+**下一轮（修复 + 验证，约 30-45 分钟）**：①swap 移至 postRender 或按渲染顺序重排；②用 `frame%2` 标记复测（读数应从「黑」变「红/绿」）；③测 11470m 帧间差分确认下降。
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
    - history 稳定而输出变 → **AABB / 混合链**问题
