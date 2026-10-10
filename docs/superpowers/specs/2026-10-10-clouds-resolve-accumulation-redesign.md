@@ -115,6 +115,14 @@
 
 **6% 基础噪声的当前状态（累计排除）**：velocity（未命中/命中双侧）、view/projection 矩阵一致性（view 完全一致、projection 差异仅深度项）、jitter（JS 置 0 后仍 6.06%）、STBN（冻结后同值）、despeckle（开关无差）、history 插值方式（texelFetch 更差）、云内容维度（覆盖率/质量档/shapeDetail/密度低通）。**剩余嫌疑**：Cesium 渲染链的时序交互——march 写 `colorBuffer` → resolve 读 → overlay 读 resolve 的链路上任一环的纹理绑定/执行顺序偏移，或 BSM/shadow 端更新间接影响（`freezeActive || changed || shadowTemporal` 分支）。
 
+**2026-10-10 v15/v16 探针（结论与一处反转）**：
+- **v15** 整帧直显 `|history − current|×5` → 全屏有色。**但此读数不能证明不收敛**——在 AABB 内 `history ≠ current` 属预期（`clipAABB` 返回 history 而非 mean）。**真正的异常证据是 v7 的「history 帧间变化 19%」**（输入确定下）。
+- **v16** 主路径输出强制固定常量 `(0.5,0.5,0.5,1.0)` → 帧间仍变化 **43.4%**，且画面**仍是「云 + 黑块」而非平色** → **该实验读数不可靠**（固定输出触发其他路径或被覆盖，探针未达成隔离）。
+
+→ **插桩路线在此止步**。v16 的反常提示：**resolve 主路径的输出可能不是画面云区的唯一来源**（早退像素/其他 stage 的影响力此前被低估）。
+
+**下一步（可直接接手，建议先做这一步再续插桩）**：**直显「主路径 vs 早退分支」的空间掩码**（如主路径输出绿色、`currentFrame` 直通输出红色、rejection 输出蓝色）——先确认画面云区中走各分支的像素比例，再决定在哪个分支插桩。若云区大部分走早退分支，则 6% 基础噪声与「AABB/history 链」的关系需要重新评估。
+
 **下一个探针设计（可直接接手，约 30-45 分钟）**：
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
