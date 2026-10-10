@@ -237,6 +237,12 @@
 3. 修正 rejection 判据，使其不惩罚「history 尚未建立」的首帧（如加 history 有效帧计数门控）
 
 **干扰项说明**：少量绿色斑点来源未明（0.25 残留 / 探针瑕疵 / despeckle 交互）；下次可提高信噪比（如 `vec4(1,0,0,0.25)` + 直显 `a` 放大 4 倍）。
+
+**2026-10-10 修复尝试（失败，已回退）**：按「history 未建立时不 rejection」实施（rejection 条件加前置 `historyColor.a > 1e-4 &&`）→ **359 测试全绿**，但 **11470m 帧间差分从 33.2% 升至 37.3%（更差）** → **已回退**。
+
+**教训（重要）**：该修复的前提是「不 rejection 后 history 会累积」，但 **history 累积依赖写入**——而「rejection 分支的输出为何未写入 history」正是今天**未查清的最后一环**。**在写入问题解决前，修判据无效甚至有害**（浓云区从「稳定的直出 current」变成「被未建立 history 的 AABB 拉扯」，抖动反而增大）。
+
+**下一步（正确顺序）**：**先解决「输出未写入 history」**（今天的最后未解），再考虑判据调整。建议的查法：在 `CloudsResolvePass` 中用页面内脚本直接读回两张纹理的内容（`gl.readPixels` 或让 primitive 的 FBO 显式 `readPixels`），比对「本帧写入的纹理」与「下帧读作 history 的纹理」是否同一张——这一步能一次性判定写入链的哪一环断裂，超出 shader 探针能力但可用 JS + WebGL API 完成。
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
    - history 稳定而输出变 → **AABB / 混合链**问题
