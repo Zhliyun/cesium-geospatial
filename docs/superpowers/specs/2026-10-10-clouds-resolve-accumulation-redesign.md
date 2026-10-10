@@ -105,6 +105,12 @@
 
 → **6% 基础噪声的来源仍未定位**。累计排除：velocity（双侧）、view/projection 矩阵一致性（view 完全一致、projection 差异仅在深度项不影响 NDC.xy）、jitter（JS 置 0 后仍 6.06%）、STBN（冻结后同值）、despeckle（开关无差）、云内容维度（覆盖率/质量档/shapeDetail/密度低通全排除）。**下一步建议**：整帧直显 `clippedColor`（AABB 输出）与 `outputColor`（最终输出）分别连拍，判定 6% 是否来自 varianceClipping 的 AABB 逐帧移动（在确定输入下，AABB 若只依赖 current 邻域则应稳定——若仍在动，说明邻域采样本身引入了帧间差）。
 
+**2026-10-10 v13 探针**：整帧直显 `clippedColor`（jitter=0 + STBN 冻结，march 输入确定）→ **11.2%**（大于最终输出的 6.06%）。
+
+→ 数学上 `h_{n+1} = clipAABB(mean, h_n, min, max)` 应在**一步内收敛**（h 在 AABB 内 → 返回自身；在外 → clamp 到边界后下一步即稳定），故 11% 的持续变化**与理论不符** → **history 链的实现问题是 6% 基础噪声的当前最强嫌疑**。JS 侧 `CloudsResolvePass.swapBuffers` 三引用轮换与 `colorHistoryBuffer` 闭包绑定**代码上已核查正确**。
+
+**下一步（可直接接手，约 20-30 分钟）**：把 `historyColor` 的采样从 `texture(colorHistoryBuffer, prevUv)`（bilinear）临时改为 `texelFetch(colorHistoryBuffer, ivec2(vUv * texSize), 0)`（点采样）做对照——若 11% 显著下降 → 定位为**重投影插值抖动**（prevUv 的亚像素偏移在 bilinear 下每帧取到不同混合比）；若不变 → 转向 Cesium PostProcess/primitive 的纹理绑定时机与本帧渲染顺序的交互（swap 在 preRender 开头 vs resolve 在 VOXELS pass 实际执行之间可能有其他消费者）。
+
 **下一个探针设计（可直接接手，约 30-45 分钟）**：
 1. 在 upscale 分支**整帧**直显 `historyColor`（重投影后的 history）→ 连拍差分：
    - history 也在变 → **重投影 / ping-pong 写入链**问题（查 prevUv 与 swap 时序）
