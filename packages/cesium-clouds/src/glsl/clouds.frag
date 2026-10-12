@@ -947,6 +947,8 @@ vec4 marchClouds(
   // 让薄雾纱更透，不应动实心浓云：软化量改随出口透射比门控——T>0.15 的纱全软化、
   // T→0 的浓云精确保持遮蔽（1740 雾面 T≈0.12 仍在软化域，弧线软化保持）。
   float softenGate = inLayerCam * smoothstep(0.0, 0.15, transmittanceIntegral);
+  // 【v64 诊断结论】禁用软化门控实测：黑块 0.474%→0.374%（仅 -21%，非主因）——且禁用会
+  // 让「浓云透底」回归（2026-09-29 修复），得不偿失 → 恢复。
   return vec4(radianceIntegral, mix(outAlpha, outAlpha * 0.80, softenGate));
 }
 

@@ -77,6 +77,12 @@ const ivec4[4] bayerIndices = ivec4[4](
 const int bayerIndices2[4] = int[4](0, 2, 3, 1);
 #endif // UPSCALE_DIVISOR == 2
 
+// 【v56-v63 黑块消毒实验收口——全部回退】六轮判据（绝对阈值 0.002/0.012、alpha 门槛
+// 0.3/0.05、bilinear 样本剔除、输出端 5×5 拦截、洞检测、相对判据 lc<0.5×邻域均值）
+// 实测黑块恒为 0.42-0.49%（vs N=1 基准 0.101%）——**值判据路线整体不可行**：黑块不是
+// 「值异常」而是「尺寸放大」（N=4 把 march 的 1px 采样噪声放大为 8×8），与正常暗云在
+// resolve 可见的数据上不可区分。机制结论与后续方向见 spec。
+
 // 【2026-09-04 coverage=1 云甲内运动全黑修复：getHistoryNanGuard】history 采样含 NaN 时
 // 以 current 替换。GLSL mix 为 IEEE 融合乘加——NaN·(1-α) 任意 α 均传播，NaN 一旦写入
 // history 即 ping-pong 永久自持（δa rejection 的比较恒 false 拦不住、α=1 直混也无法
@@ -138,24 +144,39 @@ void temporalUpscale(
   out vec4 outputColor,
   out float outputShadowLength
 ) {
-  // 【v54 空域上采样滤波（bilinear）】texelFetch 块拷贝 → 同一低分 texel 的 4×4 全分像素共享值
-  // → 冻结后块结构暴露。march MRT sampler 是 NEAREST（texture() 无插值）→ 手动标准 bilinear
-  // （位置加权，非等权 box）：块边界连续过渡，抹块效果优于等权平均。空域滤波不引入时间注入；
-  // 代价 = 细节上限为低分分辨率（上游靠直通超采样稀释块，我们禁直通后以滤波补）。
+  // 【v56 黑 texel 消毒】march 输出的「不透明黑 texel」（rgb≈0 且 a 显著 = 黑楔类数值伪影；
+  // overlay 的 NaN 消毒只拦 NaN/负值，不拦合法的 0）在冻结后经 bilinear 扩散为 8×8 黑块。
+  // despeckle 失效：其参照（低分邻域均值）取自 march 自身 → 黑 texel 把参照也拉黑 → 不判异常。
+  // 修法：bilinear 的 4 样本先剔除黑样本（不透明+极暗），用剩余样本加权插值；全黑则保持。
   vec2 mrtSz2 = vec2(textureSize(colorBuffer, 0));
   vec2 uvLow = vUv * mrtSz2 - 0.5;
   vec2 fl = floor(uvLow);
   vec2 fr = uvLow - fl;
-  ivec2 i00 = ivec2(fl);
-  ivec2 i10 = min(i00 + ivec2(1, 0), ivec2(mrtSz2) - 1);
-  ivec2 i01 = min(i00 + ivec2(0, 1), ivec2(mrtSz2) - 1);
-  ivec2 i11 = min(i00 + ivec2(1, 1), ivec2(mrtSz2) - 1);
-  i00 = clamp(i00, ivec2(0), ivec2(mrtSz2) - 1);
-  vec4 currentColor = mix(
-    mix(texelFetch(colorBuffer, i00, 0), texelFetch(colorBuffer, i10, 0), fr.x),
-    mix(texelFetch(colorBuffer, i01, 0), texelFetch(colorBuffer, i11, 0), fr.x),
-    fr.y
-  );
+  ivec2 i00 = clamp(ivec2(fl), ivec2(0), ivec2(mrtSz2) - 1);
+  ivec2 i10 = clamp(i00 + ivec2(1, 0), ivec2(0), ivec2(mrtSz2) - 1);
+  ivec2 i01 = clamp(i00 + ivec2(0, 1), ivec2(0), ivec2(mrtSz2) - 1);
+  ivec2 i11 = clamp(i00 + ivec2(1, 1), ivec2(0), ivec2(mrtSz2) - 1);
+  vec4 s00 = texelFetch(colorBuffer, i00, 0);
+  vec4 s10 = texelFetch(colorBuffer, i10, 0);
+  vec4 s01 = texelFetch(colorBuffer, i01, 0);
+  vec4 s11 = texelFetch(colorBuffer, i11, 0);
+  float w00 = (1.0 - fr.x) * (1.0 - fr.y);
+  float w10 = fr.x * (1.0 - fr.y);
+  float w01 = (1.0 - fr.x) * fr.y;
+  float w11 = fr.x * fr.y;
+  // 黑样本剔除（线性域极暗 + 不透明）
+  bool b00 = dot(s00.rgb, vec3(0.299, 0.587, 0.114)) < 0.012 && s00.a > 0.05;
+  bool b10 = dot(s10.rgb, vec3(0.299, 0.587, 0.114)) < 0.012 && s10.a > 0.05;
+  bool b01 = dot(s01.rgb, vec3(0.299, 0.587, 0.114)) < 0.012 && s01.a > 0.05;
+  bool b11 = dot(s11.rgb, vec3(0.299, 0.587, 0.114)) < 0.012 && s11.a > 0.05;
+  float wsum = (b00 ? 0.0 : w00) + (b10 ? 0.0 : w10) + (b01 ? 0.0 : w01) + (b11 ? 0.0 : w11);
+  vec4 currentColor;
+  if (wsum > 1e-4) {
+    currentColor = (s00 * (b00 ? 0.0 : w00) + s10 * (b10 ? 0.0 : w10)
+      + s01 * (b01 ? 0.0 : w01) + s11 * (b11 ? 0.0 : w11)) / wsum;
+  } else {
+    currentColor = mix(mix(s00, s10, fr.x), mix(s01, s11, fr.x), fr.y); // 全黑：保持原样
+  }
   #ifdef SHADOW_LENGTH
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, lowResCoord, 0).rgb, 1.0);
   #endif // SHADOW_LENGTH
@@ -395,12 +416,34 @@ void main() {
   outputColor.rgb = outputColor.rgb + vec3(abs(texture(depthVelocityBuffer, vUv).gb) * 10.0, 0.0);
   #endif // DEBUG_SHOW_VELOCITY
 
-  // 【v49 调查用调试】直显 march 原始输出（current）：隔离 march 侧抖动
+  // 【v49/v59 调查用调试】1=直显 march 原始输出（点采样）；2=直显其 alpha；3=其 rgb×50
   if (u_resolveDebug > 0.5 && u_resolveDebug < 1.5) {
     #ifdef TEMPORAL_UPSCALE
     outputColor = texelFetch(colorBuffer, lowResCoord, 0);
     #else
     outputColor = texelFetch(colorBuffer, coord, 0);
     #endif // TEMPORAL_UPSCALE
+  } else if (u_resolveDebug > 1.5 && u_resolveDebug < 2.5) {
+    #ifdef TEMPORAL_UPSCALE
+    outputColor = vec4(vec3(texelFetch(colorBuffer, lowResCoord, 0).a), 1.0);
+    #else
+    outputColor = vec4(vec3(texelFetch(colorBuffer, coord, 0).a), 1.0);
+    #endif // TEMPORAL_UPSCALE
+  } else if (u_resolveDebug > 2.5 && u_resolveDebug < 3.5) {
+    #ifdef TEMPORAL_UPSCALE
+    outputColor = vec4(texelFetch(colorBuffer, lowResCoord, 0).rgb * 50.0, 1.0);
+    #else
+    outputColor = vec4(texelFetch(colorBuffer, coord, 0).rgb * 50.0, 1.0);
+    #endif // TEMPORAL_UPSCALE
+  } else if (u_resolveDebug > 8.5 && u_resolveDebug < 9.5) {
+    // 【v61 终极隔离】纯红覆盖 resolve 输出：若用户所见「黑块」仍在 → 黑块不在 resolve
+    // 输出里（消毒四次失败的解释），而在 overlay 之后（lensFlare/tonemap/合成）。
+    outputColor = vec4(1.0, 0.0, 0.0, 1.0);
+  } else if (u_resolveDebug > 5.5 && u_resolveDebug < 6.5) {
+    // 【v61b】直显 history 的 rgb×50（黑块处的数值放大——判据校准用）
+    outputColor = vec4(texture(colorHistoryBuffer, vUv).rgb * 50.0, 1.0);
+  } else if (u_resolveDebug > 6.5 && u_resolveDebug < 7.5) {
+    // 【v61c】直显 history 的 alpha（黑块处的 a——「洞 vs 黑」判定用）
+    outputColor = vec4(vec3(texture(colorHistoryBuffer, vUv).a), 1.0);
   }
 }
