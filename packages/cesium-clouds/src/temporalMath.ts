@@ -50,8 +50,14 @@ export function computeTemporalJitter(
   result: Cartesian2
 ): Cartesian2 {
   const offset = bayerOffsets[frame % 16]
-  result.x = (offset.x - 0.5) / lowResWidth
-  result.y = (offset.y - 0.5) / lowResHeight
+  // 【v51 jitter 幅度标定——实验结论：不可减】×0.5 实测：近景 current 抖动 35.8%→10.6%（降 3 倍）
+  // 但 37km 输出抖动无改善（26/23% vs 20/23%）且颗粒恶化 3.7 倍（gradMean 8.49 vs 2.25）——
+  // jitter 幅度的 16 相位超采样是「白点时域平均」的命脉（幅度减半 → 采样覆盖减半 → 白点
+  // 不被平均）。**保持上游语义 ×1.0**。后门保留供真机标定（`__cloudsJitterScale`）。
+  const jitterScale =
+    (globalThis as unknown as { __cloudsJitterScale?: number }).__cloudsJitterScale ?? 1.0
+  result.x = ((offset.x - 0.5) * jitterScale) / lowResWidth
+  result.y = ((offset.y - 0.5) * jitterScale) / lowResHeight
   return result
 }
 
