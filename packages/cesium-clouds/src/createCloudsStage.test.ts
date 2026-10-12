@@ -839,22 +839,22 @@ describe('M4 T7 temporal 编排', () => {
     })
     const inst = resolvePassProbe.instances.at(-1)!
     const camera = scene.camera as { positionWC: Cartesian3 }
-    // 首帧 + 静止帧：motion=0 → α 目标 base，保持 0.1
+    // 首帧 + 静止帧：v47 起 STATIC_FREEZE_DELAY=0 → 静止立即冻结（α=0，history 自持零抖动）
     firePreRender(scene)
     firePreRender(scene)
-    expect(inst.lastMotionAlpha).toBeCloseTo(0.1)
-    // 快速移动 500m（>FULL）→ α 开始上升
+    expect(inst.lastMotionAlpha).toBe(0)
+    // 快速移动 500m（>FULL）→ 运动不冻结，α 走自适应上升
     Cartesian3.add(camera.positionWC, new Cartesian3(500, 0, 0), camera.positionWC)
     firePreRender(scene)
     const a1 = inst.lastMotionAlpha!
-    expect(a1).toBeGreaterThan(0.1)
-    // 持续运动 → 继续逼近 0.4（单调）
+    expect(a1).toBeGreaterThan(0)
+    // 持续运动 → 继续逼近 motionAlpha（单调）
     Cartesian3.add(camera.positionWC, new Cartesian3(500, 0, 0), camera.positionWC)
     firePreRender(scene)
     expect(inst.lastMotionAlpha!).toBeGreaterThan(a1)
-    // 停止 → 立即回落到 base（v44：静止时按预热/冻结覆盖 α，不再逐帧 lerp 过渡）
+    // 停止 → 立即回落到冻结（v44/v47：静止时冻结覆盖 α=0，不再逐帧 lerp 过渡）
     firePreRender(scene)
-    expect(inst.lastMotionAlpha!).toBeCloseTo(0.1)
+    expect(inst.lastMotionAlpha!).toBe(0)
     handle!.destroy()
   })
 

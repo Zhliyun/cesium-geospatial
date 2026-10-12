@@ -39,6 +39,9 @@ uniform float u_reprojectionStrength;
 // 白点=march 能量积分采样方差的 1px 亮度尖峰（伴生暗斑族对称），时序平均
 // （frameUnfreeze）消掉 ~95% 后的残余为每帧随机注入的稳态——邻域中值直接替换。
 uniform float u_spatialDespeckle;
+// 【v49 调查用调试】0=关（缺省零回归）；1=直显 march 原始输出（current，低分块拷贝）——
+// 用于隔离「march 侧 current 抖动」与「resolve 侧放大」（demo `?cloudsResolveDebug=1`）。
+uniform float u_resolveDebug;
 
 in vec2 vUv;
 
@@ -303,13 +306,15 @@ void main() {
   bool currentFrame = bayerValue == frame % 4;
   #else // UPSCALE_DIVISOR == 2
   ivec2 lowResCoord = coord / 4;
+  // 【v48 实验回退】1/64 低密度直通（bayer8x8）实测：抖动 19%→12%（非线性），且细节刷新
+  // 变慢 → 画面块状/更糊（用户核心诉求是「不糊」）→ 回退上游 4×4/16 相位语义。
   int bayerValue = bayerIndices[coord.x % 4][coord.y % 4];
   bool currentFrame = bayerValue == frame % 16;
   #endif // UPSCALE_DIVISOR == 2
-  // 【v44 冻结禁直通】Bayer 直通（每 16 帧 1/16 texel 直出 current）的 return 在一切冻结
-  // 逻辑之前 → 冻结态仍被持续注入 current。冻结判据 = temporalAlpha≈0（createCloudsStage
-  // 冻结时置 α=0）。直通的用途是「fresh 直出帧保持超采样语义」——冻结态无此需求。
-  if (temporalAlpha < 1e-5) currentFrame = false;
+  // 【2026-10-12 v47 恢复直通】曾于冻结态禁直通（防 16 帧周期的 current 注入→抖动），
+  // 但用户真机指出副作用：画面「整体模糊」——直通是**细节持续刷新**的来源（上游画面
+  // 锐利的关键：每 16 帧 1/16 texel 直出 current → 累积值中持续注入新细节）。恢复直通，
+  // 抖动改由「current 抖动本身」解决（march 侧根源）。
   temporalUpscale(coord, lowResCoord, currentFrame, outputColor, outputShadowLength);
   #else // TEMPORAL_UPSCALE
   temporalAntialiasing(coord, outputColor, outputShadowLength);
@@ -372,4 +377,13 @@ void main() {
   #ifdef DEBUG_SHOW_VELOCITY
   outputColor.rgb = outputColor.rgb + vec3(abs(texture(depthVelocityBuffer, vUv).gb) * 10.0, 0.0);
   #endif // DEBUG_SHOW_VELOCITY
+
+  // 【v49 调查用调试】直显 march 原始输出（current）：隔离 march 侧抖动
+  if (u_resolveDebug > 0.5 && u_resolveDebug < 1.5) {
+    #ifdef TEMPORAL_UPSCALE
+    outputColor = texelFetch(colorBuffer, lowResCoord, 0);
+    #else
+    outputColor = texelFetch(colorBuffer, coord, 0);
+    #endif // TEMPORAL_UPSCALE
+  }
 }

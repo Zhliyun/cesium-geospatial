@@ -203,6 +203,9 @@ export interface CloudsPassOptions extends CloudsMainOptions {
    * options.upscaleDivisor 传同值。
    */
   upscaleDivisor?: 1 | 2 | 4
+  /** 【v49 调查用调试】jitter 注入点掩码（1=ray 2=depth 4=阴影相位；缺省 7 全启用）。
+   *  demo `?cloudsJitterMask=`。逐项禁用定位 current 抖动源。 */
+  jitterMask?: number
   /**
    * 【2026-10-09 F2 颗粒带架构收尾】march RT 超分（缺省 1=关零回归）：march/resolve
    * RT 以 ceil(screen×scale) 渲染，overlay LINEAR 下采样回屏幕——每屏幕像素 >1 个
@@ -615,6 +618,9 @@ export function createCloudsPass(
     reprojectionMatrix: () => params.reprojectionMatrix,
     viewReprojectionMatrix: () => params.viewReprojectionMatrix,
     temporalJitter: () => params.temporalJitter,
+    // 【v49 调查用调试】jitter 注入点掩码（位：1=ray 窗口偏移 2=depth 采样偏移 4=阴影相位；
+    // 缺省 7 全启用=零回归）。demo `?cloudsJitterMask=N`——逐项禁用定位 current 抖动源。
+    u_jitterMask: () => options.jitterMask ?? 7,
 
     // 夜间环境底光（方向 B）：march 专有——shadow.frag 生成端不声明不消费
     //（shared 段不注入，Cesium 对未声明 uniform 静默忽略的同理反向）

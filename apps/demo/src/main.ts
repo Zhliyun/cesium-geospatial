@@ -613,6 +613,12 @@ async function main(): Promise<void> {
           // 平均后的残余稳态白点；0=关缺省零回归）
           ...(getNumber('cloudsDespeckle') != null
             ? { spatialDespeckle: getNumber('cloudsDespeckle')! } : {}),
+          // 【v49 调查用调试】?cloudsResolveDebug=1 直显 march 原始输出（current）
+          ...(getNumber('cloudsResolveDebug') != null
+            ? { resolveDebug: getNumber('cloudsResolveDebug')! } : {}),
+          // 【v49 调查用调试】?cloudsJitterMask=N（1=ray 2=depth 4=阴影相位；缺省 7）
+          ...(getNumber('cloudsJitterMask') != null
+            ? { jitterMask: getNumber('cloudsJitterMask')! } : {}),
           // 【2026-10-08 白点治理】?cloudsUnfreezeMip=N STBN 相位分域阈值（mip>N 轮换
           // 治白点；≤N 冻结防云缘闪动；0=全轮换）
           ...(getNumber('cloudsUnfreezeMip') != null

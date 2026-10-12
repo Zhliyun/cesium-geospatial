@@ -272,7 +272,8 @@ void cloudsBridge_reconstructVaryings() {
   // velocity 恒定非 0 → history 错位采样 → 静止时 AABB clip 拉锯 = 云整体抖动）。
   // 换算式：全分窗口 = gl_FragCoord / targetUvScale（targetUvScale = lowRes*4/全分，非
   // temporal 时 (1,1) 恒等——M2/M3 行为不变）。jitter 项已是全分像素单位，不随换算缩放。
-  vec2 windowCoord = gl_FragCoord.xy / targetUvScale + temporalJitter * resolution;
+  vec2 windowCoord = gl_FragCoord.xy / targetUvScale
+    + ((int(u_jitterMask) & 1) != 0 ? temporalJitter * resolution : vec2(0.0));
   vec4 eyeNear = czm_windowToEyeCoordinates(vec4(windowCoord, 0.0, 1.0));
   vec4 eyeFar = czm_windowToEyeCoordinates(vec4(windowCoord, 1.0, 1.0));
   if (abs(eyeNear.w) > 1e-10) eyeNear /= eyeNear.w;
@@ -391,7 +392,8 @@ function surgeryCloudsFrag(source: string): string {
   // 固化成扩散黑块）；全分无超分收益纯伤害。低分（targetUvScale>1）下 jitter 提供
   // 亚 texel 深度采样（超分重建边缘，上游语义）。
   #ifdef LOW_RES_MARCH
-  float logDepth = texture(depthBuffer, vUv * targetUvScale + temporalJitter).r;
+  float logDepth = texture(depthBuffer, vUv * targetUvScale
+    + ((int(u_jitterMask) & 2) != 0 ? temporalJitter : vec2(0.0))).r;
   #else
   float logDepth = texture(depthBuffer, vUv * targetUvScale).r;
   #endif

@@ -236,6 +236,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * 配合 frameUnfreeze 使用（时序平均消 ~95%，滤波清残余稳态孤点）。demo `?cloudsDespeckle=1`。
    */
   spatialDespeckle?: number
+  /** 【v49 调查用调试】0=关缺省；1=直显 march 原始输出（current）。demo `?cloudsResolveDebug=1`。 */
+  resolveDebug?: number
   /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
@@ -498,8 +500,10 @@ const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 12
 // 颗粒时域平均掉（俯视远云域=白点重灾区，与 2026-10-08 白点治理同源）；随后切
 // strength=0 + α=0 冻结（history 自持——帧间差分 0.000%，见 spec 2026-10-10 §8）。
 // 窗口取 64 帧 ≈ 1 秒 @60fps，覆盖 STBN 64 层轮换一轮。
-/** 静止冻结前的预热帧数（持续累积平均的窗口）。 */
-const STATIC_FREEZE_DELAY_FRAMES = 64
+/** 静止冻结前的预热帧数（持续累积平均的窗口）。
+ *  【2026-10-12 v47】0 = 无预热：用户真机指出预热期（α=0.1 累积）「开始若干秒出现抖动」，
+ *  要求「从始至终不能抖」。且预热 EMA 对稳态白点无效（实测）——预热的两项收益均不成立。 */
+const STATIC_FREEZE_DELAY_FRAMES = 0
 /** 预热期 EMA α（= cloudsDefaultParameters.temporalAlpha 旧缺省值）。 */
 const STATIC_WARMUP_ALPHA = 0.1
 
@@ -770,7 +774,9 @@ function buildCloudsStageImpl(
       temporalUpscale: temporal,
       // 涂抹修复 T1（2026-09-02）：applied.upscaleDivisor 已按「用户显式 > 档位 > 4」合并——
       // 防止 options.upscaleDivisor 原键（若有）漏档位合并，这里显式覆盖为 applied 值
-      upscaleDivisor: applied.upscaleDivisor
+      upscaleDivisor: applied.upscaleDivisor,
+      // 【v49 调查用调试】jitter 注入点掩码（demo ?cloudsJitterMask=）
+      jitterMask: options.jitterMask
     })
 
     // ── ShadowPass 生成端（options.shadowPass=false 跳过——诊断基线 Beer=1）──
@@ -867,6 +873,8 @@ function buildCloudsStageImpl(
           frame: () => params.marchFrame ?? params.frame,
           // 【2026-10-08 白点治理】输出端孤点中值滤波（demo ?cloudsDespeckle=1）
           spatialDespeckle: options.spatialDespeckle,
+          // 【v49】调查用调试：直显 current（demo ?cloudsResolveDebug=1）
+          resolveDebug: options.resolveDebug,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,

@@ -191,6 +191,8 @@ MediaSample sampleMedia(
   // N=4 半分 march 的 texel 粗→隐式 LOD 反而高（意外平滑）——N=1 全分下必须显式。
   // 换算 ×1.5（用户现象「越远颗粒越强」=缩小采样欠奈奎斯特，weather mip 尺度对
   // shape 高频不足——加大远云压制；近云 mip≈0-1 域受影响小）。
+  // 【v50 实验回退】shape LOD+1.5 实测 current 抖动无改善（56/46% vs 基线 60/48）——
+  // shape 高频不是 ray 敏感度来源（同 E2 时的结论）。恢复 E2 定稿值。
   float shape = textureLod(shapeTexture, shapePosition, mipLevel * 1.5).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 

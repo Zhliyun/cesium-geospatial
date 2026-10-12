@@ -45,6 +45,9 @@ uniform float cameraNear;
 uniform float cameraFar;
 uniform float cameraHeight;
 uniform vec2 temporalJitter;
+// 【v49 调查用调试】jitter 注入点掩码（位：1=ray 窗口偏移 2=depth 采样偏移 4=阴影相位；
+// 缺省 7 全启用=零回归）。逐项禁用定位 current 抖动源（demo ?cloudsJitterMask=N）。
+uniform float u_jitterMask;
 uniform vec2 targetUvScale;
 uniform float mipLevelScale;
 
@@ -271,7 +274,8 @@ float sampleShadowOpticalDepthPCF(
     offset = vogelDisk(
       i,
       SHADOW_SAMPLE_COUNT,
-      interleavedGradientNoise(gl_FragCoord.xy + temporalJitter * resolution) * PI2
+      interleavedGradientNoise(gl_FragCoord.xy
+        + ((int(u_jitterMask) & 4) != 0 ? temporalJitter * resolution : vec2(0.0))) * PI2
     );
     sum += readShadowOpticalDepth(
       uv + offset * radius * shadowTexelSize,

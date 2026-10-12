@@ -57,6 +57,8 @@ export interface CloudsResolvePassOptions {
    * demo `?cloudsDespeckle=1`。
    */
   spatialDespeckle?: number
+  /** 【v49 调查用调试】0=关缺省；1=直显 march 原始输出（current）。demo `?cloudsResolveDebug=1`。 */
+  resolveDebug?: number
   /**
    * 【2026-10-09 F2】逐帧启用闭包（缺省恒启用）：false 时 resolve update 不压 command
    * ——与 march enabled 同源（overlay heightFade 全隐时全链跳过）。
@@ -152,7 +154,8 @@ export function createCloudsResolvePass(
     temporalAlpha: () => temporalAlpha,
     temporalDisocclusion: () => temporalDisocclusion,
     u_reprojectionStrength: () => reprojectionStrength,
-    u_spatialDespeckle: () => options.spatialDespeckle ?? 0
+    u_spatialDespeckle: () => options.spatialDespeckle ?? 0,
+    u_resolveDebug: () => options.resolveDebug ?? 0
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——

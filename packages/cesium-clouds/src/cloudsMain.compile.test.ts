@@ -241,7 +241,8 @@ describe('M4 T6 jitter surgery', () => {
   it('ray 重建消费 temporalJitter + 低分域换算（gl_FragCoord / targetUvScale + jitter，一处 windowCoord 近/远共用）', () => {
     const src = buildCloudsMainFragmentShader({})
     // 2026-08-17 抖动修复：低分 march 的 gl_FragCoord 必须除以 targetUvScale 换算到全分窗口域
-    expect(src).toContain('vec2 windowCoord = gl_FragCoord.xy / targetUvScale + temporalJitter * resolution;')
+    // 【v49】ray 窗口偏移受 jitter 掩码 bit0 控制（拆分行 + 三元条件）
+    expect(src).toContain('vec2 windowCoord = gl_FragCoord.xy / targetUvScale\n    + ((int(u_jitterMask) & 1) != 0 ? temporalJitter * resolution : vec2(0.0));')
     expect(src).toContain('czm_windowToEyeCoordinates(vec4(windowCoord, 0.0, 1.0))')
     expect(src).toContain('czm_windowToEyeCoordinates(vec4(windowCoord, 1.0, 1.0))')
   })
@@ -568,7 +569,8 @@ describe('月光光照项（方向 C）', () => {
 describe('穿云黑块修复：depth 采样 jitter 仅 LOW_RES_MARCH（upscaleDivisor>1）启用', () => {
   // 两采样行都在源文本里（#ifdef 由 GPU 预处理裁剪）——开关语义断言 #define LOW_RES_MARCH 注入与否
   const NO_JITTER_SAMPLE = 'texture(depthBuffer, vUv * targetUvScale).r'
-  const JITTER_SAMPLE = 'texture(depthBuffer, vUv * targetUvScale + temporalJitter).r'
+  // 【v49】jitter 注入点掩码（?cloudsJitterMask=）——文本含条件表达式（拆分行 + 三元）
+  const JITTER_SAMPLE = 'texture(depthBuffer, vUv * targetUvScale\n    + ((int(u_jitterMask) & 2) != 0 ? temporalJitter : vec2(0.0))).r'
 
   it('全分（缺省 upscaleDivisor=1）：不注入 LOW_RES_MARCH（GPU 预处理走无 jitter 深度采样）', () => {
     const src = buildCloudsMainFragmentShader(M2_OPTIONS)
