@@ -839,14 +839,11 @@ describe('M4 T7 temporal 编排', () => {
     })
     const inst = resolvePassProbe.instances.at(-1)!
     const camera = scene.camera as { positionWC: Cartesian3 }
-    // 首帧 + 静止帧：v62 起 8 帧 EMA 预热（α=0.125：时域平均压制 march 暗点/白点——
-    // N=4 下被放大为 8×8 黑块），第 9 帧起冻结（α=0，禁直通 → 零注入 → 0% 抖动）
+    // 首帧 + 静止帧：v66 回归上游语义（撤销静止冻结）——静止 α = 显式 base（本用例传 0.1）
     firePreRender(scene)
     firePreRender(scene)
-    expect(inst.lastMotionAlpha).toBe(0.125)
-    for (let i = 0; i < 7; i++) firePreRender(scene)
-    expect(inst.lastMotionAlpha).toBe(0)
-    // 快速移动 500m（>FULL）→ 运动不冻结，α 走自适应上升
+    expect(inst.lastMotionAlpha).toBeCloseTo(0.1)
+    // 快速移动 500m（>FULL）→ 运动自适应 α 上升
     Cartesian3.add(camera.positionWC, new Cartesian3(500, 0, 0), camera.positionWC)
     firePreRender(scene)
     const a1 = inst.lastMotionAlpha!
@@ -855,11 +852,11 @@ describe('M4 T7 temporal 编排', () => {
     Cartesian3.add(camera.positionWC, new Cartesian3(500, 0, 0), camera.positionWC)
     firePreRender(scene)
     expect(inst.lastMotionAlpha!).toBeGreaterThan(a1)
-    // 停止 → 8 帧预热（0.125），之后冻结（0）
+    // 停止 → 逐帧 lerp 回落（computeMotionAlpha 平滑）
     firePreRender(scene)
-    expect(inst.lastMotionAlpha!).toBe(0.125)
-    for (let i = 0; i < 8; i++) firePreRender(scene)
-    expect(inst.lastMotionAlpha!).toBe(0)
+    const a3 = inst.lastMotionAlpha!
+    firePreRender(scene)
+    expect(inst.lastMotionAlpha!).toBeLessThan(a3)
     handle!.destroy()
   })
 

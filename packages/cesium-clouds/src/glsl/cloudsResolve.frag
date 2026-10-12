@@ -231,12 +231,9 @@ void temporalUpscale(
     #endif // SHADOW_LENGTH
     return; // Disocclusion rejection
   }
-  // 【v54 冻结跳过 AABB】v53 实测：clip 的邻域（低分 texel）不抹块（blockSignal 反而 1.093）
-  // 且引入 8.9% 抖动 —— 回退到 v52 的「冻结自持」（0.03% 抖动）。块由空域上采样滤波解决
-  //（见 currentColor 的 4 邻域平均——那才是块边界的正解）。
-  vec4 clippedColor = temporalAlpha < 1e-5
-    ? historyColor
-    : varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
+  // 【v66 回归上游语义】clip 始终生效（撤销 v43/v44 的「静止跳过 AABB」——skip 使 history
+  // 完全自持=冻结）。clip 的 AABB 调整是全分 history 的持续演化机制（噪声压制 + 细节刷新）。
+  vec4 clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
   // 【2026-09-02 静止收敛抖动修复】three 原文 outputColor = clippedColor 直出——variance
   // clip 的 AABB 逐帧随 current(Bayer ±2px 轮换采样)移动,history 被 clip 拉向本帧
   // current → 输出跟随 current 轮换不收敛。高对比云区(近云视角)显示层持续抖动
@@ -304,10 +301,8 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
     #endif // SHADOW_LENGTH
     return; // Disocclusion rejection
   }
-  // 【v54】同 upscale 分支：冻结跳过 clip（块由空域上采样滤波解决）。
-  vec4 clippedColor = temporalAlpha < 1e-5
-    ? historyColor
-    : varianceClipping(colorBuffer, coord, currentColor, historyColor);
+  // 【v66】同 upscale 分支：clip 始终生效（回归上游语义）。
+  vec4 clippedColor = varianceClipping(colorBuffer, coord, currentColor, historyColor);
   // 【2026-10-09 远云平均自适应】α 按云前距离衰减：远云视差小（屏幕近乎静止，可狠平均）
   // 且欠采样噪声幅度大（需要狠平均）——双契合。50km→α/2 起步（2e-5/米）。
   float aEff = temporalAlpha / (1.0 + max(0.0, depthVelocity.r) * 2e-5);
@@ -348,11 +343,10 @@ void main() {
   int bayerValue = bayerIndices[coord.x % 4][coord.y % 4];
   bool currentFrame = bayerValue == frame % 16;
   #endif // UPSCALE_DIVISOR == 2
-  // 【v52 冻结禁直通（二回）】v47 曾恢复直通（治「模糊」）——但当时的「模糊」根因是**预热期
-  // EMA 平均**（history 被 α=0.1 累积低通），而非禁直通本身。预热已于 v47 移除 → 冻结时
-  // history = 加载后最初的 march 原始输出（未平均，锐利）；此时禁直通 = 零 current 注入
-  // （0% 抖动）且不失锐利。重测此组合（v45 的结论受预热污染）。
-  if (temporalAlpha < 1e-5) currentFrame = false;
+  // 【v66 回归上游语义（用户拍板 A，2026-10-12）】撤销「冻结禁直通」：上游无冻结——时域
+  // 累积（clip + 直通）是噪声压制（白点/暗点=采样方差）的唯一机制；冻结虽得 0.02% 静止
+  // 抖动，却把 march 的 0.1% 固有噪声固化为 8×8 黑块（12 项修复尝试实测不可参数化消除）。
+  // 用户拍板：接受上游式微抖，换取噪声压制 + 画面锐利（无黑块）。
   temporalUpscale(coord, lowResCoord, currentFrame, outputColor, outputShadowLength);
   #else // TEMPORAL_UPSCALE
   temporalAntialiasing(coord, outputColor, outputShadowLength);
