@@ -50,14 +50,10 @@ export function computeTemporalJitter(
   result: Cartesian2
 ): Cartesian2 {
   const offset = bayerOffsets[frame % 16]
-  // 【v67 jitter 幅度定稿 0.25（2026-10-12 用户拍板 A 后的抖动攻关结论）】ray 偏移是静止
-  // 抖动 88% 的来源（禁 → 1.94%）；幅度曲线实测（上游语义下）：×1.0→16.7%、×0.5→9.3%、
-  // ×0.25→6.3%、×0.1→3.3-5.0%（但块结构信号升至 0.998=低分块开始显形）。定档 0.25：
-  // 抖动降 62%、块未显形、颗粒最低档。后门 `__cloudsJitterScale` 保留供真机微调。
-  const jitterScale =
-    (globalThis as unknown as { __cloudsJitterScale?: number }).__cloudsJitterScale ?? 0.25
-  result.x = ((offset.x - 0.5) * jitterScale) / lowResWidth
-  result.y = ((offset.y - 0.5) * jitterScale) / lowResHeight
+  // 【v77】jitter 幅度缩放移交调用方（createCloudsStage 按 options.jitterScale，URL
+  // ?cloudsJitterScale= 可调）——本函数保持纯"单位偏移"，便于测试与复用。
+  result.x = (offset.x - 0.5) / lowResWidth
+  result.y = (offset.y - 0.5) / lowResHeight
   return result
 }
 

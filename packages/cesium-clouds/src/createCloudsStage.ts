@@ -238,6 +238,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   spatialDespeckle?: number
   /** 【v49 调查用调试】0=关缺省；1=直显 march 原始输出（current）。demo `?cloudsResolveDebug=1`。 */
   resolveDebug?: number
+  /** 【v77】jitter 幅度缩放（缺省 0.25）——「颗粒 ↔ 抖动」旋钮。demo `?cloudsJitterScale=`。 */
+  jitterScale?: number
   /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
@@ -1047,6 +1049,13 @@ function buildCloudsStageImpl(
           cloudsPass.marchHeight,
           params.temporalJitter
         )
+        // 【v77】jitter 幅度缩放（URL ?cloudsJitterScale=）——「颗粒 ↔ 抖动」的唯一直接
+        // 旋钮：jitter 的 16 相位超采样越强 → march 采样方差（颗粒/白点）被时域平均得越好，
+        // 但 ray 偏移引起的静止抖动随之上升。实测（上游语义，7552m）：×1.0→抖 16.7%、
+        // ×0.5→9.3%、×0.25→6.3%（缺省，块结构未显形）、×0.1→3.3%（低分块显形）。
+        const jitterScale = options.jitterScale ?? 0.25
+        params.temporalJitter.x *= jitterScale
+        params.temporalJitter.y *= jitterScale
         const viewMatrix = camera.viewMatrix
         const projectionMatrix = (camera.frustum as unknown as { projectionMatrix: Matrix4 })
           .projectionMatrix
