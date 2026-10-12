@@ -852,11 +852,9 @@ describe('M4 T7 temporal 编排', () => {
     Cartesian3.add(camera.positionWC, new Cartesian3(500, 0, 0), camera.positionWC)
     firePreRender(scene)
     expect(inst.lastMotionAlpha!).toBeGreaterThan(a1)
-    // 停止 → 逐帧回落（lerp 向 base）
+    // 停止 → 立即回落到 base（v44：静止时按预热/冻结覆盖 α，不再逐帧 lerp 过渡）
     firePreRender(scene)
-    const a3 = inst.lastMotionAlpha!
-    firePreRender(scene)
-    expect(inst.lastMotionAlpha!).toBeLessThan(a3)
+    expect(inst.lastMotionAlpha!).toBeCloseTo(0.1)
     handle!.destroy()
   })
 

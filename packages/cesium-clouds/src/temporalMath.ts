@@ -82,23 +82,29 @@ export function buildReprojectionMatrices(
   currentProjectionMatrix: Matrix4,
   currentInverseViewMatrix: Matrix4,
   jitter: Cartesian2,
-  result: { reprojectionMatrix: Matrix4; viewReprojectionMatrix: Matrix4 }
+  result: { reprojectionMatrix: Matrix4; viewReprojectionMatrix: Matrix4 },
+  prevJitter?: Cartesian2
 ): void {
   const prevP = previous?.projectionMatrix ?? currentProjectionMatrix
   const prevV = previous?.viewMatrix ?? currentViewMatrix
 
   // jitteredPrevP：clone 后改 column2
   Matrix4.clone(prevP, result.reprojectionMatrix)
-  // 【2026-10-10 v34 实验】jitter 注入注释掉：验证「本帧 jitter 平移 × 上帧矩阵」是否导致
-  // prevUv 每帧随机偏移（±2px）→ history 采样位置抖动 → 云高频结构被采成自激噪声。
-  // const col = Matrix4.getColumn(result.reprojectionMatrix, 2, columnScratch)
-  // col.x += jitter.x * 2
-  // col.y += jitter.y * 2
-  // Matrix4.setColumn(result.reprojectionMatrix, 2, col, result.reprojectionMatrix)
+  // 【2026-10-12 v44 上帧 jitter 补偿】本仓库 jitter 经 cloudsBridge 窗口坐标作用于 ray
+  //（windowCoord = gl_FragCoord/targetUvScale + temporalJitter*resolution）：本帧像素 p 的
+  // ray 看向 p + j(t)，命中世界点 P 的无 jitter 投影即 p + j(t)。要采「上帧同世界方向」的
+  // 像素 q（q + j(t−1) = p + j(t) → q = p + j(t) − j(t−1)），须在 prevClip 减去**上帧** jitter。
+  // 本帧 jitter 不注入（已作用于 ray，再注入=双重计数；v34 实测本帧错误注入使静止画面
+  // 帧间差分 27.4%，为位移 2j 的错位采样）。无 prevJitter（首帧）不补偿，一帧后自愈。
+  if (prevJitter != null) {
+    const col = Matrix4.getColumn(result.reprojectionMatrix, 2, columnScratch)
+    col.x -= prevJitter.x * 2
+    col.y -= prevJitter.y * 2
+    Matrix4.setColumn(result.reprojectionMatrix, 2, col, result.reprojectionMatrix)
+  }
   void jitter
-  void columnScratch
 
-  // reprojectionMatrix = jitteredPrevP * prevV
+  // reprojectionMatrix = (prevP − prevJitter) * prevV
   Matrix4.multiply(result.reprojectionMatrix, prevV, result.reprojectionMatrix)
   // viewReprojectionMatrix = reprojectionMatrix * currentInverseView
   Matrix4.multiply(

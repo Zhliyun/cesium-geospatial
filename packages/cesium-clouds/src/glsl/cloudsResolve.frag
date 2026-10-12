@@ -177,13 +177,13 @@ void temporalUpscale(
   // 遮挡关系翻转，不信任 history 直出 current（同 prevUv 越界 rejection 路径）。阈值
   // 默认 0.5：跨云边界错采 |Δa|=1（0↔1）稳触发；云边缘正常相位噪声 |Δa|<0.3 不误杀
   // （误杀代价仅该 texel 一帧直出=可接受）。
-  // 【v43 静止禁用 rejection】rejection 判据 |Δa|>0.5 在静止场景下**误触发**：jitter 相位
-  // 轮换让云缘位置每帧亚像素移动 → current.a 与 history.a 在云缘天然差异大 → 被判为
-  // 「遮挡翻转」→ 直出 current（跟随 march 抖动）。而 rejection 的本意是防「运动导致
-  // history 错采」——静止时不存在该问题（2026-10-10 实测：静止禁用后帧间差分 13-17%→0.000%）。
-  // 以 u_reprojectionStrength（1=运动/0=静止）门控：运动时保留原语义。
-  if (abs(currentColor.a - historyColor.a) > temporalDisocclusion
-      && u_reprojectionStrength > 0.5) {
+  // 【2026-10-12 v44 rejection 退役】原判据 |Δa|>temporalDisocclusion 在 jitter 相位轮换下
+  // 云缘恒成立（那不是「遮挡翻转」，而是亚像素抖动的正常表现）→ 直出 current（跟随 march
+  // 抖动；运动时尤为明显——用户 2026-10-12 真机报告「拖动相机时类似抖动」）。其原修的两个
+  // 黑块 bug（2026-09-02 云地平线 / 2026-09-03 穿云）根因均为 velocity 错位 → history 采到
+  // 死值——该错位已由 v44 重投影修复消除（jitter 双重注入移除 + 上帧 jitter 补偿）。
+  // 上游 resolve 本就无 rejection。条件恒 false 保留分支体便于故障回退（GLSL 裁剪死代码）。
+  if (false && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
@@ -193,9 +193,10 @@ void temporalUpscale(
   // 【v43 静止跳过 AABB】AABB 由 current 邻域每帧重算（jitter 相位轮换）→ 边界缓慢移动 →
   // history 被间歇拉出 → 残余抖动 3.7-6%（2026-10-10 实测）。静止时 history 自持不漂移，
   // AABB 无保护作用（防的是运动鬼影）→ 直接输出 history（0.000%）。同时省 9 次邻域采样。
-  vec4 clippedColor = u_reprojectionStrength > 0.5
-    ? varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma)
-    : historyColor;
+  // 冻结判据 = temporalAlpha≈0（预热期 α=0.1 仍走 clip 累积——时域平均治颗粒）。
+  vec4 clippedColor = temporalAlpha < 1e-5
+    ? historyColor
+    : varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
   // 【2026-09-02 静止收敛抖动修复】three 原文 outputColor = clippedColor 直出——variance
   // clip 的 AABB 逐帧随 current(Bayer ±2px 轮换采样)移动,history 被 clip 拉向本帧
   // current → 输出跟随 current 轮换不收敛。高对比云区(近云视角)显示层持续抖动
@@ -250,13 +251,13 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   // （N=4 时代默认档），1ce0d93 默认档切 N=1 走本分支后补丁丢失：穿云 velocity 跨层错位 →
   // history 采到无效 texel（黑）→ γ=2 宽 AABB 剪不住 → mix 90% 黑 history 固化扩散（傍晚
   // 穿云黑块 A/B 复现实证）。|Δa|>阈 = 云/非云遮挡关系翻转，不信任 history 直出 current。
-  // 【v43 静止禁用 rejection】rejection 判据 |Δa|>0.5 在静止场景下**误触发**：jitter 相位
-  // 轮换让云缘位置每帧亚像素移动 → current.a 与 history.a 在云缘天然差异大 → 被判为
-  // 「遮挡翻转」→ 直出 current（跟随 march 抖动）。而 rejection 的本意是防「运动导致
-  // history 错采」——静止时不存在该问题（2026-10-10 实测：静止禁用后帧间差分 13-17%→0.000%）。
-  // 以 u_reprojectionStrength（1=运动/0=静止）门控：运动时保留原语义。
-  if (abs(currentColor.a - historyColor.a) > temporalDisocclusion
-      && u_reprojectionStrength > 0.5) {
+  // 【2026-10-12 v44 rejection 退役】原判据 |Δa|>temporalDisocclusion 在 jitter 相位轮换下
+  // 云缘恒成立（那不是「遮挡翻转」，而是亚像素抖动的正常表现）→ 直出 current（跟随 march
+  // 抖动；运动时尤为明显——用户 2026-10-12 真机报告「拖动相机时类似抖动」）。其原修的两个
+  // 黑块 bug（2026-09-02 云地平线 / 2026-09-03 穿云）根因均为 velocity 错位 → history 采到
+  // 死值——该错位已由 v44 重投影修复消除（jitter 双重注入移除 + 上帧 jitter 补偿）。
+  // 上游 resolve 本就无 rejection。条件恒 false 保留分支体便于故障回退（GLSL 裁剪死代码）。
+  if (false && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
@@ -264,9 +265,9 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
     return; // Disocclusion rejection
   }
   // 【v43 静止跳过 AABB】同 upscale 分支：静止时 history 自持，AABB 无保护作用。
-  vec4 clippedColor = u_reprojectionStrength > 0.5
-    ? varianceClipping(colorBuffer, coord, currentColor, historyColor)
-    : historyColor;
+  vec4 clippedColor = temporalAlpha < 1e-5
+    ? historyColor
+    : varianceClipping(colorBuffer, coord, currentColor, historyColor);
   // 【2026-10-09 远云平均自适应】α 按云前距离衰减：远云视差小（屏幕近乎静止，可狠平均）
   // 且欠采样噪声幅度大（需要狠平均）——双契合。50km→α/2 起步（2e-5/米）。
   float aEff = temporalAlpha / (1.0 + max(0.0, depthVelocity.r) * 2e-5);
@@ -305,6 +306,10 @@ void main() {
   int bayerValue = bayerIndices[coord.x % 4][coord.y % 4];
   bool currentFrame = bayerValue == frame % 16;
   #endif // UPSCALE_DIVISOR == 2
+  // 【v44 冻结禁直通】Bayer 直通（每 16 帧 1/16 texel 直出 current）的 return 在一切冻结
+  // 逻辑之前 → 冻结态仍被持续注入 current。冻结判据 = temporalAlpha≈0（createCloudsStage
+  // 冻结时置 α=0）。直通的用途是「fresh 直出帧保持超采样语义」——冻结态无此需求。
+  if (temporalAlpha < 1e-5) currentFrame = false;
   temporalUpscale(coord, lowResCoord, currentFrame, outputColor, outputShadowLength);
   #else // TEMPORAL_UPSCALE
   temporalAntialiasing(coord, outputColor, outputShadowLength);

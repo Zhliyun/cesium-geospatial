@@ -493,6 +493,16 @@ void main() {
 // 亮度平衡；注意 E 与 lf thresholdLevel=3.0 强耦合——E 调高亮云会参与 flare 能量提取）。
 const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 12
 
+// ── 静止预热 + 冻结（2026-10-12 v44）────────────────────────────────────────
+// 静止时先以正常累积（clip + EMA）运行 STATIC_FREEZE_DELAY_FRAMES 帧，把 march 采样白点/
+// 颗粒时域平均掉（俯视远云域=白点重灾区，与 2026-10-08 白点治理同源）；随后切
+// strength=0 + α=0 冻结（history 自持——帧间差分 0.000%，见 spec 2026-10-10 §8）。
+// 窗口取 64 帧 ≈ 1 秒 @60fps，覆盖 STBN 64 层轮换一轮。
+/** 静止冻结前的预热帧数（持续累积平均的窗口）。 */
+const STATIC_FREEZE_DELAY_FRAMES = 64
+/** 预热期 EMA α（= cloudsDefaultParameters.temporalAlpha 旧缺省值）。 */
+const STATIC_WARMUP_ALPHA = 0.1
+
 // ── 高空云层渐隐（2026-09-03）───────────────────────────────────────────────
 // 太空俯视（demo 默认开场 16136km）下 march 采样域外的伪影（云形 mip 糊化/颗粒/TAA 残迹）
 // 不可根治且视觉贡献趋零——overlay 输出按相机地心高度渐隐：<50km 全显（近地/航空体验域
@@ -881,6 +891,12 @@ function buildCloudsStageImpl(
     // 运动自适应 α（T2，2026-09-02）：上帧 look 方向（旋转分量）+ 当前 α 状态（lerp 平滑）
     let prevDirWC: Cartesian3 | undefined
     let motionAlphaCurrent: number | undefined
+    // 【v44 静止预热计数】连续静止帧数：静止前 STATIC_FREEZE_DELAY_FRAMES 帧维持
+    // 正常时域累积（EMA α=0.1 + clip：把 march 采样白点/颗粒平均掉——俯视远云域白点
+    // 重灾区），之后切 strength=0 + α=0 冻结（零抖动）。计数随运动清零。
+    let staticFrameCount = 0
+    // 【v44 上帧 jitter 快照】重投影矩阵的 jitter 补偿用（见 buildReprojectionMatrices）。
+    let prevJitter: Cartesian2 | undefined
     // 诊断冻结状态（?cloudsShadowFreeze=1）：首帧 update 过后置 true
     let matricesFrozen = false
     const onPreRender = (time: JulianDate): void => {
@@ -1035,10 +1051,21 @@ function buildCloudsStageImpl(
         const viewMatrix = camera.viewMatrix
         const projectionMatrix = (camera.frustum as unknown as { projectionMatrix: Matrix4 })
           .projectionMatrix
-        buildReprojectionMatrices(prevCamera, viewMatrix, projectionMatrix, camera.inverseViewMatrix, params.temporalJitter, {
-          reprojectionMatrix: params.reprojectionMatrix,
-          viewReprojectionMatrix: params.viewReprojectionMatrix
-        })
+        buildReprojectionMatrices(
+          prevCamera,
+          viewMatrix,
+          projectionMatrix,
+          camera.inverseViewMatrix,
+          params.temporalJitter,
+          {
+            reprojectionMatrix: params.reprojectionMatrix,
+            viewReprojectionMatrix: params.viewReprojectionMatrix
+          },
+          prevJitter
+        )
+        // 【v44】保存本帧 jitter 供下帧重投影补偿（clone——params.temporalJitter 每帧覆写）
+        if (prevJitter == null) prevJitter = Cartesian2.clone(params.temporalJitter, new Cartesian2())
+        else Cartesian2.clone(params.temporalJitter, prevJitter)
         // 帧末存本帧快照（clone——Cesium camera 矩阵是 live 引用，必须拷贝）
         prevCamera = {
           viewMatrix: Matrix4.clone(viewMatrix, new Matrix4()),
@@ -1074,13 +1101,39 @@ function buildCloudsStageImpl(
         state.shaftMotionScale =
           1 + (params.shaftMotionBoost - 1) * Math.min(1, Math.max(0, motionM / 50))
 
-        // 【v35 静止重投影禁用】静止帧（motionM≈0）velocity 归零：jitter 16 相位轮换使
-        // 「同一像素相邻帧的 ray」指向不同亚像素位置，而 history 每像素存的是各相位混合的
-        // 时域值——重投影无法正确对齐（prevUv 每帧随机偏移 ±2px）→ 云高频结构被采成自激
-        // 噪声（2026-10-10 探针链实测：保留任何 velocity 补偿 ≥27%，完全禁用 0.003%）。
-        // 阈值复用 MOTION_ALPHA_START_M（1m/帧）：微动时屏幕位移 <1px/帧，禁用无感知；
-        // 真实运动保持重投影（防拖影/鬼影）。
+        // 【v44 静止预热 + 冻结】静止前 STATIC_FREEZE_DELAY_FRAMES 帧维持正常累积
+        // （clip + α=0.1 EMA：时域平均消除 march 采样白点/颗粒——俯视远云域重灾区，
+        // 2026-10-08 白点治理同源），之后冻结（strength=0 + α=0：输出 = history 自持，
+        // 零抖动）。预热窗口 64 帧 ≈ 1 秒（覆盖 STBN 64 层轮换一轮）。运动时清计数。
+        // 调试后门（临时）：__cloudsFreezeDelay = -1 → 重置预热计数（重新预热）；
+        // 其他值 → 覆盖冻结延迟帧数；__cloudsWarmupAlpha → 覆盖预热 α。用于同页扫描参数。
+        const dbg = globalThis as unknown as {
+          __cloudsFreezeDelay?: number
+          __cloudsWarmupAlpha?: number
+        }
+        if (dbg.__cloudsFreezeDelay === -1) staticFrameCount = 0
+        staticFrameCount = motionM < MOTION_ALPHA_START_M ? staticFrameCount + 1 : 0
+        const freezeDelay =
+          dbg.__cloudsFreezeDelay != null && dbg.__cloudsFreezeDelay >= 0
+            ? dbg.__cloudsFreezeDelay
+            : STATIC_FREEZE_DELAY_FRAMES
+        const warmupAlpha =
+          dbg.__cloudsWarmupAlpha != null ? dbg.__cloudsWarmupAlpha : STATIC_WARMUP_ALPHA
+        const frozen = staticFrameCount > freezeDelay
+        // 调试后门（临时）：读内部状态判定冻结是否生效
+        ;(globalThis as unknown as { __cloudsStaticInfo?: unknown }).__cloudsStaticInfo = {
+          motionM,
+          staticFrameCount,
+          frozen
+        }
+        // 静止（含预热期）一律禁重投影：相机静止无需位移补偿，而 jitter 相位轮换使
+        // prevUv 每帧偏移（p + j(t) − j(t−1)）→ 采样位置游走 → EMA 平均的是「不同位置」
+        // 的样本（无效平均，实测 α 0.1→0.05 颗粒无改善）。禁后采样钉在 vUv → 预热期
+        // EMA 平均的是「同位置 16 相位超采样」→ 有效降噪。冻结由 α=0 门控（shader 内）。
         resolvePass?.setReprojectionStrength(motionM < MOTION_ALPHA_START_M ? 0 : 1)
+        if (motionM < MOTION_ALPHA_START_M) {
+          resolvePass?.setTemporalAlpha(frozen ? 0 : warmupAlpha)
+        }
 
         // 静止冻结判定（2026-09-02）：存上帧相机位置 + T2 上帧 look 方向（块末统一更新）
         prevCameraPos = Cartesian3.clone(camera.positionWC, prevCameraPos ?? new Cartesian3())
