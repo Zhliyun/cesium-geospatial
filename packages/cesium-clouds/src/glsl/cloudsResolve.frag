@@ -406,6 +406,32 @@ void main() {
   outputColor = vec4(turbo(outputShadowLength * 0.05), 1.0);
   #endif // defined(SHADOW_LENGTH) && defined(DEBUG_SHOW_SHADOW_LENGTH)
 
+  // 【v68 黑点定位】u_resolveDebug=10：把「相对暗孤点」（比 5×5 低分邻域均值暗 45%+ 的
+  // 中暗像素）染洋红——用户所见 1-2px 黑点在 resolve 输出内与否的判决（不在则黑点在
+  // overlay/tonemap 阶段产生）。
+  if (u_resolveDebug > 9.5 && u_resolveDebug < 10.5) {
+    #ifdef TEMPORAL_UPSCALE
+    ivec2 dc = lowResCoord;
+    #else
+    ivec2 dc = coord;
+    #endif // TEMPORAL_UPSCALE
+    vec4 self = texelFetch(colorBuffer, dc, 0);
+    float ls = dot(self.rgb, vec3(0.299, 0.587, 0.114));
+    if (ls < 0.4) {
+      float s = 0.0; float c = 0.0;
+      for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+          if (abs(dx) <= 1 && abs(dy) <= 1) continue;
+          s += dot(texelFetch(colorBuffer, dc + ivec2(dx, dy), 0).rgb, vec3(0.299, 0.587, 0.114));
+          c += 1.0;
+        }
+      }
+      if (s / c > 0.1 && ls < 0.45 * (s / c)) {
+        outputColor = vec4(1.0, 0.0, 1.0, 1.0);
+      }
+    }
+  }
+
   #ifdef DEBUG_SHOW_VELOCITY
   outputColor.rgb = outputColor.rgb + vec3(abs(texture(depthVelocityBuffer, vUv).gb) * 10.0, 0.0);
   #endif // DEBUG_SHOW_VELOCITY
