@@ -53,6 +53,29 @@ void main() {
     out_FragColor = c;
     return;
   }
+  // 【v70 暗孤点滤波（2026-10-12）】用户真机「1-2px 纯黑孤点」的最终修复：定位证明黑点
+  // 不在 march/resolve（1-2px 形态排除低分域 + overlay α 直显无洞），而在链末各 stage 的
+  // 合法输出中形成的 1-2px 高对比暗值（lensFlare 贡献 ~50%）。后处理无法读自身输出邻域，
+  // 故在链尾 tonemap 的输入端统一滤波：比 5×5 邻域均值暗 45%+ 的像素 → 用邻域均值替换。
+  // 单侧（只治暗点）+ 相对判据（真实暗部/云影与邻域相近不触发，零误伤）。
+  {
+    vec2 ts = 1.0 / vec2(textureSize(colorTexture, 0));
+    float lc = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 dsum = vec3(0.0);
+    float lsum = 0.0;
+    for (int dy = -2; dy <= 2; ++dy) {
+      for (int dx = -2; dx <= 2; ++dx) {
+        vec3 s = texture(colorTexture, v_textureCoordinates + vec2(float(dx), float(dy)) * ts).rgb;
+        dsum += s;
+        lsum += dot(s, vec3(0.299, 0.587, 0.114));
+      }
+    }
+    vec3 dmean = dsum / 25.0;
+    float lmean = lsum / 25.0;
+    if (lmean > 0.05 && lc < 0.55 * lmean) {
+      c.rgb = dmean;
+    }
+  }
   // ACES filmic + gamma 1/2.2（与 phase1 tonemapDisplay 等价）。
   vec3 t = ACESFilmic(c.rgb);
   t = pow(t, vec3(1.0 / 2.2));

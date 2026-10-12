@@ -1025,6 +1025,15 @@ ${o.groundCloudShadow ? `#ifdef HAS_GROUND_SHADOW
     }
   }
 
+  // 【v69 黑点消毒（2026-10-12）】用户真机报告的「1-2px 纯黑孤点」定位到此：?atmo=0
+  // 黑点全消 → 判据在 atmosphere 输出。成因：LUT 是 half-float（Float16），inscatter 在
+  // 特定视线方向存在灾难性抵消（CLAUDE.md 已载的已知风险 2026-08-04 phase1）→ 负值/NaN
+  // 经 exposure（×12）放大 → ACES 对负值输出黑。输出端消毒（防 NaN 传播 + 物理域钳制
+  // radiance ≥ 0）——自比较写法防 fast-math 折叠（Mac ANGLE→Metal 实证，overlay 同款）。
+  if (finalColor.r != finalColor.r) finalColor.r = 0.0;
+  if (finalColor.g != finalColor.g) finalColor.g = 0.0;
+  if (finalColor.b != finalColor.b) finalColor.b = 0.0;
+  finalColor = max(finalColor, vec3(0.0));
 #ifdef DEPTH_TEMPORAL_EMA
   out_FragColor = vec4(finalColor * exposure, 1.0);  // Bug3：HDR .a=smoothLogDepth 不透传（专家1 M1：display alpha）
 #else
