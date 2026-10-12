@@ -920,9 +920,9 @@ vec4 marchClouds(
     // 一致，mip 糊化采样与大步误差自洽）；近景 <2km mip≈0 步长不变逐位保真。大步加速
     // transmittance 衰减 → early termination 更早，协同收益。
     stepSize *= perspectiveStepScale;
-    // 【getHitStepMipModulation】
     // 【v65 对比结论】禁用云内 mip 加速（恢复上游 `rayDistance += stepSize`）实测：黑块
     // 0.474%→0.444%、颗粒 2.157→2.278——**无改善且步数增加有性能代价** → 恢复本仓库语义。
+    // 【getHitStepMipModulation】
     rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel * u_hitStepMipBoost));
   }
 
