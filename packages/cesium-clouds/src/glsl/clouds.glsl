@@ -184,7 +184,13 @@ MediaSample sampleMedia(
 
   // P1：+u_shapeWindOffset——云团 coverage 平流（u_windOffset）时内部三维结构跟随漂移
   //（此前 shape 纹理完全静态：轮廓动而内部花纹焊死）。纹理域 mod 1，CPU 侧算好。
-  vec3 shapePosition = (position + turbulence) * shapeRepeat + shapeOffset + u_shapeWindOffset;
+  // 【v80 采样精度修复】shape 采样坐标先去「纹理周期对齐的锚点」（u_shapeOrigin，JS 每帧算
+  // = 相机位置对齐到 1/shapeRepeat 的整数倍）：march 的 position 是密切球系（量级 6.36e6
+  // 米，float32 ulp ≈ 0.76m）→ ×shapeRepeat(3e-4) 放大后纹理域误差 ≈ 2.3e-4 ≈ **3% texel**
+  // （上游同系同误差，靠其 16 相位长窗累积平均掩盖；我们 jitter 0.25 超采样不足则暴露为
+  // 细胞颗粒——用户「透过云时细胞颗粒感」）。减锚点后数值回到相机局部量级（~1e4）→
+  // 误差 ≈ 0.005% texel（600× 改善）；锚点取纹理周期整数倍 → REPEAT 采样下云内容不变。
+  vec3 shapePosition = ((position - u_shapeOrigin) + turbulence) * shapeRepeat + shapeOffset + u_shapeWindOffset;
   // 【2026-10-09 颗粒带根治 E2】shape 采样显式 LOD：march 循环内隐式导数失效（相邻
   // 像素循环进度不同）→ 全分辨率下 LOD≈0 → shape 128³ 高频全频注入有效密度 → 云缘
   // extinction 像素级交替（debug13 v2 直显实锤）→ 光照放大=颗粒带。上游同款隐式但

@@ -152,6 +152,8 @@ export interface CloudsFrameState {
    */
   shaftMotionScale?: number
   altitudeCorrection: Cartesian3
+  /** 【v80】shape 采样精度锚点（密切球系，对齐到 1/shapeRepeat 整数倍；preRender 每帧覆写）。 */
+  shapeOrigin: Cartesian3
   /**
    * M3 BSM 状态（T5 createCloudsStage preRender 填：CascadedShadowMaps.update + ShadowPass.render）。
    * 未就绪（首帧 / 未填）时 uniformMap fallback 全 0 dummy → Beer=1（无自阴影降级）。
@@ -263,6 +265,8 @@ export function buildSharedCloudsUniforms(
     worldToECEFMatrix: () => params.worldToECEFMatrix,
     ecefToWorldMatrix: () => params.ecefToWorldMatrix,
     altitudeCorrection: () => state.altitudeCorrection,
+    // 【v80】shape 采样精度锚点（详见 clouds.glsl 采样处注释）
+    u_shapeOrigin: () => state.shapeOrigin,
     sunDirection: () => state.sunDirection,
     // 月光三键（方向 C，clouds.frag 声明同名 uniform；ShadowPass 生成端 shadow.frag 无声明——
     // Cesium 静默忽略未消费 uniform，同 skyLightScale 先例，无害）

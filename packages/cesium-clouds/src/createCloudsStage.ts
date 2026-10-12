@@ -632,6 +632,7 @@ function buildCloudsStageImpl(
     // P5 运动帧光柱步幅乘数（preRender 每帧更新；缺省 1=静止零回归）
     shaftMotionScale: 1,
     altitudeCorrection: new Cartesian3(),
+    shapeOrigin: new Cartesian3(),
     atlasTexture: undefined,
     windOffset: new Cartesian2(),
     shapeWindOffset: new Cartesian3(),
@@ -953,6 +954,20 @@ function buildCloudsStageImpl(
         ellipsoid,
         state.altitudeCorrection
       )
+
+      // 【v80】shape 采样精度锚点：相机密切球系位置对齐到 1/shapeRepeat 的整数倍（REPEAT
+      // 采样下平移整数个纹理周期不改变云内容）——march 的 shape 采样先减此锚点，把采样
+      // 坐标从 6.36e6 量级（float32 ulp 0.76m，经 shapeRepeat 放大后 ≈ 3% texel 采样抖动，
+      // 表现为细胞颗粒）拉回相机局部量级（~1e4，误差 ≈ 0.005% texel，600× 改善）。
+      {
+        const sr = params.shapeRepeat
+        state.shapeOrigin.x =
+          Math.round((camera.positionWC.x + state.altitudeCorrection.x) * sr.x) / sr.x
+        state.shapeOrigin.y =
+          Math.round((camera.positionWC.y + state.altitudeCorrection.y) * sr.y) / sr.y
+        state.shapeOrigin.z =
+          Math.round((camera.positionWC.z + state.altitudeCorrection.z) * sr.z) / sr.z
+      }
 
       // 太阳方向：inertial 系位置 → central-body-fixed → ECEF，单位化。
       // 【ICRF 竞态修复 2026-08-16】与 AtmosphereStage 同款切换

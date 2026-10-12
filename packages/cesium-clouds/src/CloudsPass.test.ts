@@ -116,7 +116,7 @@ describe('createCloudsPass', () => {
     sunDirection: { x: 1, y: 0, z: 0 } as any,
     moonDirection: { x: 1, y: 0, z: 0 } as any,
     moonIlluminatedFraction: 0.5,
-    altitudeCorrection: { x: 0, y: 0, z: 0 } as any
+    altitudeCorrection: { x: 0, y: 0, z: 0 } as any, shapeOrigin: { x: 0, y: 0, z: 0 } as any
   }
 
   it('装配：primitive add 到 scene.primitives + createVolumetricPrimitive 调用', () => {
@@ -273,7 +273,7 @@ describe('createCloudsPass', () => {
       sunDirection: { x: 1, y: 0, z: 0 } as any,
       moonDirection: { x: 1, y: 0, z: 0 } as any,
       moonIlluminatedFraction: 0.5,
-      altitudeCorrection: { x: 0, y: 0, z: 0 } as any,
+      altitudeCorrection: { x: 0, y: 0, z: 0 } as any, shapeOrigin: { x: 0, y: 0, z: 0 } as any,
       shadow: {
         matrices,
         intervals,
@@ -311,7 +311,7 @@ describe('createCloudsPass', () => {
       sunDirection: { x: 1, y: 0, z: 0 } as any,
       moonDirection: { x: 1, y: 0, z: 0 } as any,
       moonIlluminatedFraction: 0.5,
-      altitudeCorrection: { x: 0, y: 0, z: 0 } as any,
+      altitudeCorrection: { x: 0, y: 0, z: 0 } as any, shapeOrigin: { x: 0, y: 0, z: 0 } as any,
       shadow: {
         matrices: [Matrix4.IDENTITY, Matrix4.IDENTITY, Matrix4.IDENTITY],
         intervals: [new Cartesian2(0, 1), new Cartesian2(0, 1), new Cartesian2(0, 1)],
@@ -351,7 +351,7 @@ describe('createCloudsPass', () => {
       sunDirection: { x: 1, y: 0, z: 0 } as any,
       moonDirection: { x: 1, y: 0, z: 0 } as any,
       moonIlluminatedFraction: 0.5,
-      altitudeCorrection: { x: 10, y: 20, z: 30 } as any
+      altitudeCorrection: { x: 10, y: 20, z: 30 } as any, shapeOrigin: { x: 0, y: 0, z: 0 } as any
     }
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), st)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
@@ -564,7 +564,7 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     sunDirection: new Cartesian3(0, 0, 1),
     moonDirection: new Cartesian3(1, 0, 0),
     moonIlluminatedFraction: 0.5,
-    altitudeCorrection: new Cartesian3()
+    altitudeCorrection: new Cartesian3(), shapeOrigin: new Cartesian3()
   })
 
   it('temporalUpscale=true 且 upscaleDivisor=4：MRT 尺寸 ceil(w/4) + resolution=lowRes*4 + targetUvScale/mipLevelScale 切低分语义', () => {
@@ -703,7 +703,7 @@ describe('M5 T2 SHADOW_LENGTH MRT/参数', () => {
     sunDirection: new Cartesian3(0, 0, 1),
     moonDirection: new Cartesian3(1, 0, 0),
     moonIlluminatedFraction: 0.5,
-    altitudeCorrection: new Cartesian3()
+    altitudeCorrection: new Cartesian3(), shapeOrigin: new Cartesian3()
   })
 
   it('lightShafts 默认开：MRT 3 attachment（含 shadowLengthTexture 全分）+ uniformMap 三参数（three defaults 逐字）', () => {

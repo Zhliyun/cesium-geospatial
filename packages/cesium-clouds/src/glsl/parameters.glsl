@@ -34,6 +34,9 @@ uniform vec3 shapeRepeat;
 uniform vec3 shapeOffset;
 // P1 云内纹理风平流（纹理域 mod 1，CPU float64 mod 后传入——与 u_windOffset 同款精度铁律）
 uniform vec3 u_shapeWindOffset;
+// 【v80】shape 采样精度锚点（JS 每帧算：相机密切球系位置对齐到 1/shapeRepeat 整数倍）——
+// 采样前先减锚点以恢复 float32 精度（详见 clouds.glsl 采样处注释）。
+uniform vec3 u_shapeOrigin;
 
 #ifdef SHAPE_DETAIL
 uniform sampler3D shapeDetailTexture;

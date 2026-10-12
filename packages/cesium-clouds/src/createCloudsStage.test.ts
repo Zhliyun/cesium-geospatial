@@ -1252,7 +1252,7 @@ describe('月光接线（spec r2 §6.5）', () => {
       sunDirection: new Cartesian3(0, 0, 1),
       moonDirection: new Cartesian3(1, 0, 0),
       moonIlluminatedFraction: 0.5,
-      altitudeCorrection: new Cartesian3()
+      altitudeCorrection: new Cartesian3(), shapeOrigin: new Cartesian3()
     }
     const uniforms = actual.buildSharedCloudsUniforms(
       createMockScene(),
