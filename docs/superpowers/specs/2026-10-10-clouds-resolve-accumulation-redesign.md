@@ -293,3 +293,57 @@
 - 帧间差分脚本：`$CLAUDE_JOB_DIR/tmp/png-diff-f2.mjs`（全图）、`png-diff-regions.mjs`（分区）
 - 探针范式：shader 内 `#ifdef DEBUG_*` + `outputColor` 直显（本仓库已有 6 个同类探针可参照）
 - 上游 storybook：`localhost:6006`（`Clouds/Basic`，controls 在 shadow DOM 内，程序化操作受限）
+- 逐张独立截图脚本（连续 CDP 截图在页面运行一段时间后会挂起；每次新进程 + clip 小区域可靠）：
+  `$CLAUDE_JOB_DIR/tmp/shot-series.sh <tag> <n>`、`probe-shot.sh <mode> <tag>`
+
+## 8. 结论（2026-10-12 闭环，提交 `b4e8547`）
+
+**静止帧间差分 18.3%（间隔 5s）/ 57.9%（间隔 1s）→ 0.000%（逐像素相同）。**
+
+### 8.1 重大方法教训：卡顿环境下的「截到同帧」假象
+
+v33 的「完全禁用重投影 → 0.003%」与 v35 的「0.023%」都是在页面卡顿期（10 FPS，
+135ms/帧；截图角标 82.53 MS 可见）测的——**相邻两次截图落在同一渲染帧**，读数天然为 0。
+正常帧率复测后同样的配置是 16-18%。**铁律补充：帧间差分必须在确认页帧率正常
+（`fps=1` 角标 + 连续 evaluate 延迟）后测量；卡顿期的低差分无效。**
+
+### 8.2 根因（三个独立注入源 + 一个系数）
+
+1. **reprojectionMatrix 的 jitter 注入错误**：`buildReprojectionMatrices` 把「本帧 jitter」
+   加进「上帧投影矩阵」的平移项。而本仓库 jitter 经 `cloudsBridge` 窗口坐标重建作用于
+   **ray**（上游 three 是投影矩阵作用于全部几何，注入是对的）——结果 `prevUv` 每帧被
+   平移约 ±2px → history 采样到云的高频结构（白点带）→ **自激振荡**。
+2. **disocclusion rejection 静止误触发**：`|current.a − history.a| > 0.5` 在 jitter 相位
+   轮换下于云缘恒成立（不是「遮挡翻转」）→ 直出 current（跟随 march 抖动）。
+3. **AABB clip 随 current 邻域每帧移动** → history 被间歇拉出（残余 3.7-6%）。
+4. **EMA 对相位循环的衰减不足**：`|H(ω)| = α/|1−(1−α)e^{−jω}|`，α=0.1、ω=2π/16 →
+   仅 26%——静止仍有 10% 注入；α=0（上游「无 mix」语义）才是真冻结。
+
+### 8.3 修复（静止 = 纯 history 自持）
+
+| 文件 | 改动 |
+|---|---|
+| `temporalMath.ts` | 移除 reprojectionMatrix 的 jitter 注入（`col.x += jitter.x*2`） |
+| `cloudsResolve.frag` | 新增 `u_reprojectionStrength`（1=运动/0=静止）门控 velocity 重投影 / rejection / AABB；静止时输出 = history |
+| `cloudsDefaultParameters.ts` | `temporalAlpha: 0.1 → 0`（运动时仍由 motionAlpha 自适应升到 0.4） |
+| `createCloudsStage.ts` | 按相机运动量（`motionM < MOTION_ALPHA_START_M` = 1m/帧）每帧设 strength |
+
+### 8.4 验证矩阵（同页连拍，11470m cov0.45）
+
+| 条件 | 结果 |
+|---|---|
+| N=4 缺省（修复后） | **0.000% × 4**（清理探针前后一致复测） |
+| N=1 缺省（修复后） | **0.000% × 4** |
+| 无云对照（`clouds=0`） | 0.000%（非云部分稳定） |
+| 运动拖拽（500px 横拖） | 画面正常跟随（95.4% 变化） |
+| 运动停止后 | 0.000% × 2（无收敛残留） |
+| 359 单测 + tsc | 全绿 |
+
+### 8.5 未决/风险
+
+- **运动停止后的残影**：α=0 + 静止跳过一切意味着「停止瞬间的 history 若含错位将永久保留」。
+  自动验证只见「稳定」，未见「错位与否」——**待用户目验**（拖拽后停下的画面是否有鬼影）。
+- **静止时的白点**：静止不再有 STBN 轮换的多帧平均（历史自持），白点治理依赖
+  `?cloudsFrameUnfreeze` 的既有机制是否仍有效需目验（当前静止画面 = 冻结的单帧态）。
+- 运动中的画质（拖影/抖动）沿用既有机制（clip + α 自适应），未在本轮回归。
+
