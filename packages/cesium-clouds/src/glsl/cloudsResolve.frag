@@ -138,7 +138,24 @@ void temporalUpscale(
   out vec4 outputColor,
   out float outputShadowLength
 ) {
-  vec4 currentColor = texelFetch(colorBuffer, lowResCoord, 0);
+  // 【v54 空域上采样滤波（bilinear）】texelFetch 块拷贝 → 同一低分 texel 的 4×4 全分像素共享值
+  // → 冻结后块结构暴露。march MRT sampler 是 NEAREST（texture() 无插值）→ 手动标准 bilinear
+  // （位置加权，非等权 box）：块边界连续过渡，抹块效果优于等权平均。空域滤波不引入时间注入；
+  // 代价 = 细节上限为低分分辨率（上游靠直通超采样稀释块，我们禁直通后以滤波补）。
+  vec2 mrtSz2 = vec2(textureSize(colorBuffer, 0));
+  vec2 uvLow = vUv * mrtSz2 - 0.5;
+  vec2 fl = floor(uvLow);
+  vec2 fr = uvLow - fl;
+  ivec2 i00 = ivec2(fl);
+  ivec2 i10 = min(i00 + ivec2(1, 0), ivec2(mrtSz2) - 1);
+  ivec2 i01 = min(i00 + ivec2(0, 1), ivec2(mrtSz2) - 1);
+  ivec2 i11 = min(i00 + ivec2(1, 1), ivec2(mrtSz2) - 1);
+  i00 = clamp(i00, ivec2(0), ivec2(mrtSz2) - 1);
+  vec4 currentColor = mix(
+    mix(texelFetch(colorBuffer, i00, 0), texelFetch(colorBuffer, i10, 0), fr.x),
+    mix(texelFetch(colorBuffer, i01, 0), texelFetch(colorBuffer, i11, 0), fr.x),
+    fr.y
+  );
   #ifdef SHADOW_LENGTH
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, lowResCoord, 0).rgb, 1.0);
   #endif // SHADOW_LENGTH
@@ -193,10 +210,9 @@ void temporalUpscale(
     #endif // SHADOW_LENGTH
     return; // Disocclusion rejection
   }
-  // 【v43 静止跳过 AABB】AABB 由 current 邻域每帧重算（jitter 相位轮换）→ 边界缓慢移动 →
-  // history 被间歇拉出 → 残余抖动 3.7-6%（2026-10-10 实测）。静止时 history 自持不漂移，
-  // AABB 无保护作用（防的是运动鬼影）→ 直接输出 history（0.000%）。同时省 9 次邻域采样。
-  // 冻结判据 = temporalAlpha≈0（预热期 α=0.1 仍走 clip 累积——时域平均治颗粒）。
+  // 【v54 冻结跳过 AABB】v53 实测：clip 的邻域（低分 texel）不抹块（blockSignal 反而 1.093）
+  // 且引入 8.9% 抖动 —— 回退到 v52 的「冻结自持」（0.03% 抖动）。块由空域上采样滤波解决
+  //（见 currentColor 的 4 邻域平均——那才是块边界的正解）。
   vec4 clippedColor = temporalAlpha < 1e-5
     ? historyColor
     : varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
@@ -267,7 +283,7 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
     #endif // SHADOW_LENGTH
     return; // Disocclusion rejection
   }
-  // 【v43 静止跳过 AABB】同 upscale 分支：静止时 history 自持，AABB 无保护作用。
+  // 【v54】同 upscale 分支：冻结跳过 clip（块由空域上采样滤波解决）。
   vec4 clippedColor = temporalAlpha < 1e-5
     ? historyColor
     : varianceClipping(colorBuffer, coord, currentColor, historyColor);
@@ -311,10 +327,11 @@ void main() {
   int bayerValue = bayerIndices[coord.x % 4][coord.y % 4];
   bool currentFrame = bayerValue == frame % 16;
   #endif // UPSCALE_DIVISOR == 2
-  // 【2026-10-12 v47 恢复直通】曾于冻结态禁直通（防 16 帧周期的 current 注入→抖动），
-  // 但用户真机指出副作用：画面「整体模糊」——直通是**细节持续刷新**的来源（上游画面
-  // 锐利的关键：每 16 帧 1/16 texel 直出 current → 累积值中持续注入新细节）。恢复直通，
-  // 抖动改由「current 抖动本身」解决（march 侧根源）。
+  // 【v52 冻结禁直通（二回）】v47 曾恢复直通（治「模糊」）——但当时的「模糊」根因是**预热期
+  // EMA 平均**（history 被 α=0.1 累积低通），而非禁直通本身。预热已于 v47 移除 → 冻结时
+  // history = 加载后最初的 march 原始输出（未平均，锐利）；此时禁直通 = 零 current 注入
+  // （0% 抖动）且不失锐利。重测此组合（v45 的结论受预热污染）。
+  if (temporalAlpha < 1e-5) currentFrame = false;
   temporalUpscale(coord, lowResCoord, currentFrame, outputColor, outputShadowLength);
   #else // TEMPORAL_UPSCALE
   temporalAntialiasing(coord, outputColor, outputShadowLength);

@@ -501,11 +501,13 @@ const CLOUDS_OVERLAY_EXPOSURE_DEFAULT = 12
 // strength=0 + α=0 冻结（history 自持——帧间差分 0.000%，见 spec 2026-10-10 §8）。
 // 窗口取 64 帧 ≈ 1 秒 @60fps，覆盖 STBN 64 层轮换一轮。
 /** 静止冻结前的预热帧数（持续累积平均的窗口）。
- *  【2026-10-12 v47】0 = 无预热：用户真机指出预热期（α=0.1 累积）「开始若干秒出现抖动」，
- *  要求「从始至终不能抖」。且预热 EMA 对稳态白点无效（实测）——预热的两项收益均不成立。 */
-const STATIC_FREEZE_DELAY_FRAMES = 0
-/** 预热期 EMA α（= cloudsDefaultParameters.temporalAlpha 旧缺省值）。 */
-const STATIC_WARMUP_ALPHA = 0.1
+ *  【2026-10-12 v52】2 = 「全刷新」预热：静止后前 2 帧以 α=1.0 直接输出 current（无平均——
+ *  把 march 原始值写满 history，锐利），之后 α=0 冻结（禁直通 → 零 current 注入 → 0% 抖动）。
+ *  v45 的「禁直通 → 模糊」结论受当时 64 帧 EMA 预热（α=0.1 累积低通）污染；「全刷新 + 冻结」
+ *  组合既无平均（不糊）又无注入（不抖）。延时 0 会因 history 未初始化（0）黑屏。 */
+const STATIC_FREEZE_DELAY_FRAMES = 2
+/** 预热期 α（1.0 = 全刷新：输出 = current，history 一次写满原始值）。 */
+const STATIC_WARMUP_ALPHA = 1.0
 
 // ── 高空云层渐隐（2026-09-03）───────────────────────────────────────────────
 // 太空俯视（demo 默认开场 16136km）下 march 采样域外的伪影（云形 mip 糊化/颗粒/TAA 残迹）
