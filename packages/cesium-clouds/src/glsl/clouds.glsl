@@ -191,9 +191,12 @@ MediaSample sampleMedia(
   // N=4 半分 march 的 texel 粗→隐式 LOD 反而高（意外平滑）——N=1 全分下必须显式。
   // 换算 ×1.5（用户现象「越远颗粒越强」=缩小采样欠奈奎斯特，weather mip 尺度对
   // shape 高频不足——加大远云压制；近云 mip≈0-1 域受影响小）。
-  // 【v50 实验回退】shape LOD+1.5 实测 current 抖动无改善（56/46% vs 基线 60/48）——
-  // shape 高频不是 ray 敏感度来源（同 E2 时的结论）。恢复 E2 定稿值。
-  float shape = textureLod(shapeTexture, shapePosition, mipLevel * 1.5).r;
+  // 【v78 近处点状马赛克修复】用户观察「近云时点状、远云退化为马赛克」——shape 噪声是
+  // Perlin-Worley（Worley=细胞状点结构，上游 cloudShape.frag 同款生成）——**近处 LOD≈0
+  // 使 128³ 的细胞中心完整暴露**（上游隐式 texture() 近处导数大 → LOD 自动升高 → mipmap
+  // 抹平细胞）。修法：LOD 加下限 1.5（近处也走 mip 链——细胞结构被 trilinear 平滑）。
+  // 与 E2（为治 N=1 颗粒带加 ×1.5）兼容：远处仍由 mipLevel×1.5 主导。
+  float shape = textureLod(shapeTexture, shapePosition, max(mipLevel * 1.5, 1.5)).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
   #ifdef DEBUG_SHOW_SAMPLE_COUNT
