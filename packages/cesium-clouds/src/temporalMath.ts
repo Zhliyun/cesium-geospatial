@@ -89,10 +89,14 @@ export function buildReprojectionMatrices(
 
   // jitteredPrevP：clone 后改 column2
   Matrix4.clone(prevP, result.reprojectionMatrix)
-  const col = Matrix4.getColumn(result.reprojectionMatrix, 2, columnScratch)
-  col.x += jitter.x * 2
-  col.y += jitter.y * 2
-  Matrix4.setColumn(result.reprojectionMatrix, 2, col, result.reprojectionMatrix)
+  // 【2026-10-10 v34 实验】jitter 注入注释掉：验证「本帧 jitter 平移 × 上帧矩阵」是否导致
+  // prevUv 每帧随机偏移（±2px）→ history 采样位置抖动 → 云高频结构被采成自激噪声。
+  // const col = Matrix4.getColumn(result.reprojectionMatrix, 2, columnScratch)
+  // col.x += jitter.x * 2
+  // col.y += jitter.y * 2
+  // Matrix4.setColumn(result.reprojectionMatrix, 2, col, result.reprojectionMatrix)
+  void jitter
+  void columnScratch
 
   // reprojectionMatrix = jitteredPrevP * prevV
   Matrix4.multiply(result.reprojectionMatrix, prevV, result.reprojectionMatrix)

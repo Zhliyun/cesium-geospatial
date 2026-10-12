@@ -114,6 +114,7 @@ import {
   buildReprojectionMatrices,
   computeMotionAlpha,
   MOTION_EQUIV_RADIUS_M,
+  MOTION_ALPHA_START_M,
   type TemporalCameraSnapshot
 } from './temporalMath'
 import { CascadedShadowMaps } from './CascadedShadowMaps'
@@ -1072,6 +1073,14 @@ function buildCloudsStageImpl(
         const motionM = transM + dirAngle * MOTION_EQUIV_RADIUS_M
         state.shaftMotionScale =
           1 + (params.shaftMotionBoost - 1) * Math.min(1, Math.max(0, motionM / 50))
+
+        // 【v35 静止重投影禁用】静止帧（motionM≈0）velocity 归零：jitter 16 相位轮换使
+        // 「同一像素相邻帧的 ray」指向不同亚像素位置，而 history 每像素存的是各相位混合的
+        // 时域值——重投影无法正确对齐（prevUv 每帧随机偏移 ±2px）→ 云高频结构被采成自激
+        // 噪声（2026-10-10 探针链实测：保留任何 velocity 补偿 ≥27%，完全禁用 0.003%）。
+        // 阈值复用 MOTION_ALPHA_START_M（1m/帧）：微动时屏幕位移 <1px/帧，禁用无感知；
+        // 真实运动保持重投影（防拖影/鬼影）。
+        resolvePass?.setReprojectionStrength(motionM < MOTION_ALPHA_START_M ? 0 : 1)
 
         // 静止冻结判定（2026-09-02）：存上帧相机位置 + T2 上帧 look 方向（块末统一更新）
         prevCameraPos = Cartesian3.clone(camera.positionWC, prevCameraPos ?? new Cartesian3())

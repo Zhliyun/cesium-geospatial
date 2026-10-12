@@ -437,7 +437,10 @@ export function defaultCloudsParameters(): CloudsParameters {
     // M4 云 resolve（three CloudsResolveMaterial 默认；temporalDisocclusion 为本项目
     // 2026-09-02 黑块修复新增，three 无此项）
     temporalVarianceGamma: 2.0,
-    temporalAlpha: 0.1,
+    // 【v39 实验】0.1 → 0：对齐上游语义（outputColor = clippedColor，clip 不生效时输出
+    // = history，完全不注入 current → 16 相位 jitter 循环被彻底冻结而非只衰减 26%）。
+    // 配合「静止禁用重投影」，测抖动是否降到接近全冻结的 0.016% 量级。
+    temporalAlpha: 0,
     temporalDisocclusion: 0.5,
     motionAlpha: 0.4
   }

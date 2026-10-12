@@ -94,6 +94,13 @@ export interface CloudsResolvePass {
    * preRender 按相机速度驱动。
    */
   setTemporalAlpha(value: number): void
+  /**
+   * 【v35 静止重投影禁用】重投影强度（1=正常/0=静止禁用 velocity 补偿）。
+   * 静止帧 jitter 相位轮换使重投影采样无法正确对齐（prevUv 每帧随机偏移 ±2px）→
+   * 云高频结构被采成自激噪声（2026-10-10 实测 57.9%→0.003%）。createCloudsStage
+   * 按相机运动量（motionM）每帧设。
+   */
+  setReprojectionStrength(value: number): void
   /** 释放：双内部 primitive（各含 FBO）+ 双 Texture。幂等。 */
   destroy(): void
 }
@@ -108,6 +115,8 @@ export function createCloudsResolvePass(
   const varianceGamma = options.varianceGamma ?? 2
   // T2（2026-09-02）：α 由 const 改 let——setTemporalAlpha 每帧改写，uniformMap 闭包读最新值
   let temporalAlpha = options.temporalAlpha ?? 0.1
+  // 【v35 静止重投影禁用】1=正常重投影 / 0=静止禁用（createCloudsStage 按相机运动量每帧设）。
+  let reprojectionStrength = 1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
@@ -142,6 +151,7 @@ export function createCloudsResolvePass(
     varianceGamma: () => varianceGamma,
     temporalAlpha: () => temporalAlpha,
     temporalDisocclusion: () => temporalDisocclusion,
+    u_reprojectionStrength: () => reprojectionStrength,
     u_spatialDespeckle: () => options.spatialDespeckle ?? 0
   }
 
@@ -211,6 +221,9 @@ export function createCloudsResolvePass(
     },
     setTemporalAlpha(value: number): void {
       temporalAlpha = value
+    },
+    setReprojectionStrength(value: number): void {
+      reprojectionStrength = value
     },
     destroy(): void {
       shell.destroy()

@@ -147,6 +147,9 @@ vi.mock('./CloudsResolvePass', () => ({
       // T2 运动自适应 α（2026-09-02）：onPreRender 每帧调——记录调用序列供断言
       setTemporalAlpha: vi.fn((v: number) => { inst.lastMotionAlpha = v }),
       lastMotionAlpha: undefined as number | undefined,
+      // 【v35 静止重投影禁用】onPreRender 每帧调（运动量判定）——记录供断言
+      setReprojectionStrength: vi.fn((v: number) => { inst.lastReprojectionStrength = v }),
+      lastReprojectionStrength: undefined as number | undefined,
       destroy: vi.fn()
     }
     resolvePassProbe.instances.push(inst)
@@ -828,7 +831,12 @@ describe('M4 T7 temporal 编排', () => {
   // α 单调升向 motionAlpha（0.4）——history 拖影/错位权重下降；停止后逐帧回落。
   it('T2 运动自适应 α：静止保持 base；运动升向 motionAlpha；停止回落', () => {
     const scene = createMockScene()
-    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
+    // 显式 base=0.1：本用例验证 α 运动自适应逻辑，与全局缺省（2026-10-12 起 0）解耦
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      temporal: true,
+      parameters: { temporalAlpha: 0.1 }
+    })
     const inst = resolvePassProbe.instances.at(-1)!
     const camera = scene.camera as { positionWC: Cartesian3 }
     // 首帧 + 静止帧：motion=0 → α 目标 base，保持 0.1

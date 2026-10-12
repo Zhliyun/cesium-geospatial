@@ -28,6 +28,13 @@ uniform float varianceGamma;
 uniform float temporalAlpha;
 uniform float temporalDisocclusion;
 uniform vec2 jitterOffset;
+// 【v35 静止重投影禁用】静止帧（相机无位移/转向）时 0 → velocity 归零。根因（2026-10-10
+// v28-v34 探针链）：jitter 16 相位轮换使「同一像素相邻帧的 ray」指向不同亚像素位置，
+// 而 history 每像素存的是各相位混合的时域值——重投影无法正确采样（prevUv 每帧随机偏移
+// ±2px）→ 云高频结构被采成自激噪声（实测：完全禁用后帧间差分 57.9%→0.003%；保留
+// 任何 velocity 补偿（含 jitter 注入移除/小速度归零）仍 ≥27%）。运动中 1=正常重投影
+//（世界点位移真实存在，禁用会拖影）。
+uniform float u_reprojectionStrength;
 // 【2026-10-08 白点治理】输出端孤点中值滤波强度（0=关缺省零回归；1=全替换）。
 // 白点=march 能量积分采样方差的 1px 亮度尖峰（伴生暗斑族对称），时序平均
 // （frameUnfreeze）消掉 ~95% 后的残余为每帧随机注入的稳态——邻域中值直接替换。
@@ -143,7 +150,8 @@ void temporalUpscale(
   }
 
   vec4 depthVelocity = getClosestFragment(lowResCoord);
-  vec2 velocity = depthVelocity.gb;
+  // 【v35 静止重投影禁用】见 u_reprojectionStrength 声明处注释（探针链 v28-v43 结论）。
+  vec2 velocity = depthVelocity.gb * u_reprojectionStrength;
   vec2 prevUv = vUv - velocity;
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
@@ -169,14 +177,25 @@ void temporalUpscale(
   // 遮挡关系翻转，不信任 history 直出 current（同 prevUv 越界 rejection 路径）。阈值
   // 默认 0.5：跨云边界错采 |Δa|=1（0↔1）稳触发；云边缘正常相位噪声 |Δa|<0.3 不误杀
   // （误杀代价仅该 texel 一帧直出=可接受）。
-  if (abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+  // 【v43 静止禁用 rejection】rejection 判据 |Δa|>0.5 在静止场景下**误触发**：jitter 相位
+  // 轮换让云缘位置每帧亚像素移动 → current.a 与 history.a 在云缘天然差异大 → 被判为
+  // 「遮挡翻转」→ 直出 current（跟随 march 抖动）。而 rejection 的本意是防「运动导致
+  // history 错采」——静止时不存在该问题（2026-10-10 实测：静止禁用后帧间差分 13-17%→0.000%）。
+  // 以 u_reprojectionStrength（1=运动/0=静止）门控：运动时保留原语义。
+  if (abs(currentColor.a - historyColor.a) > temporalDisocclusion
+      && u_reprojectionStrength > 0.5) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
     #endif // SHADOW_LENGTH
     return; // Disocclusion rejection
   }
-  vec4 clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
+  // 【v43 静止跳过 AABB】AABB 由 current 邻域每帧重算（jitter 相位轮换）→ 边界缓慢移动 →
+  // history 被间歇拉出 → 残余抖动 3.7-6%（2026-10-10 实测）。静止时 history 自持不漂移，
+  // AABB 无保护作用（防的是运动鬼影）→ 直接输出 history（0.000%）。同时省 9 次邻域采样。
+  vec4 clippedColor = u_reprojectionStrength > 0.5
+    ? varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma)
+    : historyColor;
   // 【2026-09-02 静止收敛抖动修复】three 原文 outputColor = clippedColor 直出——variance
   // clip 的 AABB 逐帧随 current(Bayer ±2px 轮换采样)移动,history 被 clip 拉向本帧
   // current → 输出跟随 current 轮换不收敛。高对比云区(近云视角)显示层持续抖动
@@ -214,7 +233,8 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   #endif // SHADOW_LENGTH
 
   vec4 depthVelocity = getClosestFragment(coord);
-  vec2 velocity = depthVelocity.gb;
+  // 【v35 静止重投影禁用】同 upscale 分支（depthVelocity.r 深度不受影响——aEff 按距离衰减保留）。
+  vec2 velocity = depthVelocity.gb * u_reprojectionStrength;
 
   vec2 prevUv = vUv - velocity;
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
@@ -230,14 +250,23 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   // （N=4 时代默认档），1ce0d93 默认档切 N=1 走本分支后补丁丢失：穿云 velocity 跨层错位 →
   // history 采到无效 texel（黑）→ γ=2 宽 AABB 剪不住 → mix 90% 黑 history 固化扩散（傍晚
   // 穿云黑块 A/B 复现实证）。|Δa|>阈 = 云/非云遮挡关系翻转，不信任 history 直出 current。
-  if (abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+  // 【v43 静止禁用 rejection】rejection 判据 |Δa|>0.5 在静止场景下**误触发**：jitter 相位
+  // 轮换让云缘位置每帧亚像素移动 → current.a 与 history.a 在云缘天然差异大 → 被判为
+  // 「遮挡翻转」→ 直出 current（跟随 march 抖动）。而 rejection 的本意是防「运动导致
+  // history 错采」——静止时不存在该问题（2026-10-10 实测：静止禁用后帧间差分 13-17%→0.000%）。
+  // 以 u_reprojectionStrength（1=运动/0=静止）门控：运动时保留原语义。
+  if (abs(currentColor.a - historyColor.a) > temporalDisocclusion
+      && u_reprojectionStrength > 0.5) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
     #endif // SHADOW_LENGTH
     return; // Disocclusion rejection
   }
-  vec4 clippedColor = varianceClipping(colorBuffer, coord, currentColor, historyColor);
+  // 【v43 静止跳过 AABB】同 upscale 分支：静止时 history 自持，AABB 无保护作用。
+  vec4 clippedColor = u_reprojectionStrength > 0.5
+    ? varianceClipping(colorBuffer, coord, currentColor, historyColor)
+    : historyColor;
   // 【2026-10-09 远云平均自适应】α 按云前距离衰减：远云视差小（屏幕近乎静止，可狠平均）
   // 且欠采样噪声幅度大（需要狠平均）——双契合。50km→α/2 起步（2e-5/米）。
   float aEff = temporalAlpha / (1.0 + max(0.0, depthVelocity.r) * 2e-5);

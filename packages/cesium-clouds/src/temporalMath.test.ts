@@ -82,11 +82,8 @@ describe('M4 T1 temporalMath', () => {
     })
 
     // 性质 1：reprojection = (prevP + jitter) * prevV —— 用列分量验证 jitter 已进 column2
+    // v34：jitter 不再注入 reprojection（见 temporalMath.ts 实验注释）
     const expected = Matrix4.clone(prevP)
-    const col = Matrix4.getColumn(expected, 2, new Cartesian4())
-    col.x += jitter.x * 2
-    col.y += jitter.y * 2
-    Matrix4.setColumn(expected, 2, col, expected)
     Matrix4.multiply(expected, prevV, expected)
     expect(reprojectionMatrix).toEqual(expected)
 
@@ -113,12 +110,8 @@ describe('M4 T1 temporalMath', () => {
       reprojectionMatrix,
       viewReprojectionMatrix
     })
-    // jittered curP * curV
+    // v34：jitter 不再注入（同上）
     const expected = Matrix4.clone(curP)
-    const col = Matrix4.getColumn(expected, 2, new Cartesian4())
-    col.x += jitter.x * 2
-    col.y += jitter.y * 2
-    Matrix4.setColumn(expected, 2, col, expected)
     Matrix4.multiply(expected, curV, expected)
     expect(reprojectionMatrix).toEqual(expected)
   })
