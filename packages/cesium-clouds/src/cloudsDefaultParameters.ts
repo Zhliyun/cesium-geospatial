@@ -189,6 +189,12 @@ export interface CloudsParameters {
    *  治「层内单点辐射平刷」（1536 白板/1692 蓝板两例同机制）。0=整路径逐位回退
    *  （门控 mix 恒等，带外本就不受影响）。demo ?cloudsInLayerFog=。不进质量档位。 */
   inLayerFog: number
+  /** 【v84b】薄段细化强度（0=关=改前行为 / 1=全细化缺省）。层内相机「屏幕下方圆弧」修复
+   *  （2026-10-13）把「层内段 <900m」像素的步长降到 段长/32（最多 32 步），这些像素的
+   *  采样数从改前的 1-4 步上升 → 相机贴层底机位的帧时上升。本旋钮让画质/性能权衡可在
+   *  **同一浏览器内交替加载** A/B（demo ?cloudsThinFine=），比跨会话对比可靠（本项目实测
+   *  跨加载同配置帧时可在 33↔593ms 间摆动，仅交替成对差值可信）。不进质量档位。 */
+  thinFine: number
   /** 顶面蓬松化权重（2026-09-29 密度分布专项，用户拍板「层状二维是问题」）：per-layer
    *  门控 sampleWeather 对 heightScale 的蓬松平台合成（hf∈[0.70,0.85] 升入 0.85 平台、
    *  hf∈[0.92,1] 窄带归零封层带）——治半圆包络顶部渐消带（~25-30% 层厚无云+渐消）造成
@@ -365,6 +371,7 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 层内雾化总开关（2026-09-28 方案 A）：1=开（缺省，治 1536 白板/1692 蓝板平刷）；
     // 0=逐位回退。?cloudsInLayerFog= 即调
     inLayerFog: 1.0,
+    thinFine: 1.0,
     // 顶面蓬松化（2026-09-29 密度分布专项）：(1,1,0,0)=L0/L1 开、L2 卷云关；0 向量=逐位
     // 回退。?cloudsTopPuff=0 即调（同 interface 注释）
     topPuffWeights: new Cartesian4(1.0, 1.0, 0.0, 0.0),

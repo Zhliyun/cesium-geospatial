@@ -766,6 +766,12 @@ async function main(): Promise<void> {
                   ...(getNumber('cloudsInLayerFog') != null
                     ? { inLayerFog: getNumber('cloudsInLayerFog')! }
                     : {}),
+                  // 【v84b】?cloudsThinFine= 薄段细化强度（0=关=改前行为 / 1=全细化缺省）——
+                  // 层内相机「屏幕下方圆弧」修复的性能旋钮；同一页面 A/B 用（跨页面加载的
+                  // GPU 频率漂移会让帧时在 33↔593ms 摆动，不可用于对比）
+                  ...(getNumber('cloudsThinFine') != null
+                    ? { thinFine: getNumber('cloudsThinFine')! }
+                    : {}),
                   // ?cloudsTopPuff= 顶面蓬松化权重（2026-09-29 密度分布专项）：0=关（逐位
                   // 回退，排查对照）；1=恢复缺省 (1,1,0,0)（L0/L1 开、L2 卷云关）
                   ...(getNumber('cloudsTopPuff') != null

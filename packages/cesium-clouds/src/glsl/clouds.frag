@@ -96,6 +96,8 @@ uniform float u_twilightSkyBoost;
 // 去饱和提亮（治深部蓝 ambient）+ 出口 alpha 软化（浓雾透底=雾感非墙感）。
 // 0=整路径逐位回退（门控 uniform 全屏一致，mix 恒等）。?cloudsInLayerFog= 即调。
 uniform float u_inLayerFog;
+/** 【v84b】薄段细化强度（0=关=改前行为 / 1=全细化缺省）。demo `?cloudsThinFine=`。 */
+uniform float u_thinFine;
 
 // 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
 // （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/
@@ -629,11 +631,11 @@ vec4 marchClouds(
   // 只有 100-400m（相机离层底 113m/sinθ）而 high 档步长 100m → 层内仅 1-4 个采样点，相邻
   // 像素落在云内/云外的组合二值跳变=弧。ultra 档（10m 步长/500 步）逐像素足够采样故无弧。
   // /12 在段长 260m 处只把步长从 100 降到 ~39m（仍 7 步）不够；/32 给 ~8m≈ultra 的 10m。
-  // 实测 thinSegment=1（完全细化）→ 弧线彻底消失（剖面 221→200 单调无跳变，v84 实测）
-  // → 门控须覆盖弧区段长：1613 机位的弧对应段长 226-1081m，旧上界 400m 只给 0.78 权重不够。
-  // 新门控 (400,900)：段长 ≤400m 完全细化、900m 以上回到原步进（长段性能不受影响，
-  // 与 line 649 的 stepBudgetLen/32「32 步预算」设计一致——细步长上限即 32 步）。
-  float thinSegment = 1.0 - smoothstep(400.0, 900.0, maxRayDistance);
+  // 【v84b 性能旋钮 2026-10-13】u_thinFine：薄段细化强度（0=关=改前行为 / 1=全细化缺省）。
+  // 弧线修复让「层内段 <900m」的像素步长降到 段长/32（最多 32 步），这些像素的采样数
+  // 从改前的 1-4 步上升 → 相机贴层底机位的帧时上升。本旋钮让画质/性能权衡可在同一浏览器
+  // 同一页面 A/B（demo ?cloudsThinFine=），避免跨页面加载的 GPU 频率漂移污染对比。
+  float thinSegment = (1.0 - smoothstep(400.0, 900.0, maxRayDistance)) * u_thinFine;
   stepSize = mix(stepSize, max(maxRayDistance * 0.03125, 1.0), inLayerCam * thinSegment);
   // 【层内步数上限 v3.2】禁早退全横穿必须有限步完成：密云区无空区大步，minStepSize 100m/步
   // 走 3.9-8.6km 段 = 39-86 步 × 全屏 × 每步光照采样 → 帧时爆炸（1650/1740 实测页面导航
