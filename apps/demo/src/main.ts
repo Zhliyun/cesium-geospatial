@@ -616,6 +616,9 @@ async function main(): Promise<void> {
           // 【v49 调查用调试】?cloudsResolveDebug=1 直显 march 原始输出（current）
           ...(getNumber('cloudsResolveDebug') != null
             ? { resolveDebug: getNumber('cloudsResolveDebug')! } : {}),
+          // 【v83 N>1 方块治理】?cloudsUpsampleLowpass=0..1 低分域 3×3 高斯低通（0=关缺省）
+          ...(getNumber('cloudsUpsampleLowpass') != null
+            ? { upsampleLowpass: getNumber('cloudsUpsampleLowpass')! } : {}),
           // 【v49 调查用调试】?cloudsJitterMask=N（1=ray 2=depth 4=阴影相位；缺省 7）
           ...(getNumber('cloudsJitterMask') != null
             ? { jitterMask: getNumber('cloudsJitterMask')! } : {}),

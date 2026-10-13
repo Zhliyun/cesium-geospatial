@@ -27,6 +27,9 @@ uniform int frame;
 uniform float varianceGamma;
 uniform float temporalAlpha;
 uniform float temporalDisocclusion;
+// 【v83 N>1 方块治理】低分域 3×3 高斯低通强度（0=关/旧 bilinear，1=全低通）。仅
+// TEMPORAL_UPSCALE（N>1）编译消费。demo `?cloudsUpsampleLowpass=`。
+uniform float u_upsampleLowpass;
 uniform vec2 jitterOffset;
 // 【v35 静止重投影禁用】静止帧（相机无位移/转向）时 0 → velocity 归零。根因（2026-10-10
 // v28-v34 探针链）：jitter 16 相位轮换使「同一像素相邻帧的 ray」指向不同亚像素位置，
@@ -176,6 +179,28 @@ void temporalUpscale(
       + s01 * (b01 ? 0.0 : w01) + s11 * (b11 ? 0.0 : w11)) / wsum;
   } else {
     currentColor = mix(mix(s00, s10, fr.x), mix(s01, s11, fr.x), fr.y); // 全黑：保持原样
+  }
+  // 【v83 N>1 方块治理】低分域 3×3 高斯低通（u_upsampleLowpass：0=关=旧 bilinear，1=全低通）。
+  // 背景：N>1 时 march 输出在低分 texel 上呈二值交替（「一格纯云、一格纯海」，
+  // cloudsResolveDebug=1 直显可见），块尺寸严格 ∝ upscaleDivisor（N=4≈10-20px、N=2≈5-8px、
+  // N=1 无块），关云即消失。bilinear 上采样只让**边界**渐变，texel 中心值原样保留 →
+  // N×N 硬边方块仍在（受控对照：α 0/0.1/0.3/1.0、γ 0.0001/0.5/2.0、jitterScale/jitterMask、
+  // despeckle、atlas、shape LOD、weatherBias、mipLevelScale 十余项全无效——它们都在 texel
+  // 网格内做算术）。3×3 低分核把相邻 texel 的二值差摊成分数值：核内 texel 越多，单 texel
+  // 的权重越低，块对比度按核面积摊薄。仅 TEMPORAL_UPSCALE（N>1）编译 → N=1 全分路径零影响。
+  if (u_upsampleLowpass > 0.0) {
+    ivec2 sz = ivec2(mrtSz2) - 1;
+    vec4 lp =
+        texelFetch(colorBuffer, clamp(i00 + ivec2(-1, -1), ivec2(0), sz), 0) * 1.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2( 0, -1), ivec2(0), sz), 0) * 2.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2( 1, -1), ivec2(0), sz), 0) * 1.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2(-1,  0), ivec2(0), sz), 0) * 2.0
+      + texelFetch(colorBuffer, clamp(i00                    , ivec2(0), sz), 0) * 4.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2( 1,  0), ivec2(0), sz), 0) * 2.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2(-1,  1), ivec2(0), sz), 0) * 1.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2( 0,  1), ivec2(0), sz), 0) * 2.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2( 1,  1), ivec2(0), sz), 0) * 1.0;
+    currentColor = mix(currentColor, lp * (1.0 / 16.0), u_upsampleLowpass);
   }
   #ifdef SHADOW_LENGTH
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, lowResCoord, 0).rgb, 1.0);

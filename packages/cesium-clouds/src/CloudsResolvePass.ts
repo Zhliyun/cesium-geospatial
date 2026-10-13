@@ -60,6 +60,11 @@ export interface CloudsResolvePassOptions {
   /** 【v49 调查用调试】0=关缺省；1=直显 march 原始输出（current）。demo `?cloudsResolveDebug=1`。 */
   resolveDebug?: number
   /**
+   * 【v83 N>1 方块治理】低分域 3×3 高斯低通强度（0=关=旧 bilinear；1=全低通）。
+   * 仅 N>1（TEMPORAL_UPSCALE）编译消费。demo `?cloudsUpsampleLowpass=`。
+   */
+  upsampleLowpass?: number
+  /**
    * 【2026-10-09 F2】逐帧启用闭包（缺省恒启用）：false 时 resolve update 不压 command
    * ——与 march enabled 同源（overlay heightFade 全隐时全链跳过）。
    */
@@ -120,6 +125,9 @@ export function createCloudsResolvePass(
   // 【v35 静止重投影禁用】1=正常重投影 / 0=静止禁用（createCloudsStage 按相机运动量每帧设）。
   let reprojectionStrength = 1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
+  // 【v83 N>1 方块治理】低分域 3×3 高斯低通强度（缺省 1=开——N>1 方块是用户明确要求消除的
+  // 伪影；0=关回退旧 bilinear）。demo ?cloudsUpsampleLowpass= 可调（0.5=折中档）。
+  let upsampleLowpass = options.upsampleLowpass ?? 1
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
 
@@ -153,6 +161,7 @@ export function createCloudsResolvePass(
     varianceGamma: () => varianceGamma,
     temporalAlpha: () => temporalAlpha,
     temporalDisocclusion: () => temporalDisocclusion,
+    u_upsampleLowpass: () => upsampleLowpass,
     u_reprojectionStrength: () => reprojectionStrength,
     u_spatialDespeckle: () => options.spatialDespeckle ?? 0,
     u_resolveDebug: () => options.resolveDebug ?? 0

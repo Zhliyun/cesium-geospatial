@@ -238,6 +238,15 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   spatialDespeckle?: number
   /** 【v49 调查用调试】0=关缺省；1=直显 march 原始输出（current）。demo `?cloudsResolveDebug=1`。 */
   resolveDebug?: number
+  /**
+   * 【v83 N>1 方块治理】低分域 3×3 高斯低通强度（0=关=旧 bilinear；1=全低通）。
+   * 背景：N>1 时 march 输出在低分 texel 上呈二值交替（「一格纯云、一格纯海」）→ 上采样后
+   * 成 N×N 硬边方块；十几项 resolve 参数（α/γ/jitter/despeckle/atlas/LOD/mipLevelScale）
+   * 实测全无效——它们都在 texel 网格内做算术。3×3 低分核把相邻 texel 的二值差摊成分数值，
+   * 块对比度按核面积摊薄。**代价=低分域细节被平滑**（N>1 本就是降分档）。
+   * 仅 N>1（TEMPORAL_UPSCALE）编译消费 → N=1 全分路径零影响。demo `?cloudsUpsampleLowpass=`。
+   */
+  upsampleLowpass?: number
   /** 【v77】jitter 幅度缩放（缺省 0.25）——「颗粒 ↔ 抖动」旋钮。demo `?cloudsJitterScale=`。 */
   jitterScale?: number
   /**
@@ -872,6 +881,8 @@ function buildCloudsStageImpl(
           spatialDespeckle: options.spatialDespeckle,
           // 【v49】调查用调试：直显 current（demo ?cloudsResolveDebug=1）
           resolveDebug: options.resolveDebug,
+          // 【v83 N>1 方块治理】低分域 3×3 高斯低通（demo ?cloudsUpsampleLowpass=）
+          upsampleLowpass: options.upsampleLowpass,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,
