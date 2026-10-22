@@ -1118,15 +1118,19 @@ function buildCloudsStageImpl(
           const d = Cartesian3.dot(prevDirWC, camera.directionWC)
           dirAngle = Math.acos(Math.min(1, Math.max(-1, d)))
         }
-        // 【v89 回退 2026-10-22】曾把 N>1 的静止 base α 提到 0.15，用于压制「俯视颗粒」；
-        // 但真机同时出现「静止时云边缘闪动」（α>0 的已知副作用）。真正的根因已在 resolve
-        // 侧修复（邻域统计由 texelFetch 改 bilinear——原实现产生逐 texel 分段常数与二值
-        // 拉拽，才是方块/暗点阵/颗粒的主因），故 α 恢复全档为 0，消除闪动。
+        // 【v91 N>1 颗粒根治 2026-10-22】降分 march 的静止 base α 从 0 提到 0.18。
+        // 低分 march 每个 texel 只有一条光线、~30 步的估计值，本身带采样方差；N=4 时该方差
+        // 被放大成 4×4 颗粒。唯一便宜的根治手段是时域累积（上游 α=0.1 即为此）。
+        // 上一轮 α=0.15 之所以闪动，是因为同时在跑 variance clipping——它每帧把 history 拉向
+        // 本帧噪声；现已在 shader 侧改为「静止跳过 clip、纯 EMA」（v91），两者配套后累积
+        // 才会收敛到均值而不是追噪声。仅 N>1 生效，N=1 全分路径 α 保持 0 逐位不变。
+        const baseAlphaStatic =
+          applied.upscaleDivisor > 1 ? Math.max(params.temporalAlpha, 0.18) : params.temporalAlpha
         motionAlphaCurrent = computeMotionAlpha(
           transM + dirAngle * MOTION_EQUIV_RADIUS_M,
-          params.temporalAlpha,
-          params.motionAlpha,
-          motionAlphaCurrent ?? params.temporalAlpha
+          baseAlphaStatic,
+          Math.max(params.motionAlpha, baseAlphaStatic),
+          motionAlphaCurrent ?? baseAlphaStatic
         )
         resolvePass?.setTemporalAlpha(motionAlphaCurrent)
 

@@ -282,7 +282,15 @@ void temporalUpscale(
   }
   // 【v66 回归上游语义】clip 始终生效（撤销 v43/v44 的「静止跳过 AABB」——skip 使 history
   // 完全自持=冻结）。clip 的 AABB 调整是全分 history 的持续演化机制（噪声压制 + 细节刷新）。
-  vec4 clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
+  // 【v91 静止纯 EMA 2026-10-22】静止（u_reprojectionStrength=0，无重投影误差）时跳过
+  // variance clipping，直接对 history 做指数累积。原因：clip 的 AABB 取自**当前帧**邻域，
+  // 而 current 每帧因 STBN 相位轮换而变 → clip 每帧把 history 拉向"本帧噪声"，累积退化为
+  // 追噪声（2026-09-02 观测到的"静止收敛抖动"、以及 2026-10-22 α=0.15 时用户看到的
+  // 「静止云缘闪动」都是这个机制）。静止没有遮挡翻转风险，不需要 clip；运动时仍走 clip。
+  vec4 clippedColor = historyColor;
+  if (u_reprojectionStrength > 0.5) {
+    clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
+  }
   // 【2026-09-02 静止收敛抖动修复】three 原文 outputColor = clippedColor 直出——variance
   // clip 的 AABB 逐帧随 current(Bayer ±2px 轮换采样)移动,history 被 clip 拉向本帧
   // current → 输出跟随 current 轮换不收敛。高对比云区(近云视角)显示层持续抖动

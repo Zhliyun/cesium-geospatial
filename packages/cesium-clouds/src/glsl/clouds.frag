@@ -1260,6 +1260,14 @@ void main() {
 
     float mipLevel = getMipLevel(globeUv * localWeatherRepeat) * mipLevelScale;
     mipLevel = mix(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / maxHeight));
+    // 【v91 颗粒根治：低分 march 欠采样】降分 march（targetUvScale = 1/N < 1）每个 texel
+    // 覆盖 N×N 屏幕像素，采样足迹是 N=1 时的 N 倍；但 getMipLevel 经 mipLevelScale=0.1
+    // 压平后只多 0.34 级（N=4），远不足以匹配 → 低分 march 采到高于其采样率约 4 倍的密度
+    // 高频 → 空间混叠（用户报告的「俯视/贴云颗粒感强烈」、N=4 每个低分 texel 一块）。
+    // 时域累积对此无效（0.265% 帧间差分已证明收敛，但收敛到的**均值**在相邻 texel 之间
+    // 本就不同 = 空间欠采样，不是时间噪声）。修法：把 log2(N) 直接加进 mip，让低分 march
+    // 采样预滤波（mipmap）后的密度场——这正是 mipmap 存在的目的。N=1 时该式为 0，逐位不变。
+    mipLevel += log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
     // 【白点治理】天空分支按 mip 分域取 STBN 层（高 mip 轮换治白点/低 mip 冻结防闪动）
     stbn = getSTBN(mipLevel);
 
