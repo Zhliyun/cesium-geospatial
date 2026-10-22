@@ -1118,14 +1118,13 @@ function buildCloudsStageImpl(
           const d = Cartesian3.dot(prevDirWC, camera.directionWC)
           dirAngle = Math.acos(Math.min(1, Math.max(-1, d)))
         }
-        // 【v91 N>1 颗粒根治 2026-10-22】降分 march 的静止 base α 从 0 提到 0.18。
-        // 低分 march 每个 texel 只有一条光线、~30 步的估计值，本身带采样方差；N=4 时该方差
-        // 被放大成 4×4 颗粒。唯一便宜的根治手段是时域累积（上游 α=0.1 即为此）。
-        // 上一轮 α=0.15 之所以闪动，是因为同时在跑 variance clipping——它每帧把 history 拉向
-        // 本帧噪声；现已在 shader 侧改为「静止跳过 clip、纯 EMA」（v91），两者配套后累积
-        // 才会收敛到均值而不是追噪声。仅 N>1 生效，N=1 全分路径 α 保持 0 逐位不变。
+        // 【v92 2026-10-22】α 0.18 → 0.08。用户复验：颗粒已明显改善，但云层底部边缘出现
+        // 「快速变化的色块」。该处是低分 march 逐 texel 的二值化（命中云/看到海），静态
+        // 块度属低分采样本身；"快速变化"则是纯 EMA 每帧注入 α 比例的当前帧噪声所致
+        //（收敛态噪声幅度 ≈ sqrt(α/(2-α))：0.18≈0.31、0.08≈0.20）。降 α 直接压闪烁，
+        // 代价是收敛时间从 ~5 帧变 ~12 帧（静止场景可接受）。
         const baseAlphaStatic =
-          applied.upscaleDivisor > 1 ? Math.max(params.temporalAlpha, 0.18) : params.temporalAlpha
+          applied.upscaleDivisor > 1 ? Math.max(params.temporalAlpha, 0.08) : params.temporalAlpha
         motionAlphaCurrent = computeMotionAlpha(
           transM + dirAngle * MOTION_EQUIV_RADIUS_M,
           baseAlphaStatic,
