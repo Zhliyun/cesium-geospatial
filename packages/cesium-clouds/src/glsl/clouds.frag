@@ -686,18 +686,24 @@ vec4 marchClouds(
     vec3 position = rayDistance * rayDirection + rayOrigin;
     float height = length(position) - bottomRadius;
     float mipLevel = log2(max(1.0, rayStartTexelsPerPixel + rayDistance * 1e-5));
+    // 【v93 水波纹根治 2026-10-22】步长 LOD 必须用**未提升**的 mip：外层 mipLevel 已按
+    // 降分倍数 +log2(N)（治低分 march 颗粒），若步长也吃这个提升 → N=4 时步长被抬高 2 级
+    // → 等距步进量化环 = 用户报告的「以相机为圆心的水波纹」（运动时最明显，与 2026-09-29
+    // 「驻波环」同族）。密度采样继续用提升后的 mipLevel（保持颗粒修复）。
+    float stepMip = mipLevel - log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
+    float sampleMip = mipLevel;
 
     #if !defined(DEBUG_MARCH_INTERVALS)
     if (insideLayerIntervals(height)) {
       stepSize *= perspectiveStepScale;
-      rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel));
+      rayDistance += mix(stepSize, maxStepSize, min(1.0, stepMip));
       continue;
     }
     #endif // !defined(DEBUG_MARCH_INTERVALS)
 
     // Sample rough weather.
     vec2 uv = getGlobeUv(position);
-    WeatherSample weather = sampleWeather(uv, position, height, mipLevel);
+    WeatherSample weather = sampleWeather(uv, position, height, sampleMip);
 
     #ifdef DEBUG_SHOW_SAMPLE_COUNT
     ++sampleCount.x;
@@ -708,12 +714,12 @@ vec4 marchClouds(
       // TODO: This produces banding artifacts.
       // Possible improvement: Binary search refinement
       stepSize *= perspectiveStepScale;
-      rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel));
+      rayDistance += mix(stepSize, maxStepSize, min(1.0, stepMip));
       continue;
     }
 
     // Sample detailed participating media.
-    MediaSample media = sampleMedia(weather, position, uv, mipLevel, marchJitter, sampleCount);
+    MediaSample media = sampleMedia(weather, position, uv, sampleMip, marchJitter, sampleCount);
 
     if (media.extinction > minExtinction) {
       // 【2026-10-09 颗粒带判别 v2】media.extinction 直显（shape 3D 修正后的有效密度，
@@ -883,7 +889,7 @@ vec4 marchClouds(
       // 注意不可写在白化前——NaN 会经 max/mix 传播（Metal max(NaN,x) 未定义）。
       if (isnan(radiance.x) || isnan(radiance.y) || isnan(radiance.z)) {
         stepSize *= perspectiveStepScale;
-        rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel));
+        rayDistance += mix(stepSize, maxStepSize, min(1.0, stepMip));
         continue;
       }
       // 【2026-09-29 编译扰动锚（2022m 黑斑压制实验）】Mac ANGLE→Metal fast-math 在本函数
@@ -1260,13 +1266,8 @@ void main() {
 
     float mipLevel = getMipLevel(globeUv * localWeatherRepeat) * mipLevelScale;
     mipLevel = mix(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / maxHeight));
-    // 【v91 颗粒根治：低分 march 欠采样】降分 march（targetUvScale = 1/N < 1）每个 texel
-    // 覆盖 N×N 屏幕像素，采样足迹是 N=1 时的 N 倍；但 getMipLevel 经 mipLevelScale=0.1
-    // 压平后只多 0.34 级（N=4），远不足以匹配 → 低分 march 采到高于其采样率约 4 倍的密度
-    // 高频 → 空间混叠（用户报告的「俯视/贴云颗粒感强烈」、N=4 每个低分 texel 一块）。
-    // 时域累积对此无效（0.265% 帧间差分已证明收敛，但收敛到的**均值**在相邻 texel 之间
-    // 本就不同 = 空间欠采样，不是时间噪声）。修法：把 log2(N) 直接加进 mip，让低分 march
-    // 采样预滤波（mipmap）后的密度场——这正是 mipmap 存在的目的。N=1 时该式为 0，逐位不变。
+    // 【v93 颗粒根治（保持）】低分 march 采样足迹 ×N，mip 必须 +log2(N) 才能采样到预滤波
+    // 的密度场；否则 1/4 分辨率 march 采未滤波高频 → 空间混叠 = 逐 texel 颗粒。
     mipLevel += log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
     // 【白点治理】天空分支按 mip 分域取 STBN 层（高 mip 轮换治白点/低 mip 冻结防闪动）
     stbn = getSTBN(mipLevel);
