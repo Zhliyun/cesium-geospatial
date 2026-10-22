@@ -111,7 +111,11 @@ const DEFAULTS: ResolvedCloudsMainOptions = {
   lightShafts: true,
   shadowCascadeCount: 3,
   upscaleDivisor: 1,
-  mipBoost: 1
+  // 【v98 2026-10-22 缺省回 0】mip 提升是「近距离颗粒 ↔ 中远距斑点/弧纹」同一取舍的两端：
+  // boost=1 修好 1733m 的颗粒，但 4061m 出现大片斑点与同心弧（会话起点版本无此现象，
+  // git 二分 + 截图实锤）。缺省回到 0 = 与会话前一致（零回归）；压近景颗粒时用
+  // ?cloudsMipBoost=1 单独开启。
+  mipBoost: 0
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include

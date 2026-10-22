@@ -1126,18 +1126,16 @@ function buildCloudsStageImpl(
           const d = Cartesian3.dot(prevDirWC, camera.directionWC)
           dirAngle = Math.acos(Math.min(1, Math.max(-1, d)))
         }
-        // 【v92 2026-10-22】α 0.18 → 0.08。用户复验：颗粒已明显改善，但云层底部边缘出现
-        // 「快速变化的色块」。该处是低分 march 逐 texel 的二值化（命中云/看到海），静态
-        // 块度属低分采样本身；"快速变化"则是纯 EMA 每帧注入 α 比例的当前帧噪声所致
-        //（收敛态噪声幅度 ≈ sqrt(α/(2-α))：0.18≈0.31、0.08≈0.20）。降 α 直接压闪烁，
-        // 代价是收敛时间从 ~5 帧变 ~12 帧（静止场景可接受）。
-        const baseAlphaStatic =
-          applied.upscaleDivisor > 1 ? Math.max(params.temporalAlpha, 0.08) : params.temporalAlpha
+        // 【v98 回归修复 2026-10-22】撤销 v91 起的「N>1 静止 base α 提到 0.15/0.18/0.08」。
+        // 该改动原本用于压俯视颗粒，但与「静止跳过 variance clipping」配对后，使低分 march
+        // 的采样斑点失去 clip 的空间降噪、被时域累积保留 → 用户报「以相机为圆心的水波纹/
+        // 大片斑点」。git 二分 3c386b3（α=0 + clip 常在）同机位干净、f7aff57 复现。
+        // α 恢复全档为 params.temporalAlpha（缺省 0），画面回到会话前基线。
         motionAlphaCurrent = computeMotionAlpha(
           transM + dirAngle * MOTION_EQUIV_RADIUS_M,
-          baseAlphaStatic,
-          Math.max(params.motionAlpha, baseAlphaStatic),
-          motionAlphaCurrent ?? baseAlphaStatic
+          params.temporalAlpha,
+          params.motionAlpha,
+          motionAlphaCurrent ?? params.temporalAlpha
         )
         resolvePass?.setTemporalAlpha(motionAlphaCurrent)
 
