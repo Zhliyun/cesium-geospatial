@@ -695,11 +695,12 @@ vec4 marchClouds(
     vec3 position = rayDistance * rayDirection + rayOrigin;
     float height = length(position) - bottomRadius;
     float mipLevel = log2(max(1.0, rayStartTexelsPerPixel + rayDistance * 1e-5));
-    // 【v93 水波纹根治 2026-10-22】步长 LOD 必须用**未提升**的 mip：外层 mipLevel 已按
-    // 降分倍数 +log2(N)（治低分 march 颗粒），若步长也吃这个提升 → N=4 时步长被抬高 2 级
-    // → 等距步进量化环 = 用户报告的「以相机为圆心的水波纹」（运动时最明显，与 2026-09-29
-    // 「驻波环」同族）。密度采样继续用提升后的 mipLevel（保持颗粒修复）。
-    float stepMip = mipLevel - log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
+    // 【v102 关键修正 2026-10-22】stepMip 必须扣回**与提升相同的量**，即乘上
+    // CLOUDS_MIP_BOOST。原式写死 log2(1/mipLevelScale)：当 mipBoost=0（缺省）时
+    // stepMip = mipLevel - 2 → 负数 → mix(stepSize, maxStepSize, min(1.0, 负数)) 得到
+    // **负步长** → 步进错乱 → 以相机为圆心的同心波纹（用户真机症状）。
+    // 这条也让此前所有 boost=0 的对照失效，是「低通关了仍有波纹」的真正原因。
+    float stepMip = mipLevel - CLOUDS_MIP_BOOST * log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
     float sampleMip = mipLevel;
 
     #if !defined(DEBUG_MARCH_INTERVALS)
