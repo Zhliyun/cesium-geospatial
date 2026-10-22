@@ -189,25 +189,22 @@ void temporalUpscale(
   // 网格内做算术）。3×3 低分核把相邻 texel 的二值差摊成分数值：核内 texel 越多，单 texel
   // 的权重越低，块对比度按核面积摊薄。仅 TEMPORAL_UPSCALE（N>1）编译 → N=1 全分路径零影响。
   if (u_upsampleLowpass > 0.0) {
-    ivec2 sz = ivec2(mrtSz2) - 1;
-    // 【v88 已回退 2026-10-22】核半径曾按降分倍数放大到 ±2（N=4），用户真机反馈
-    // 「画面变得很模糊，像近视眼视角」→ 回退为固定 ±1（3×3）。N=4 的 4×4 texel 马赛克
-    // 与模糊是同一取舍的两端，靠加宽模糊不是正解——需从 march 端的 texel 间方差入手。
-    #if UPSCALE_DIVISOR >= 4
-      const int LP_S = 1;
-    #else
-      const int LP_S = 1;
-    #endif
+    // 【v89 修正 2026-10-22】原实现用 texelFetch(i00 + offset)：i00 是 floor 到低分 texel
+    // 的整数坐标，因此整个核在**一个 texel 跨度内恒定** → mix 权重 1 时输出退化为「逐 texel
+    // 分段常数」= 4×4 硬方块（用户截图里的白色方格网），加宽核只会让方块更大更糊。
+    // 改为 **bilinear 采样**（colorTex sampler 已是 LINEAR）：核跟随亚 texel 位置连续变化，
+    // 既能摊平 texel 间差异，又不产生分段常数与 texel 边界接缝。核半径固定 ±1 texel。
+    vec2 ts = 1.0 / mrtSz2;
     vec4 lp =
-        texelFetch(colorBuffer, clamp(i00 + ivec2(-LP_S, -LP_S), ivec2(0), sz), 0) * 1.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2(    0, -LP_S), ivec2(0), sz), 0) * 2.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2( LP_S, -LP_S), ivec2(0), sz), 0) * 1.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2(-LP_S,     0), ivec2(0), sz), 0) * 2.0
-      + texelFetch(colorBuffer, clamp(i00                     , ivec2(0), sz), 0) * 4.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2( LP_S,     0), ivec2(0), sz), 0) * 2.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2(-LP_S,  LP_S), ivec2(0), sz), 0) * 1.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2(    0,  LP_S), ivec2(0), sz), 0) * 2.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2( LP_S,  LP_S), ivec2(0), sz), 0) * 1.0;
+        texture(colorBuffer, vUv + vec2(-1.0, -1.0) * ts) * 1.0
+      + texture(colorBuffer, vUv + vec2( 0.0, -1.0) * ts) * 2.0
+      + texture(colorBuffer, vUv + vec2( 1.0, -1.0) * ts) * 1.0
+      + texture(colorBuffer, vUv + vec2(-1.0,  0.0) * ts) * 2.0
+      + texture(colorBuffer, vUv) * 4.0
+      + texture(colorBuffer, vUv + vec2( 1.0,  0.0) * ts) * 2.0
+      + texture(colorBuffer, vUv + vec2(-1.0,  1.0) * ts) * 1.0
+      + texture(colorBuffer, vUv + vec2( 0.0,  1.0) * ts) * 2.0
+      + texture(colorBuffer, vUv + vec2( 1.0,  1.0) * ts) * 1.0;
     currentColor = mix(currentColor, lp * (1.0 / 16.0), u_upsampleLowpass);
   }
   #ifdef SHADOW_LENGTH
@@ -404,22 +401,18 @@ void main() {
     // 坐标（全分/超分域），colorBuffer 是 march RT（N=2/4 降分时低分）——直接用 coord
     // 在 N>1 时越界 texelFetch（返回 0）→ 半屏黑点 + x=1/divisor 处竖分界
     //（上界外像素邻域全 0 → 均值被拉黑 → 反向替换）。N=1/超分时两域重合，行为不变。
-    #ifdef TEMPORAL_UPSCALE
-      ivec2 despeckleCoord = lowResCoord;
-    #else
-      ivec2 despeckleCoord = coord;
-    #endif
-    // 【v86 性能 2026-10-22】25-tap 5×5 → 9-tap（步长 2，同 ±2 空间跨度）+ 去数组。
-    // 用户真机实测：N=2 全分 resolve 上 despeckle 单项约 9ms（关掉 23→29fps）。原实现
-    // 同时持有 float[25]+float[25]+vec3[25] 三个共 ~100 分量的数组 → fragment 寄存器
-    // 溢出/本地内存，是其成本主因。这里只需「中心是否相对邻域离群」的均值，用步长 2 的
-    // 3×3 网格保留同样 ±2 邻域跨度：单像素孤点在 9 点均值里占 1/9（原 1/25）→ 离群信号
-    // 更强，检出能力不弱于原版；纯累加无数组。
+    // 【v89 修正 2026-10-22】原实现 texelFetch(despeckleCoord + offset)：参考均值在整个
+    // 低分 texel 内恒定，而被比较的 outputColor 是逐全分像素变化的 → 在 texel 跨度内
+    // 必然出现「一半像素被判超阈、另一半不判」的**逐 texel 二值化**，把全分辨率像素往
+    // 低分常数上拉 → 用户截图里的**规则暗点阵**（N=4 间距≈4px）。
+    // 改为 bilinear 采样（colorTex sampler 已是 LINEAR）：参考值随亚 texel 位置连续变化，
+    // 判据在空间上连续，不再产生 texel 级二值拉拽。
+    vec2 dts = 1.0 / vec2(textureSize(colorBuffer, 0));
     vec3 meanColor = vec3(0.0);
     float meanA = 0.0;
     for (int dy = -2; dy <= 2; dy += 2) {
       for (int dx = -2; dx <= 2; dx += 2) {
-        vec4 cn = texelFetch(colorBuffer, despeckleCoord + ivec2(dx, dy), 0);
+        vec4 cn = texture(colorBuffer, vUv + vec2(float(dx), float(dy)) * dts);
         meanColor += cn.rgb;
         meanA += cn.a;
       }
