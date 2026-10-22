@@ -625,6 +625,9 @@ async function main(): Promise<void> {
           // 【v77】?cloudsJitterScale=N jitter 幅度缩放（缺省 0.25）——颗粒↔抖动旋钮
           ...(getNumber('cloudsJitterScale') != null
             ? { jitterScale: getNumber('cloudsJitterScale')! } : {}),
+          // 【v95】?cloudsMipBoost=N 低分 march 密度 mip 提升倍率（缺省 1；0=不提升）
+          ...(getNumber('cloudsMipBoost') != null
+            ? { mipBoost: getNumber('cloudsMipBoost')! } : {}),
           // 【2026-10-08 白点治理】?cloudsUnfreezeMip=N STBN 相位分域阈值（mip>N 轮换
           // 治白点；≤N 冻结防云缘闪动；0=全轮换）
           ...(getNumber('cloudsUnfreezeMip') != null

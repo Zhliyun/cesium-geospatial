@@ -1273,7 +1273,11 @@ void main() {
     float stbnMipLevel = mipLevel;
     // 【v93 颗粒根治（保持）】低分 march 采样足迹 ×N，mip 必须 +log2(N) 才能采样到预滤波
     // 的密度场；否则 1/4 分辨率 march 采未滤波高频 → 空间混叠 = 逐 texel 颗粒。
-    mipLevel += log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
+    // 【v95】倍率可由 ?cloudsMipBoost= 扫档（0=不提升 / 1=完整），用于真机定位平衡点。
+    #ifndef CLOUDS_MIP_BOOST
+    #define CLOUDS_MIP_BOOST 1.0
+    #endif
+    mipLevel += CLOUDS_MIP_BOOST * log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
     // 【白点治理】天空分支按 mip 分域取 STBN 层（高 mip 轮换治白点/低 mip 冻结防闪动）
     stbn = getSTBN(stbnMipLevel);
 

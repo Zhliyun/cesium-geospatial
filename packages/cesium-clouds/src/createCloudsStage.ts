@@ -250,6 +250,12 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   /** 【v77】jitter 幅度缩放（缺省 0.25）——「颗粒 ↔ 抖动」旋钮。demo `?cloudsJitterScale=`。 */
   jitterScale?: number
   /**
+   * 【v95 2026-10-22】低分 march 的密度 mip 提升倍率（乘在 log2(N) 上，缺省 1）。
+   * 1 = 完整提升（N=4 → +2 级，颗粒已修，但用户报告出现 iso-距离分界/水波纹）；
+   * 0 = 不提升（回到 v93 前，颗粒会回来）。demo `?cloudsMipBoost=` 扫档定位平衡点。
+   */
+  mipBoost?: number
+  /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
    * （无自阴影，M2 flat 行为；对比云体积感用）。demo `?cloudsShadow=0`。
@@ -782,7 +788,9 @@ function buildCloudsStageImpl(
       // 防止 options.upscaleDivisor 原键（若有）漏档位合并，这里显式覆盖为 applied 值
       upscaleDivisor: applied.upscaleDivisor,
       // 【v49 调查用调试】jitter 注入点掩码（demo ?cloudsJitterMask=）
-      jitterMask: options.jitterMask
+      jitterMask: options.jitterMask,
+      // 【v95】低分 march 密度 mip 提升倍率（demo ?cloudsMipBoost=）
+      mipBoost: options.mipBoost
     })
 
     // ── ShadowPass 生成端（options.shadowPass=false 跳过——诊断基线 Beer=1）──

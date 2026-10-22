@@ -64,6 +64,12 @@ export interface CloudsMainOptions {
    */
   accurateSunSkyLight?: boolean
   /**
+   * 【v95 2026-10-22】低分 march 的密度 mip 提升倍率（乘在 log2(N) 上）。
+   * 1=完整提升（N=4 → +2 级，颗粒已修；但引入 iso-距离分界/水波纹）、0=不提升（回到 v91 前）。
+   * demo `?cloudsMipBoost=`，用于真机扫档定位「波纹 vs 颗粒」的平衡点。
+   */
+  mipBoost?: number
+  /**
    * Debug 视图（clouds.frag DEBUG_SHOW_* 分支，M2 视觉调试用）：
    *   'uv'（globeUv checker 映射）/ 'frontDepth'（turbo 云前深度）/ 'sampleCount'（march 采样数）/
    *   'shadowMap'（BSM 可视化，M3）/ 'cascades'（cascade 分层着色：红=0 绿=1 蓝=2，越界=白）。
@@ -104,7 +110,8 @@ const DEFAULTS: ResolvedCloudsMainOptions = {
   debugShow: null,
   lightShafts: true,
   shadowCascadeCount: 3,
-  upscaleDivisor: 1
+  upscaleDivisor: 1,
+  mipBoost: 1
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include
@@ -155,6 +162,8 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     ...CLOUDS_MAIN_DEFINES,
     '#define PERSPECTIVE_CAMERA', // getViewZ perspectiveDepthToViewZ 分支（Cesium 相机恒透视）
     '#define SHADOW_CASCADE_COUNT ' + o.shadowCascadeCount,
+    // 【v95】低分 march 密度 mip 提升倍率（0=不提升；1=完整 log2(N)）
+    '#define CLOUDS_MIP_BOOST ' + (o.mipBoost ?? 1).toFixed(3),
     lowResMarch ? '#define LOW_RES_MARCH' : '',
     o.accurateSunSkyLight ? '#define ACCURATE_SUN_SKY_LIGHT' : '',
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',
