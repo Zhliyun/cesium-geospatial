@@ -125,12 +125,13 @@ export function createCloudsResolvePass(
   // 【v35 静止重投影禁用】1=正常重投影 / 0=静止禁用（createCloudsStage 按相机运动量每帧设）。
   let reprojectionStrength = 1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
-  // 【v98 恢复开启】低分域 3×3 低通缺省恢复为 1（bilinear 版）。
-  // 时间线：v83 引入（texelFetch 版）→ v86 阶段在 7551m 出现黑色方块 → 5f4f1f7 关闭；
-  // 但黑块是 texelFetch 的「逐 texel 分段常数」造成的，3c386b3 已改为 bilinear 采样。
-  // 现按 git 二分结果恢复：3c386b3（低通开）在 4061m 机位干净无斑点，而关闭后斑点暴露。
-  // 若 7551m 黑块复现则回退。
-  let upsampleLowpass = options.upsampleLowpass ?? 1
+  // 【v100 缺省关闭（定案）2026-10-22】git 二分 + 真机拖动验收结论：
+  //   低通 texelFetch 版（ec43f61，开） → 无波纹
+  //   低通关闭（5f4f1f7）             → 无波纹
+  //   低通 bilinear 版（3c386b3 起，开）→ **拖动时出现同心波纹**
+  // 即 bilinear 低通（texture() 按低分 texel 偏移采样）在运动帧引入波纹；缺省关闭。
+  // ?cloudsUpsampleLowpass=1 仍可手动开启（用于压 N>1 的 texel 方块，代价是运动波纹）。
+  let upsampleLowpass = options.upsampleLowpass ?? 0
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
 

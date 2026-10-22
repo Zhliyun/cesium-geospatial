@@ -277,7 +277,12 @@ void temporalUpscale(
   // 但触发时直出 currentColor = 未经时域平均的 march 原始结果 → 拖动相机时低分 march 的
   // 采样斑点/同心弧全部暴露（用户：「移动视角时能看到明显水波纹」，而静止截图干净——
   // 这正是只在运动帧生效的路径特征）。运动黑块问题回到会话前状态，另行处理。
-  if (false && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+  // 【v100 恢复 v87 运动门控 2026-10-22】真机逐版本拖动验收：
+  //   5f4f1f7（rejection 运动门控 ON + 低通 OFF）→ **无波纹**
+  //   v100   （rejection OFF        + 低通 OFF）→ **有波纹**
+  // → 运动 rejection 实际上在**抑制**波纹：命中时直出 current，绕开了 history/clip
+  //   那条会产生同心环的路径。故保留「仅运动时启用」（静止仍恒 false，保住静止无抖）。
+  if (u_reprojectionStrength > 0.5 && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
@@ -361,7 +366,12 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   // 但触发时直出 currentColor = 未经时域平均的 march 原始结果 → 拖动相机时低分 march 的
   // 采样斑点/同心弧全部暴露（用户：「移动视角时能看到明显水波纹」，而静止截图干净——
   // 这正是只在运动帧生效的路径特征）。运动黑块问题回到会话前状态，另行处理。
-  if (false && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+  // 【v100 恢复 v87 运动门控 2026-10-22】真机逐版本拖动验收：
+  //   5f4f1f7（rejection 运动门控 ON + 低通 OFF）→ **无波纹**
+  //   v100   （rejection OFF        + 低通 OFF）→ **有波纹**
+  // → 运动 rejection 实际上在**抑制**波纹：命中时直出 current，绕开了 history/clip
+  //   那条会产生同心环的路径。故保留「仅运动时启用」（静止仍恒 false，保住静止无抖）。
+  if (u_reprojectionStrength > 0.5 && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
