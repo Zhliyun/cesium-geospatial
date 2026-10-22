@@ -125,9 +125,11 @@ export function createCloudsResolvePass(
   // 【v35 静止重投影禁用】1=正常重投影 / 0=静止禁用（createCloudsStage 按相机运动量每帧设）。
   let reprojectionStrength = 1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
-  // 【v83 N>1 方块治理】低分域 3×3 高斯低通强度（缺省 1=开——N>1 方块是用户明确要求消除的
-  // 伪影；0=关回退旧 bilinear）。demo ?cloudsUpsampleLowpass= 可调（0.5=折中档）。
-  let upsampleLowpass = options.upsampleLowpass ?? 1
+  // 【v90 缺省关】低分域 3×3 低通缺省关闭（0）。2026-10-22 真机复现机位
+  // （camera=7.0857,42.1025,7551,201.5,-6.2, N=4）实测：开启低通会在云层区生成成片
+  // 黑色小方块，关掉即全部消失（受控对照）。而 v89 已把上采样采样改为连续 bilinear，
+  // 低通原本要治的「N×N 硬方块」不再出现（俯视机位实测为细腻抖动纹理）→ 无需该核。
+  let upsampleLowpass = options.upsampleLowpass ?? 0
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
 

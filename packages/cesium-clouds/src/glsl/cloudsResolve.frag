@@ -195,17 +195,31 @@ void temporalUpscale(
     // 改为 **bilinear 采样**（colorTex sampler 已是 LINEAR）：核跟随亚 texel 位置连续变化，
     // 既能摊平 texel 间差异，又不产生分段常数与 texel 边界接缝。核半径固定 ±1 texel。
     vec2 ts = 1.0 / mrtSz2;
-    vec4 lp =
-        texture(colorBuffer, vUv + vec2(-1.0, -1.0) * ts) * 1.0
-      + texture(colorBuffer, vUv + vec2( 0.0, -1.0) * ts) * 2.0
-      + texture(colorBuffer, vUv + vec2( 1.0, -1.0) * ts) * 1.0
-      + texture(colorBuffer, vUv + vec2(-1.0,  0.0) * ts) * 2.0
-      + texture(colorBuffer, vUv) * 4.0
-      + texture(colorBuffer, vUv + vec2( 1.0,  0.0) * ts) * 2.0
-      + texture(colorBuffer, vUv + vec2(-1.0,  1.0) * ts) * 1.0
-      + texture(colorBuffer, vUv + vec2( 0.0,  1.0) * ts) * 2.0
-      + texture(colorBuffer, vUv + vec2( 1.0,  1.0) * ts) * 1.0;
-    currentColor = mix(currentColor, lp * (1.0 / 16.0), u_upsampleLowpass);
+    vec3 lp = vec3(0.0);
+    float lpa = 0.0;
+    float lpw = 0.0;   // rgb 权重（按不透明度）
+    float lpwA = 0.0;  // transmittance 权重（平权）
+    // 【v90 不透明度加权 2026-10-22】att0.a = **不透明度**（1=不透，resolve 的遮挡翻转判据
+    // 与「黑 texel=a 显著」注释同源）。低通若直接平均 rgb，会把「rgb=0 的透明 texel」摊进
+    // 云里 → 用户复现机位（camera=7.0857,42.1025,7551,201.5,-6.2, N=4）成片黑色小方块；
+    // 受控对照关掉低通即全部消失，锁定此处。修法：rgb 按不透明度加权（透明样本权重→0），
+    // 不透明度平权单独平均；并保留黑 texel 剔除。
+    for (int j = 0; j < 3; ++j) {
+      for (int i = 0; i < 3; ++i) {
+        vec4 s = texture(colorBuffer, vUv + vec2(float(i - 1), float(j - 1)) * ts);
+        float w = (i == 1 ? 2.0 : 1.0) * (j == 1 ? 2.0 : 1.0);
+        float opacity = clamp(s.a, 0.0, 1.0);
+        bool blk = dot(s.rgb, vec3(0.299, 0.587, 0.114)) < 0.012 && opacity > 0.05;
+        float wr = blk ? 0.0 : w * opacity;
+        lp += s.rgb * wr;
+        lpw += wr;
+        lpa += opacity * w;
+        lpwA += w;
+      }
+    }
+    if (lpw > 1e-3) {
+      currentColor = mix(currentColor, vec4(lp / lpw, lpa / lpwA), u_upsampleLowpass);
+    }
   }
   #ifdef SHADOW_LENGTH
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, lowResCoord, 0).rgb, 1.0);
