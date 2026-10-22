@@ -190,16 +190,24 @@ void temporalUpscale(
   // 的权重越低，块对比度按核面积摊薄。仅 TEMPORAL_UPSCALE（N>1）编译 → N=1 全分路径零影响。
   if (u_upsampleLowpass > 0.0) {
     ivec2 sz = ivec2(mrtSz2) - 1;
+    // 【v88 2026-10-22】核半径随降分倍数放大：N=2 用 ±1（3×3，原行为），N=4 用 ±2
+    //（同样 9 采样、覆盖 ±2 texel = ±8 全分像素）。用户俯视实测 N=4 仍有明显的 4×4
+    // texel 马赛克（截图为证），±1 核只摊薄相邻一格不够；N=2 保持原核避免过度模糊。
+    #if UPSCALE_DIVISOR >= 4
+      const int LP_S = 2;
+    #else
+      const int LP_S = 1;
+    #endif
     vec4 lp =
-        texelFetch(colorBuffer, clamp(i00 + ivec2(-1, -1), ivec2(0), sz), 0) * 1.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2( 0, -1), ivec2(0), sz), 0) * 2.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2( 1, -1), ivec2(0), sz), 0) * 1.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2(-1,  0), ivec2(0), sz), 0) * 2.0
-      + texelFetch(colorBuffer, clamp(i00                    , ivec2(0), sz), 0) * 4.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2( 1,  0), ivec2(0), sz), 0) * 2.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2(-1,  1), ivec2(0), sz), 0) * 1.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2( 0,  1), ivec2(0), sz), 0) * 2.0
-      + texelFetch(colorBuffer, clamp(i00 + ivec2( 1,  1), ivec2(0), sz), 0) * 1.0;
+        texelFetch(colorBuffer, clamp(i00 + ivec2(-LP_S, -LP_S), ivec2(0), sz), 0) * 1.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2(    0, -LP_S), ivec2(0), sz), 0) * 2.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2( LP_S, -LP_S), ivec2(0), sz), 0) * 1.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2(-LP_S,     0), ivec2(0), sz), 0) * 2.0
+      + texelFetch(colorBuffer, clamp(i00                     , ivec2(0), sz), 0) * 4.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2( LP_S,     0), ivec2(0), sz), 0) * 2.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2(-LP_S,  LP_S), ivec2(0), sz), 0) * 1.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2(    0,  LP_S), ivec2(0), sz), 0) * 2.0
+      + texelFetch(colorBuffer, clamp(i00 + ivec2( LP_S,  LP_S), ivec2(0), sz), 0) * 1.0;
     currentColor = mix(currentColor, lp * (1.0 / 16.0), u_upsampleLowpass);
   }
   #ifdef SHADOW_LENGTH
@@ -249,7 +257,12 @@ void temporalUpscale(
   // 黑块 bug（2026-09-02 云地平线 / 2026-09-03 穿云）根因均为 velocity 错位 → history 采到
   // 死值——该错位已由 v44 重投影修复消除（jitter 双重注入移除 + 上帧 jitter 补偿）。
   // 上游 resolve 本就无 rejection。条件恒 false 保留分支体便于故障回退（GLSL 裁剪死代码）。
-  if (false && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+  // 【v87 运动黑块 2026-10-22】rejection 改为**仅运动时**启用（u_reprojectionStrength：
+  // 静止 0 / 运动 1）。v44 把它整段关掉是为了治静止抖动——静止时 jitter 相位轮换让云缘
+  // |Δa| 恒超阈，rejection 变成"每帧直出 current"=抖动；但运动时这条判据正是遮挡翻转的
+  // 正确信号，关掉后拖动相机（尤其相机贴近/进入云层、N>1 降分域）会出现黑色块。
+  // 门控后：静止逐位不变（jitter 修复保住），运动恢复 2026-09-02 的黑块修复语义。
+  if (u_reprojectionStrength > 0.5 && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
@@ -319,7 +332,12 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   // 黑块 bug（2026-09-02 云地平线 / 2026-09-03 穿云）根因均为 velocity 错位 → history 采到
   // 死值——该错位已由 v44 重投影修复消除（jitter 双重注入移除 + 上帧 jitter 补偿）。
   // 上游 resolve 本就无 rejection。条件恒 false 保留分支体便于故障回退（GLSL 裁剪死代码）。
-  if (false && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+  // 【v87 运动黑块 2026-10-22】rejection 改为**仅运动时**启用（u_reprojectionStrength：
+  // 静止 0 / 运动 1）。v44 把它整段关掉是为了治静止抖动——静止时 jitter 相位轮换让云缘
+  // |Δa| 恒超阈，rejection 变成"每帧直出 current"=抖动；但运动时这条判据正是遮挡翻转的
+  // 正确信号，关掉后拖动相机（尤其相机贴近/进入云层、N>1 降分域）会出现黑色块。
+  // 门控后：静止逐位不变（jitter 修复保住），运动恢复 2026-09-02 的黑块修复语义。
+  if (u_reprojectionStrength > 0.5 && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
@@ -391,24 +409,23 @@ void main() {
     #else
       ivec2 despeckleCoord = coord;
     #endif
-    float lumas[25];
-    float alphas[25];
-    vec3 colors[25];
-    int k = 0;
-    for (int dy = -2; dy <= 2; ++dy) {
-      for (int dx = -2; dx <= 2; ++dx) {
-        vec4 cn = texelFetch(colorBuffer, despeckleCoord + ivec2(dx, dy), 0);
-        colors[k] = cn.rgb;
-        alphas[k] = cn.a;
-        lumas[k] = dot(colors[k], vec3(0.299, 0.587, 0.114));
-        ++k;
-      }
-    }
+    // 【v86 性能 2026-10-22】25-tap 5×5 → 9-tap（步长 2，同 ±2 空间跨度）+ 去数组。
+    // 用户真机实测：N=2 全分 resolve 上 despeckle 单项约 9ms（关掉 23→29fps）。原实现
+    // 同时持有 float[25]+float[25]+vec3[25] 三个共 ~100 分量的数组 → fragment 寄存器
+    // 溢出/本地内存，是其成本主因。这里只需「中心是否相对邻域离群」的均值，用步长 2 的
+    // 3×3 网格保留同样 ±2 邻域跨度：单像素孤点在 9 点均值里占 1/9（原 1/25）→ 离群信号
+    // 更强，检出能力不弱于原版；纯累加无数组。
     vec3 meanColor = vec3(0.0);
     float meanA = 0.0;
-    for (int i = 0; i < 25; ++i) { meanColor += colors[i]; meanA += alphas[i]; }
-    meanColor /= 25.0;
-    meanA /= 25.0;
+    for (int dy = -2; dy <= 2; dy += 2) {
+      for (int dx = -2; dx <= 2; dx += 2) {
+        vec4 cn = texelFetch(colorBuffer, despeckleCoord + ivec2(dx, dy), 0);
+        meanColor += cn.rgb;
+        meanA += cn.a;
+      }
+    }
+    meanColor /= 9.0;
+    meanA /= 9.0;
     float lumaOut = dot(outputColor.rgb, vec3(0.299, 0.587, 0.114));
     float lumaMean = dot(meanColor, vec3(0.299, 0.587, 0.114));
     // 【2026-10-09 分通道方向性滤波】rgb=对称（亮喷溅+黑点都治——黑点=暗离群，
