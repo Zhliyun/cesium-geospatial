@@ -666,8 +666,14 @@ vec4 marchClouds(
   // 非密度场纹理）。归零只保留给短段（f49589b 闪屏域=veil alpha 二值跳变的薄段）；
   // 长段恢复蓝噪声相位打碎驻波（静止帧 STBN 层冻结=M4 temporal 静止不递增 → 噪点固定
   // 不闪；运动帧 TAA 平滑）。
-  marchJitter = mix(marchJitter, 0.0, inLayerCam * thinSegment);
-  startJitter = mix(startJitter, 0.0, inLayerCam * thinSegment);
+  // 【v96 2026-10-22 低分 march 水波纹】归零只对 N=1 保留：mipLevelScale 在 temporal 路径
+  // = 1/N（N=1 时为 1）→ 用它判别。N>1 时仍归零 → 步进相位逐 texel 同步 → 同心驻波环
+  // = 用户报告的「以相机为圆心、边界处云形突变的水波纹」（cloudsMipBoost=0 时更密，证明
+  // 与 mip 提升无关，是低分 march 固有）。N>1 保留蓝噪声相位打碎驻波，噪声由 resolve 的
+  // 时域累积（N>1 α=0.08）吸收。
+  float jitterZeroGate = inLayerCam * thinSegment * step(0.999, mipLevelScale);
+  marchJitter = mix(marchJitter, 0.0, jitterZeroGate);
+  startJitter = mix(startJitter, 0.0, jitterZeroGate);
   float rayDistance = stepSize * startJitter * 2.0;
   // 【云内步长恢复 2026-09-29 五轮】空隙/无云分支的 stepSize×=perspectiveStepScale 是
   // 单向指数放大且从不恢复——跨层相机（7618 在卷云带，俯视跨空隙进 L1）的步长到达云顶
