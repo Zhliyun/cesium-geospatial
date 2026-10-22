@@ -273,7 +273,11 @@ void temporalUpscale(
   // |Δa| 恒超阈，rejection 变成"每帧直出 current"=抖动；但运动时这条判据正是遮挡翻转的
   // 正确信号，关掉后拖动相机（尤其相机贴近/进入云层、N>1 降分域）会出现黑色块。
   // 门控后：静止逐位不变（jitter 修复保住），运动恢复 2026-09-02 的黑块修复语义。
-  if (u_reprojectionStrength > 0.5 && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+  // 【v99 回退 v87 2026-10-22】恢复恒 false（会话前语义）。v87 曾改为「仅运动时启用」，
+  // 但触发时直出 currentColor = 未经时域平均的 march 原始结果 → 拖动相机时低分 march 的
+  // 采样斑点/同心弧全部暴露（用户：「移动视角时能看到明显水波纹」，而静止截图干净——
+  // 这正是只在运动帧生效的路径特征）。运动黑块问题回到会话前状态，另行处理。
+  if (false && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
@@ -353,7 +357,11 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   // |Δa| 恒超阈，rejection 变成"每帧直出 current"=抖动；但运动时这条判据正是遮挡翻转的
   // 正确信号，关掉后拖动相机（尤其相机贴近/进入云层、N>1 降分域）会出现黑色块。
   // 门控后：静止逐位不变（jitter 修复保住），运动恢复 2026-09-02 的黑块修复语义。
-  if (u_reprojectionStrength > 0.5 && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
+  // 【v99 回退 v87 2026-10-22】恢复恒 false（会话前语义）。v87 曾改为「仅运动时启用」，
+  // 但触发时直出 currentColor = 未经时域平均的 march 原始结果 → 拖动相机时低分 march 的
+  // 采样斑点/同心弧全部暴露（用户：「移动视角时能看到明显水波纹」，而静止截图干净——
+  // 这正是只在运动帧生效的路径特征）。运动黑块问题回到会话前状态，另行处理。
+  if (false && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;

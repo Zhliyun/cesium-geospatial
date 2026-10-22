@@ -671,7 +671,10 @@ vec4 marchClouds(
   // = 用户报告的「以相机为圆心、边界处云形突变的水波纹」（cloudsMipBoost=0 时更密，证明
   // 与 mip 提升无关，是低分 march 固有）。N>1 保留蓝噪声相位打碎驻波，噪声由 resolve 的
   // 时域累积（N>1 α=0.08）吸收。
-  float jitterZeroGate = inLayerCam * thinSegment * step(0.999, mipLevelScale);
+  // 【v99 回退 v96 2026-10-22】恢复「层内薄段归零 jitter」（会话前语义）。
+  // v96 曾对 N>1 取消归零以打碎驻波，但实测未能消除波纹，且改变了层内路径行为 →
+  // 按「先回到无回归基线」原则回退。
+  float jitterZeroGate = inLayerCam * thinSegment;
   marchJitter = mix(marchJitter, 0.0, jitterZeroGate);
   startJitter = mix(startJitter, 0.0, jitterZeroGate);
   float rayDistance = stepSize * startJitter * 2.0;
