@@ -1266,11 +1266,16 @@ void main() {
 
     float mipLevel = getMipLevel(globeUv * localWeatherRepeat) * mipLevelScale;
     mipLevel = mix(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / maxHeight));
+    // 【v94 2026-10-22】STBN 分域必须用**未提升**的基础 mip：v93 把 log2(N) 加进 mipLevel
+    // 后，几乎所有像素都越过 u_unfreezeMip=1.0 阈值 → 全屏每帧轮换 STBN 噪声层，配 α=0.08
+    // 的 EMA 残留，运动时呈波纹状闪烁（用户：「水波纹还在，只是变稀了」）。
+    // STBN 的冻结/轮换是**时间稳定性**决策，与「采样足迹 → 密度 mip」无关，故保留基础值。
+    float stbnMipLevel = mipLevel;
     // 【v93 颗粒根治（保持）】低分 march 采样足迹 ×N，mip 必须 +log2(N) 才能采样到预滤波
     // 的密度场；否则 1/4 分辨率 march 采未滤波高频 → 空间混叠 = 逐 texel 颗粒。
     mipLevel += log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
     // 【白点治理】天空分支按 mip 分域取 STBN 层（高 mip 轮换治白点/低 mip 冻结防闪动）
-    stbn = getSTBN(mipLevel);
+    stbn = getSTBN(stbnMipLevel);
 
     float marchedFrontDepth;
     ivec3 sampleCount = ivec3(0);
