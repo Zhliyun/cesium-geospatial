@@ -166,8 +166,12 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     ...CLOUDS_MAIN_DEFINES,
     '#define PERSPECTIVE_CAMERA', // getViewZ perspectiveDepthToViewZ 分支（Cesium 相机恒透视）
     '#define SHADOW_CASCADE_COUNT ' + o.shadowCascadeCount,
-    // 【v95】低分 march 密度 mip 提升倍率（0=不提升；1=完整 log2(N)）
-    '#define CLOUDS_MIP_BOOST ' + (o.mipBoost ?? 1).toFixed(3),
+    // 【v103 修复 2026-10-22】fallback 必须是 0（与 DEFAULTS 一致）。原写 `?? 1`：
+    // createCloudsStage 传的是 `mipBoost: options.mipBoost`（未传时值为 undefined 但**键存在**），
+    // 对象展开会覆盖 DEFAULTS 的 0 → `?? 1` → **boost 实际一直是 1**，
+    // 导致「缺省改 0」从未生效（只有显式写 ?cloudsMipBoost=0 才真正关闭）——
+    // 这是每一版都仍有波纹的根源。
+    '#define CLOUDS_MIP_BOOST ' + (o.mipBoost ?? 0).toFixed(3),
     lowResMarch ? '#define LOW_RES_MARCH' : '',
     o.accurateSunSkyLight ? '#define ACCURATE_SUN_SKY_LIGHT' : '',
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',
