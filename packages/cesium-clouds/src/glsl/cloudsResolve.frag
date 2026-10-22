@@ -190,11 +190,11 @@ void temporalUpscale(
   // 的权重越低，块对比度按核面积摊薄。仅 TEMPORAL_UPSCALE（N>1）编译 → N=1 全分路径零影响。
   if (u_upsampleLowpass > 0.0) {
     ivec2 sz = ivec2(mrtSz2) - 1;
-    // 【v88 2026-10-22】核半径随降分倍数放大：N=2 用 ±1（3×3，原行为），N=4 用 ±2
-    //（同样 9 采样、覆盖 ±2 texel = ±8 全分像素）。用户俯视实测 N=4 仍有明显的 4×4
-    // texel 马赛克（截图为证），±1 核只摊薄相邻一格不够；N=2 保持原核避免过度模糊。
+    // 【v88 已回退 2026-10-22】核半径曾按降分倍数放大到 ±2（N=4），用户真机反馈
+    // 「画面变得很模糊，像近视眼视角」→ 回退为固定 ±1（3×3）。N=4 的 4×4 texel 马赛克
+    // 与模糊是同一取舍的两端，靠加宽模糊不是正解——需从 march 端的 texel 间方差入手。
     #if UPSCALE_DIVISOR >= 4
-      const int LP_S = 2;
+      const int LP_S = 1;
     #else
       const int LP_S = 1;
     #endif

@@ -1118,11 +1118,20 @@ function buildCloudsStageImpl(
           const d = Cartesian3.dot(prevDirWC, camera.directionWC)
           dirAngle = Math.acos(Math.min(1, Math.max(-1, d)))
         }
+        // 【v89 N>1 颗粒治理 2026-10-22】降分 march 的静止 base α 从 0 提到 0.15。
+        // 背景：α=0（2026-10-12 为治 N=1 静止抖动定稿）意味着 current 几乎不注入 history
+        // → 上游设计里「16 相位 STBN 轮换 × 多帧平均」这条降噪通路被整体关掉，低分 march
+        // 的逐 texel 采样方差原样留在画面上；在 N=4 上每个低分 texel = 4×4 屏幕像素，
+        // 于是放大成用户报告的「俯视颗粒感强烈 + 表面噪点快速变化」。
+        // 只对 N>1（TEMPORAL_UPSCALE 降分路径）启用：N=1 全分路径 α 保持 0，逐位不变。
+        // 0.15 ≈ 7 帧时间常数，足够覆盖 STBN 相位周期又不至于拖出长尾。
+        const baseAlphaStatic =
+          applied.upscaleDivisor > 1 ? Math.max(params.temporalAlpha, 0.15) : params.temporalAlpha
         motionAlphaCurrent = computeMotionAlpha(
           transM + dirAngle * MOTION_EQUIV_RADIUS_M,
-          params.temporalAlpha,
-          params.motionAlpha,
-          motionAlphaCurrent ?? params.temporalAlpha
+          baseAlphaStatic,
+          Math.max(params.motionAlpha, baseAlphaStatic),
+          motionAlphaCurrent ?? baseAlphaStatic
         )
         resolvePass?.setTemporalAlpha(motionAlphaCurrent)
 
