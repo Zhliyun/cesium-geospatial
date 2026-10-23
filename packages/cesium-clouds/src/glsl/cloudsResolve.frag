@@ -297,12 +297,16 @@ void main() {
     #else
     ivec2 speckleCoord = coord;
     #endif
-    float lumas[25];
-    float alphas[25];
-    vec3 colors[25];
+    // 【2026-10-24 窗口 5×5→3×3】25→9 次 texelFetch：N=2 实测帧时由 +2.0ms 降到 ~0
+    // （10.24→9.89ms，噪声内），颗粒 −11%（13.79→12.27）与 5×5 的 −13% 同档。
+    #define DSP_R 1
+    #define DSP_N ((DSP_R * 2 + 1) * (DSP_R * 2 + 1))
+    float lumas[DSP_N];
+    float alphas[DSP_N];
+    vec3 colors[DSP_N];
     int k = 0;
-    for (int dy = -2; dy <= 2; ++dy) {
-      for (int dx = -2; dx <= 2; ++dx) {
+    for (int dy = -DSP_R; dy <= DSP_R; ++dy) {
+      for (int dx = -DSP_R; dx <= DSP_R; ++dx) {
         vec4 cn = texelFetch(colorBuffer, speckleCoord + ivec2(dx, dy), 0);
         colors[k] = cn.rgb;
         alphas[k] = cn.a;
@@ -312,9 +316,9 @@ void main() {
     }
     vec3 meanColor = vec3(0.0);
     float meanA = 0.0;
-    for (int i = 0; i < 25; ++i) { meanColor += colors[i]; meanA += alphas[i]; }
-    meanColor /= 25.0;
-    meanA /= 25.0;
+    for (int i = 0; i < DSP_N; ++i) { meanColor += colors[i]; meanA += alphas[i]; }
+    meanColor /= float(DSP_N);
+    meanA /= float(DSP_N);
     float lumaOut = dot(outputColor.rgb, vec3(0.299, 0.587, 0.114));
     float lumaMean = dot(meanColor, vec3(0.299, 0.587, 0.114));
     // 【2026-10-09 分通道方向性滤波】rgb=对称（亮喷溅+黑点都治——黑点=暗离群，

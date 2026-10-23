@@ -137,7 +137,10 @@ export function createCloudsResolvePass(
     varianceGamma: () => varianceGamma,
     temporalAlpha: () => temporalAlpha,
     temporalDisocclusion: () => temporalDisocclusion,
-    u_spatialDespeckle: () => options.spatialDespeckle ?? 0
+    // 【2026-10-24 缺省改为 1】窗口已随分辨率自适应（N>1 低分域 3×3 = 屏幕 3N px，
+    // 9 次 texelFetch），N=2 实测帧时与关闭无差异（10.24 vs 9.89ms，噪声内）、
+    // 静止颗粒 −11%、闪烁 0.01（冻结档）。?cloudsDespeckle=0 可关回旧行为。
+    u_spatialDespeckle: () => options.spatialDespeckle ?? 1
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——
