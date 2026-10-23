@@ -333,10 +333,7 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 点亮为孤立白点 + 屏幕下方白色圆弧/扇形（用户真机逐档实测：2/4 档有、8 档干净）。
     // 成本由 clouds.frag 的 200m 距离门控缓存吸收（原每个受照样本各跑一次 → 云内上百次
     // 每像素，现约 5 次）。
-    // 【2026-10-23】8 → 4：clouds.frag 的 marchOpticalDepth 现在按「到云顶的距离」反推
-    // 步长（spanToTop），层内 4 步即覆盖全程；远端实测 8 步 146ms / 4 步 103ms 且画质
-    // 均干净。缺省 2（main）会因覆盖不足交给 BSM 的低估估计而出现白点/白扇形。
-    maxIterationCountToSun: 4,
+    maxIterationCountToSun: 8,
     maxIterationCountToGround: 3,
     minSecondaryStepSize: 100,
     secondaryStepScale: 2,
