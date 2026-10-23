@@ -561,6 +561,15 @@ vec4 marchClouds(
   float weightedDistanceSum = 0.0;
   float transmittanceSum = 0.0;
 
+  // 【2026-10-23 移植自 worktree-f2-supersample】朝太阳 march 的光深缓存：该 march 是
+  // 「每个受照样本各跑一次」——主 march 云内步长 50-100m、500 步上限 → 单像素可调用
+  // 上百次 × maxIterationCountToSun 次 3D 采样。maxIterationCountToSun 提到 8（治白点/
+  // 白圆弧，见 cloudsDefaultParameters）后成本不可接受，故按「沿视线前进距离」门控重算：
+  // 光深随位置缓变（云内 200m 尺度），200m 内复用上次结果。
+  float cachedSunOpticalDepth = 0.0;
+  float cachedSunRayDistance = 0.0;
+  float lastSunODDistance = -1e9;
+
   float maxRayDistance = rayNearFar.y - rayNearFar.x;
   float stepSize = minStepSize + (perspectiveStepScale - 1.0) * rayNearFar.x;
   // 【太空俯视步长 clamp（2026-09-03）】透视步长公式在相机远离云甲时崩溃：near≫段长
@@ -751,27 +760,34 @@ vec4 marchClouds(
       float sunRayDistance = 0.0;
       float opticalDepth = 0.0;
       if (any(notEqual(sunIrradiance, vec3(0.0)))) {
-        opticalDepth = marchOpticalDepth(
-          position,
-          sunDirection,
-          maxIterationCountToSun,
-          mipLevel,
-          marchJitter,
-          sunRayDistance
-        );
-
-        if (height < shadowTopHeight) {
-          // Obtain the optical depth from BSM at the ray position.
-          opticalDepth += sampleShadowOpticalDepth(
+        // 【2026-10-23 移植】200m 距离门控重算（见函数开头缓存变量注释）。首次必算。
+        if (rayDistance - lastSunODDistance >= 200.0 || lastSunODDistance < -1e8) {
+          cachedSunRayDistance = 0.0;
+          cachedSunOpticalDepth = marchOpticalDepth(
             position,
-            // Take account of only positions further than the marched ray
-            // distance.
-            sunRayDistance,
-            // Apply PCF only when the sun is close to the horizon.
-            maxShadowFilterRadius * remapClamped(dot(sunDirection, surfaceNormal), 0.1, 0.0),
-            marchJitter
+            sunDirection,
+            maxIterationCountToSun,
+            mipLevel,
+            marchJitter,
+            cachedSunRayDistance
           );
+
+          if (height < shadowTopHeight) {
+            // Obtain the optical depth from BSM at the ray position.
+            cachedSunOpticalDepth += sampleShadowOpticalDepth(
+              position,
+              // Take account of only positions further than the marched ray
+              // distance.
+              cachedSunRayDistance,
+              // Apply PCF only when the sun is close to the horizon.
+              maxShadowFilterRadius * remapClamped(dot(sunDirection, surfaceNormal), 0.1, 0.0),
+              marchJitter
+            );
+          }
+          lastSunODDistance = rayDistance;
         }
+        opticalDepth = cachedSunOpticalDepth;
+        sunRayDistance = cachedSunRayDistance;
       }
 
       g_probeOD = opticalDepth;

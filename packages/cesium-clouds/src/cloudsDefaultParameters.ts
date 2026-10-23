@@ -327,7 +327,13 @@ export function defaultCloudsParameters(): CloudsParameters {
     minTransmittance: 1e-2,
 
     // 次 raymarch（qualityPresets defaults）
-    maxIterationCountToSun: 2,
+    // 【2026-10-23 移植自 worktree-f2-supersample】maxIterationCountToSun 2 → 8：
+    // 该 march 的覆盖长度 = (minStep/count)·(scale^count−1)，缺省 minStep=100/scale=2 时
+    // 2 步仅覆盖 150m、4 步 375m、8 步 3187m。覆盖不到云层深处 → 光深被低估 → 云被错误
+    // 点亮为孤立白点 + 屏幕下方白色圆弧/扇形（用户真机逐档实测：2/4 档有、8 档干净）。
+    // 成本由 clouds.frag 的 200m 距离门控缓存吸收（原每个受照样本各跑一次 → 云内上百次
+    // 每像素，现约 5 次）。
+    maxIterationCountToSun: 8,
     maxIterationCountToGround: 3,
     minSecondaryStepSize: 100,
     secondaryStepScale: 2,

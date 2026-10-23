@@ -390,23 +390,33 @@ export function createCloudsPass(
   // 跟随同类型（M2 不消费，但保持 MRT attachment 类型一致避免类型 mismatch）。
   const pixelDatatype = resolveCloudsHdrDatatype(scene)
 
-  // ── 3 MRT color attachment（NEAREST 像素对齐 + CLAMP_TO_EDGE，同 spike SPIKE_SAMPLER）──
+  // ── 3 MRT color attachment（CLAMP_TO_EDGE；过滤见下）──
+  // 【2026-10-23 移植自 worktree-f2-supersample 79e79ff】att0 colorTex 单用 LINEAR：
+  // resolve 用 texture()/textureOffset() 对低分 colorBuffer 做上采样 + varianceClipping
+  // 邻域统计，NEAREST 会让这两者都退化为「最近 texel 复制」（每 N×N 屏幕块取值恒定）。
+  // att1/att2（depthVelocity/shadowLength）消费端全走 texelFetch → 保持 NEAREST。
   const mrtSampler = new Sampler({
     minificationFilter: TextureMinificationFilter.NEAREST,
     magnificationFilter: TextureMagnificationFilter.NEAREST,
     wrapS: TextureWrap.CLAMP_TO_EDGE,
     wrapT: TextureWrap.CLAMP_TO_EDGE
   })
-  const mkMrtTex = (): Texture =>
+  const mrtSamplerLinear = new Sampler({
+    minificationFilter: TextureMinificationFilter.LINEAR,
+    magnificationFilter: TextureMagnificationFilter.LINEAR,
+    wrapS: TextureWrap.CLAMP_TO_EDGE,
+    wrapT: TextureWrap.CLAMP_TO_EDGE
+  })
+  const mkMrtTex = (sampler: Sampler = mrtSampler): Texture =>
     new Texture({
       context,
       width: marchWidth,
       height: marchHeight,
       pixelFormat: PixelFormat.RGBA,
       pixelDatatype,
-      sampler: mrtSampler
+      sampler
     })
-  const colorTex = mkMrtTex() // att0：云 color（RGB linear HDR）+ transmittance（A）
+  const colorTex = mkMrtTex(mrtSamplerLinear) // att0：云 color（RGB linear HDR）+ transmittance（A）
   const depthVelTex = mkMrtTex() // att1：depthVelocity（M4 temporal 接通；temporal 关时写 0 不消费）
   // M5 T2：lightShafts（默认开）时 define SHADOW_LENGTH → shader 有 location 2 out
   //（outputShadowLength），MRT 配第 3 attachment。FBO drawBuffers 数必须匹配 shader out 数

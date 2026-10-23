@@ -129,7 +129,9 @@ WeatherSample sampleWeather(const vec2 uv, const vec3 position, const float heig
   // 的顶面高度近恒定 → 近中景顶面仍是平面切片。shape 噪声降频 16× 提供 1-10km 中频
   // 谷脊（mix 0.6-1.0 深谷权重），与 weather 圆丘包络相乘——顶面高度场跨三个频率层级
   // （weather 十 km+ 包络 / shape 中频谷脊 / detail 高频侵蚀），平面切片被彻底打破。
-  float puffMid = texture(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset).r;
+  // 【2026-10-23 移植】隐式 LOD → 显式：本函数在 march 循环内被逐样本调用，相邻像素的
+  // 循环进度不同 → 隐式导数无定义 → 每个像素的采样 LOD 各不相同 → 密度场逐像素跳变。
+  float puffMid = textureLod(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset, max(mipLevel * 1.5, 1.5)).r;
   vec4 puffTop = mix(vec4(0.74), vec4(0.97),
     clamp(localWeather, 0.0, 1.0) * mix(0.6, 1.0, puffMid));
   vec4 puffPlateau = smoothstep(vec4(0.70), vec4(0.85), weather.heightFraction)
@@ -176,9 +178,10 @@ MediaSample sampleMedia(
   vec3 turbulence = vec3(0.0);
   #ifdef TURBULENCE
   vec2 turbulenceUv = uv * localWeatherRepeat * turbulenceRepeat;
+  // 【2026-10-23 移植】隐式 LOD → 显式：同 sampleWeather 的 puffMid（循环内导数无定义）。
   turbulence =
     turbulenceDisplacement *
-    (texture(turbulenceTexture, turbulenceUv).rgb * 2.0 - 1.0) *
+    (textureLod(turbulenceTexture, turbulenceUv, max(mipLevel * 1.5, 1.5)).rgb * 2.0 - 1.0) *
     dot(density, remapClamped(weather.heightFraction, vec4(0.3), vec4(0.0)));
   #endif // TURBULENCE
 
@@ -201,7 +204,8 @@ MediaSample sampleMedia(
   #ifdef SHAPE_DETAIL
   if (mipLevel * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
     vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset + u_detailWindOffset;
-    float detail = texture(shapeDetailTexture, detailPosition).r;
+    // 【2026-10-23 移植】隐式 LOD → 显式：同 puffMid/turbulence（循环内导数无定义）。
+    float detail = textureLod(shapeDetailTexture, detailPosition, max(mipLevel * 1.5, 1.5)).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(
       vec4(pow(detail, 6.0)),
