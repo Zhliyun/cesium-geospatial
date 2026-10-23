@@ -246,6 +246,9 @@ float readShadowOpticalDepth(
   // Also see the discussion here: https://x.com/shotamatsuda/status/1885322308908442106
   vec4 shadow = texture(shadowBuffer, vec3(uv, float(cascadeIndex)));
   float distanceToFront = max(0.0, distanceToTop - distanceOffset - shadow.r);
+  // 【2026-10-23 尝试已回退】曾改用「总光深(b+a) × 距离比例」替代「meanExt × 距离」以修
+  // BSM 在低密度灰雾下的低估：光深量级对了，但云边缘（fullDist 很小、ratio 跳变）出现
+  // 密集黑点（远端实测截图）→ 回退。BSM 低估问题保留为已知项。
   return min(shadow.b + shadow.a, shadow.g * distanceToFront);
 }
 
@@ -568,7 +571,7 @@ vec4 marchClouds(
   // 光深随位置缓变（云内 200m 尺度），200m 内复用上次结果。
   float cachedSunOpticalDepth = 0.0;
   float cachedSunRayDistance = 0.0;
-  float lastSunODDistance = -1e9;
+  int lastSunODStep = -1000;
 
   float maxRayDistance = rayNearFar.y - rayNearFar.x;
   float stepSize = minStepSize + (perspectiveStepScale - 1.0) * rayNearFar.x;
@@ -761,7 +764,7 @@ vec4 marchClouds(
       float opticalDepth = 0.0;
       if (any(notEqual(sunIrradiance, vec3(0.0)))) {
         // 【2026-10-23 移植】200m 距离门控重算（见函数开头缓存变量注释）。首次必算。
-        if (rayDistance - lastSunODDistance >= 200.0 || lastSunODDistance < -1e8) {
+        if (i - lastSunODStep >= 8 || lastSunODStep < -999) {
           cachedSunRayDistance = 0.0;
           cachedSunOpticalDepth = marchOpticalDepth(
             position,
@@ -784,7 +787,7 @@ vec4 marchClouds(
               marchJitter
             );
           }
-          lastSunODDistance = rayDistance;
+          lastSunODStep = i;
         }
         opticalDepth = cachedSunOpticalDepth;
         sunRayDistance = cachedSunRayDistance;
