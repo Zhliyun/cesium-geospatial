@@ -104,7 +104,10 @@ const DEFAULTS: ResolvedCloudsMainOptions = {
   debugShow: null,
   lightShafts: true,
   shadowCascadeCount: 3,
-  upscaleDivisor: 1
+  // 【2026-10-23】缺省降分 1 → 2：用户验收结论「最低能接受 N=2」（N=4 颗粒/形态不可接受）。
+  // 远端实测（RTX 5060 Ti / 1920x1080）：N=2 俯视 59fps、层内 42fps；N=1 层内仅 16fps。
+  // N=2 相比 N=1 主 march 像素数减半，画质保留 mip 分级重建。
+  upscaleDivisor: 2
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include

@@ -570,8 +570,9 @@ describe('穿云黑块修复：depth 采样 jitter 仅 LOW_RES_MARCH（upscaleDi
   const NO_JITTER_SAMPLE = 'texture(depthBuffer, vUv * targetUvScale).r'
   const JITTER_SAMPLE = 'texture(depthBuffer, vUv * targetUvScale + temporalJitter).r'
 
-  it('全分（缺省 upscaleDivisor=1）：不注入 LOW_RES_MARCH（GPU 预处理走无 jitter 深度采样）', () => {
-    const src = buildCloudsMainFragmentShader(M2_OPTIONS)
+  it('全分（显式 upscaleDivisor=1）：不注入 LOW_RES_MARCH（GPU 预处理走无 jitter 深度采样）', () => {
+    // 【2026-10-23】缺省已改为 2（用户验收「最低接受 N=2」），此处显式传 1 测全分语义
+    const src = buildCloudsMainFragmentShader({ ...M2_OPTIONS, upscaleDivisor: 1 })
     expect(src).not.toContain('#define LOW_RES_MARCH')
     expect(src).toContain(NO_JITTER_SAMPLE)
     expect(src).toContain(JITTER_SAMPLE) // ifdef 分支共存，由 LOW_RES_MARCH 裁剪
