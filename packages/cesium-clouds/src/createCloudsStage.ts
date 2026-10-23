@@ -860,6 +860,9 @@ function buildCloudsStageImpl(
     // createCloudsStage 的零直捕 listener 调用；prevCamera/matricesFrozen 是 per-impl 状态
     //（换 impl 自然归零——freeze 语义从新 impl 重新起算）。
     let prevCamera: TemporalCameraSnapshot | undefined
+    // 【2026-10-23 移植自 79e79ff v44】上帧 temporalJitter（重投影矩阵补偿用；见
+    // temporalMath.buildReprojectionMatrices 注释）
+    let prevJitter: Cartesian2 | undefined
     // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
     let prevCameraPos: Cartesian3 | undefined
     // 运动自适应 α（T2，2026-09-02）：上帧 look 方向（旋转分量）+ 当前 α 状态（lerp 平滑）
@@ -999,10 +1002,22 @@ function buildCloudsStageImpl(
         const viewMatrix = camera.viewMatrix
         const projectionMatrix = (camera.frustum as unknown as { projectionMatrix: Matrix4 })
           .projectionMatrix
-        buildReprojectionMatrices(prevCamera, viewMatrix, projectionMatrix, camera.inverseViewMatrix, params.temporalJitter, {
-          reprojectionMatrix: params.reprojectionMatrix,
-          viewReprojectionMatrix: params.viewReprojectionMatrix
-        })
+        buildReprojectionMatrices(
+          prevCamera,
+          viewMatrix,
+          projectionMatrix,
+          camera.inverseViewMatrix,
+          params.temporalJitter,
+          {
+            reprojectionMatrix: params.reprojectionMatrix,
+            viewReprojectionMatrix: params.viewReprojectionMatrix
+          },
+          prevJitter
+        )
+        // 【2026-10-23 移植】保存本帧 jitter 供下帧重投影补偿（clone——params.temporalJitter
+        // 每帧覆写）
+        if (prevJitter == null) prevJitter = Cartesian2.clone(params.temporalJitter, new Cartesian2())
+        else Cartesian2.clone(params.temporalJitter, prevJitter)
         // 帧末存本帧快照（clone——Cesium camera 矩阵是 live 引用，必须拷贝）
         prevCamera = {
           viewMatrix: Matrix4.clone(viewMatrix, new Matrix4()),

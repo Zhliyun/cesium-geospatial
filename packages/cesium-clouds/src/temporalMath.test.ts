@@ -58,7 +58,7 @@ describe('M4 T1 temporalMath', () => {
     expect(j.y).toBeCloseTo(-0.375 / 270)
   })
 
-  it('buildReprojectionMatrices：jitter 写入 prevP column2.xy（×2，NDC 域 [-1,1]）且 viewReprojection 链式正确', () => {
+  it('buildReprojectionMatrices：只减去「上帧」jitter（本帧 jitter 已作用于 ray，不得再注入）', () => {
     const prevV = Matrix4.fromRotationTranslation(
       Matrix3.fromRotationZ(0.3),
       new Cartesian3(100, 200, 300)
@@ -73,19 +73,26 @@ describe('M4 T1 temporalMath', () => {
     const curInvV = Matrix4.inverse(curV, new Matrix4())
     const curP = Matrix4.clone(prevP)
 
+    // 本帧 jitter 不参与（已通过窗口坐标作用于 ray）；上帧 jitter 做补偿
     const jitter = new Cartesian2(0.001, -0.002)
+    const prevJitter = new Cartesian2(0.003, 0.004)
     const reprojectionMatrix = new Matrix4()
     const viewReprojectionMatrix = new Matrix4()
-    buildReprojectionMatrices(prev, curV, curP, curInvV, jitter, {
-      reprojectionMatrix,
-      viewReprojectionMatrix
-    })
+    buildReprojectionMatrices(
+      prev,
+      curV,
+      curP,
+      curInvV,
+      jitter,
+      { reprojectionMatrix, viewReprojectionMatrix },
+      prevJitter
+    )
 
-    // 性质 1：reprojection = (prevP + jitter) * prevV —— 用列分量验证 jitter 已进 column2
+    // 性质 1：reprojection = (prevP − prevJitter) * prevV
     const expected = Matrix4.clone(prevP)
     const col = Matrix4.getColumn(expected, 2, new Cartesian4())
-    col.x += jitter.x * 2
-    col.y += jitter.y * 2
+    col.x -= prevJitter.x * 2
+    col.y -= prevJitter.y * 2
     Matrix4.setColumn(expected, 2, col, expected)
     Matrix4.multiply(expected, prevV, expected)
     expect(reprojectionMatrix).toEqual(expected)
@@ -99,7 +106,7 @@ describe('M4 T1 temporalMath', () => {
     expect(viewReprojectionMatrix).toEqual(expected2)
   })
 
-  it('buildReprojectionMatrices：首帧 previous=undefined → fallback 当前 P/V（velocity=0，three 同款）', () => {
+  it('buildReprojectionMatrices：首帧无 prevJitter → 不补偿（prevP 原样，velocity=0，three 同款）', () => {
     const curV = Matrix4.fromRotationTranslation(
       Matrix3.IDENTITY,
       new Cartesian3(0, 0, 0)
@@ -113,13 +120,8 @@ describe('M4 T1 temporalMath', () => {
       reprojectionMatrix,
       viewReprojectionMatrix
     })
-    // jittered curP * curV
-    const expected = Matrix4.clone(curP)
-    const col = Matrix4.getColumn(expected, 2, new Cartesian4())
-    col.x += jitter.x * 2
-    col.y += jitter.y * 2
-    Matrix4.setColumn(expected, 2, col, expected)
-    Matrix4.multiply(expected, curV, expected)
+    // 【2026-10-23】本帧 jitter 不再注入 prevP → 未补偿的 curP * curV
+    const expected = Matrix4.multiply(curP, curV, new Matrix4())
     expect(reprojectionMatrix).toEqual(expected)
   })
 })

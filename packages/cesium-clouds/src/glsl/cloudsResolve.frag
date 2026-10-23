@@ -123,7 +123,12 @@ void temporalUpscale(
   out vec4 outputColor,
   out float outputShadowLength
 ) {
-  vec4 currentColor = texelFetch(colorBuffer, lowResCoord, 0);
+  // 【2026-10-23 移植自 worktree 79e79ff】点采样 → 双线性：N>1 时 lowResCoord 下取整
+  // 使同一低分 texel 的 N×N 个全分像素取到同一值（块内恒定、块间跳变）。拖动时 rejection
+  // 频繁触发直出 current → 相邻块跳变 = 用户报告「拖动时云层颗粒抖动」。双线性让每个全分
+  // 像素各得一个插值 → 连续。colorTex 采样器已改 LINEAR（本分支同 commit）。N=1 时 vUv
+  // 落在 texel 中心 → 双线性退化为精确取值，行为不变。
+  vec4 currentColor = texture(colorBuffer, vUv);
   #ifdef SHADOW_LENGTH
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, lowResCoord, 0).rgb, 1.0);
   #endif // SHADOW_LENGTH
