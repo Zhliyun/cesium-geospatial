@@ -286,13 +286,24 @@ void main() {
   // 【5×5 窗】云缘颗粒带密度高（>44%），3×3 中值（抗 44%）失效——5×5 中值抗 ~52%
   // 且窗更大覆盖 2px 簇；25 texelFetch+插入排序成本 ~1ms/1080p（resolve 全屏 pass）。
   if (u_spatialDespeckle > 0.0) {
+    // 【2026-10-24 左下象限伪影根治】despeckle 必须按 colorBuffer 自身分辨率取坐标：
+    // N>1 时 colorBuffer 是低分 march RT，用全分 coord 去 texelFetch 会让「左下
+    // lowRes 尺寸」那块像素恰好落在有效 texel 范围内（其余出界返回 0）——低分原图
+    // 被 1:1 混进全分输出的左下角，形成尺寸 ∝ 1/N 的矩形块（N=4→480×270，
+    // N=2→960×540，N=1 因 colorBuffer 全分而无症状）。改为低分坐标后窗口语义
+    // 也正确（5×5 邻域 = 低分域 5×5 texel，与 despeckle「孤点」的尺度一致）。
+    #ifdef TEMPORAL_UPSCALE
+    ivec2 speckleCoord = lowResCoord;
+    #else
+    ivec2 speckleCoord = coord;
+    #endif
     float lumas[25];
     float alphas[25];
     vec3 colors[25];
     int k = 0;
     for (int dy = -2; dy <= 2; ++dy) {
       for (int dx = -2; dx <= 2; ++dx) {
-        vec4 cn = texelFetch(colorBuffer, coord + ivec2(dx, dy), 0);
+        vec4 cn = texelFetch(colorBuffer, speckleCoord + ivec2(dx, dy), 0);
         colors[k] = cn.rgb;
         alphas[k] = cn.a;
         lumas[k] = dot(colors[k], vec3(0.299, 0.587, 0.114));
