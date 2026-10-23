@@ -194,7 +194,10 @@ MediaSample sampleMedia(
   // N=4 半分 march 的 texel 粗→隐式 LOD 反而高（意外平滑）——N=1 全分下必须显式。
   // 换算 ×1.5（用户现象「越远颗粒越强」=缩小采样欠奈奎斯特，weather mip 尺度对
   // shape 高频不足——加大远云压制；近云 mip≈0-1 域受影响小）。
-  float shape = textureLod(shapeTexture, shapePosition, mipLevel * 1.5).r;
+  // 【2026-10-23】mip 链已可用（见 weatherTextures.createMippedTexture3D）。加下限 1.0：
+  // 近处 mipLevel≈0 → LOD 0 = 128³ 全频细胞结构直出（N=1 无时域超采样压不住）→ 颗粒。
+  // 下限 1.0 让近处也走半分辨率 mip（64³），远处仍由 mipLevel*1.5 主导。
+  float shape = textureLod(shapeTexture, shapePosition, max(mipLevel * 1.5, 1.5)).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
   #ifdef DEBUG_SHOW_SAMPLE_COUNT
