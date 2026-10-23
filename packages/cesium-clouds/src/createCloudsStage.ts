@@ -600,7 +600,10 @@ function buildCloudsStageImpl(
   // 需要 8。成本由 clouds.frag v86k 的 200m 距离门控缓存吸收（原每受照样本各跑一次
   // → 云内上百次/像素，现 ~5 次）。用户显式 ?cloudsToSunIter= 优先。
   if (options.parameters?.maxIterationCountToSun == null) {
-    params.maxIterationCountToSun = 8
+    // 【2026-10-23】8 → 4：clouds.frag 的 marchOpticalDepth 现在按「到云顶的距离」反推
+    // 步长（spanToTop），层内 4 步即覆盖全程。远端实测：8 步 146ms / 4 步 103ms，
+    // 画质均干净（4 步已验证无白点/白扇形）。
+    params.maxIterationCountToSun = 4
   }
 
   // ── T6 altitudeOffset 派生链（spec §6.1，红队 BLOCKER-4 闭环）──
