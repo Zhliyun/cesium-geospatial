@@ -31,6 +31,20 @@ const WEATHER_SAMPLER = new Sampler({
   magnificationFilter: TextureMagnificationFilter.LINEAR
 })
 
+// 【2026-10-23 shape/detail mipmap】带 mip 链的 3D 采样器。原 WEATHER_SAMPLER 是纯 LINEAR
+// （无 mip）→ shader 里 shape 的 textureLod(mipLevel*1.5) 与 detail 的 textureLod 全部被
+// WebGL 规范 clamp 到 LOD 0（非 mipmap min filter 时 lod 恒 0）= 空操作。实测：关 detail
+// 层后 N=1 的颗粒几乎消失 → detail/shape 的全频细节是颗粒源。上游 three-geospatial 的
+// 这两层同样无 mipmap，靠 1/4 分辨率 + 4×4 Bayer 16 帧时域超采样压噪；N=1 走全分 TAA
+// 分支没有这层，故需让 LOD 真正生效。
+const MIPPED_WEATHER_SAMPLER = new Sampler({
+  wrapS: TextureWrap.REPEAT,
+  wrapT: TextureWrap.REPEAT,
+  wrapR: TextureWrap.REPEAT,
+  minificationFilter: TextureMinificationFilter.LINEAR_MIPMAP_LINEAR,
+  magnificationFilter: TextureMagnificationFilter.LINEAR
+})
+
 // STBN（spatiotemporal blue noise）采样必须 NEAREST：蓝噪声的结构在纹素级，LINEAR 插值会把
 // 高频误差能量抹平成中频 → 失去蓝噪声特性（人眼不敏感频段收敛）退化回灰雾。three 版
 // STBNLoader 同用 NearestFilter + RepeatWrapping。
@@ -41,6 +55,58 @@ const STBN_SAMPLER = new Sampler({
   minificationFilter: TextureMinificationFilter.NEAREST,
   magnificationFilter: TextureMagnificationFilter.NEAREST
 })
+
+/**
+ * 【2026-10-23】创建带 mip 链的 R8 3D 纹理并从 CPU 数据上传。
+ *
+ * 为什么不能用带 source 的构造：Cesium 的 `Texture3D` 带 source 走 `texStorage3D(levels=1)`
+ * ——immutable 存储，`generateMipmap` 会报 INVALID_OPERATION（见 WeatherAtlas.ts 顶部注释
+ * 的实测记录）。无 source 构造走 `gl.texImage3D(..., null)` = 可变存储，驱动按需分配 mip
+ * 链，`generateMipmap()` 可用。
+ *
+ * 上传用裸 GL：Cesium 无公开的 3D 纹理数据更新 API。
+ */
+function createMippedTexture3D(
+  context: Context,
+  size: number,
+  data: Uint8Array
+): Texture3D {
+  const gl = (context as unknown as { _gl?: WebGL2RenderingContext })._gl
+  // mock/非 GL 环境（单测的 stub context）：退回带 source 的普通构造（无 mip 链，
+  // textureLod 会被 clamp 到 LOD 0）。真实 Cesium Context 必有 _gl。
+  if (gl == null) {
+    return new Texture3D({
+      context,
+      source: { width: size, height: size, depth: size, arrayBufferView: data },
+      pixelFormat: PixelFormat.RED,
+      pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+      sampler: MIPPED_WEATHER_SAMPLER,
+      flipY: false
+    })
+  }
+  const tex = new Texture3D({
+    context,
+    width: size,
+    height: size,
+    depth: size,
+    pixelFormat: PixelFormat.RED,
+    pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+    sampler: MIPPED_WEATHER_SAMPLER,
+    flipY: false
+  } as unknown as ConstructorParameters<typeof Texture3D>[0])
+
+  const rawTex = (tex as unknown as { _texture: WebGLTexture })._texture
+  const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_3D) as WebGLTexture | null
+  gl.bindTexture(gl.TEXTURE_3D, rawTex)
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+  gl.texSubImage3D(
+    gl.TEXTURE_3D, 0, 0, 0, 0, size, size, size, gl.RED, gl.UNSIGNED_BYTE, data
+  )
+  gl.generateMipmap(gl.TEXTURE_3D)
+  gl.bindTexture(gl.TEXTURE_3D, prevBinding)
+  return tex
+}
+
 
 // local_weather 采样用 textureLod 显式 LOD（sampleWeather 按 mipLevel 降噪）——纹理必须
 // generateMipmap 且 minFilter 用 mipmap 链，否则不完整纹理采样返回黑（coverage=0 → 无云）。
@@ -113,32 +179,16 @@ export async function loadWeatherTextures(
   ])
   // shape/shape_detail: R8 Uint8 3D（推算 128³/32³；M2 云 shader 采样时校准）。
   // PixelFormat.RED 单通道（WebGL2），UNSIGNED_BYTE。
-  const shape = new Texture3D({
+  // 【2026-10-23】shape/shapeDetail 改用带 mip 链的创建方式（见 createMippedTexture3D）：
+  // shader 里的 textureLod 才能生效。原来用带 source 的构造 = texStorage3D(levels=1)
+  // immutable → 无 mip 链 → LOD 恒 0，shape 的 textureLod(mipLevel*1.5) 与 detail 的
+  // textureLod 全是空操作（这也是「调 shape LOD 无变化」的原因）。
+  const shape = createMippedTexture3D(context, SHAPE_SIZE, new Uint8Array(shapeBuf))
+  const shapeDetail = createMippedTexture3D(
     context,
-    source: {
-      width: SHAPE_SIZE,
-      height: SHAPE_SIZE,
-      depth: SHAPE_SIZE,
-      arrayBufferView: new Uint8Array(shapeBuf)
-    },
-    pixelFormat: PixelFormat.RED,
-    pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-    sampler: WEATHER_SAMPLER,
-    flipY: false
-  })
-  const shapeDetail = new Texture3D({
-    context,
-    source: {
-      width: SHAPE_DETAIL_SIZE,
-      height: SHAPE_DETAIL_SIZE,
-      depth: SHAPE_DETAIL_SIZE,
-      arrayBufferView: new Uint8Array(detailBuf)
-    },
-    pixelFormat: PixelFormat.RED,
-    pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-    sampler: WEATHER_SAMPLER,
-    flipY: false
-  })
+    SHAPE_DETAIL_SIZE,
+    new Uint8Array(detailBuf)
+  )
   // stbn：R8 128×128×64（takram 从 NVIDIA STBN PNG 逐层打包，apps/data/src/targets/stbn.ts）。
   // 白噪声 dummy（CPU Math.random）会让 march jitter 显形为全屏雪花纹（实测 2026-08-14）——
   // 蓝噪声把误差能量推到人眼不敏感的高频段，静态采样（frame=0）观感平滑。
