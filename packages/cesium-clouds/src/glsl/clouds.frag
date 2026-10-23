@@ -418,6 +418,7 @@ float marchOpticalDepth(
   const int maxIterationCount,
   const float mipLevel,
   const float jitter,
+  const bool spanToTop,
   out float rayDistance
 ) {
   // 【v86f 2026-10-23 量化台阶根治】原式 `int(...)` 是向下截断：mipLevel 连续变化时
@@ -455,7 +456,23 @@ float marchOpticalDepth(
   // 【v86h 已回退 2026-10-23】曾试「覆盖长度恒定 3200m，步数换精度」——用户真机实测
   // 反而更差（云层变密集白点）：2 个采样点跨 3200m 时，光深完全由采样点落点决定，
   // 方差比原来更大。正解只能是够步数（实测 2/4 档有白点，8 档干净）。
-  float stepSize = minSecondaryStepSize / float(iterationCount);
+  // 【2026-10-23 第一性原理：覆盖到云顶】原式总覆盖 = (minStep/count)·(scale^count−1)，
+  // 与机位无关（count=2 仅 150m、4 步 375m、8 步 3187m）。层内相机到云顶只有 ~500m，
+  // 少步数没覆盖的部分全交给 BSM，而 BSM 用「texel 平均消光 × 距离」估计 —— 层内低密度
+  // 灰雾的均值严重低估局部光深 → 云被错误点亮（白点/白圆弧）。加步数本质上是在绕过
+  // BSM 的低估。正解 = 让 march 自己覆盖到云顶：用「云顶高差 / 太阳仰角余弦」得到沿
+  // 太阳方向到云顶的距离，反推初始步长（保持上游几何级数形状，总覆盖 = 该距离）。
+  // 层内约 500m/sin(el) → 4 步即可覆盖，成本比 8 步减半且 BSM 只剩收尾贡献。
+  // spanToTop=false（地面方向等）退回原固定覆盖语义。
+  float camH = length(rayOrigin) - bottomRadius;
+  float sunUp = max(dot(rayDirection, normalize(rayOrigin)), 0.08);
+  float topSpan = spanToTop ? max((maxHeight - camH) / sunUp, 0.0) : 0.0;
+  float spanScale =
+    (pow(secondaryStepScale, float(iterationCount)) - 1.0)
+    / max(secondaryStepScale - 1.0, 1e-3);
+  float stepSize = topSpan > minSecondaryStepSize
+    ? topSpan / max(spanScale, 1e-3)
+    : minSecondaryStepSize / float(iterationCount);
   float nextDistance = stepSize * jitter;
   float opticalDepth = 0.0;
   for (int i = 0; i < iterationCount; ++i) {
@@ -486,6 +503,7 @@ float marchOpticalDepth(
     maxIterationCount,
     mipLevel,
     jitter,
+    false,
     rayDistance
   );
 }
@@ -810,6 +828,7 @@ vec4 marchClouds(
             maxIterationCountToSun,
             mipLevel,
             marchJitter,
+            true,
             cachedSunRayDistance
           );
 
@@ -853,6 +872,7 @@ vec4 marchClouds(
           maxIterationCountToSun,
           mipLevel,
           marchJitter,
+          true,
           moonRayDistance
         );
         float cosThetaMoon = dot(moonDirection, rayDirection);
