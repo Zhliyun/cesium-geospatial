@@ -414,6 +414,7 @@ float marchOpticalDepth(
   const int maxIterationCount,
   const float mipLevel,
   const float jitter,
+  const bool spanToTop,
   out float rayDistance
 ) {
   int iterationCount = int(
@@ -424,7 +425,22 @@ float marchOpticalDepth(
     // TODO: Remove it.
     return 0.5;
   }
-  float stepSize = minSecondaryStepSize / float(iterationCount);
+  // 【2026-10-23 第一性原理：覆盖到云顶】原式总覆盖 = (minStep/count)·(scale^count−1)，
+  // 与机位无关（count=2 仅 150m、4 步 375m、8 步 3187m）。层内相机到云顶只有 ~500m，
+  // 未覆盖部分交给 BSM，而 readShadowOpticalDepth 用「texel 平均消光 × 距离」估算 ——
+  // 低密度灰雾下严重低估 → 云被错误点亮（白点/白圆弧）。加步数本质是绕过 BSM 的低估。
+  // 改为用「云顶高差 / 太阳仰角余弦」得到沿太阳方向到云顶的距离，反推初始步长
+  //（保持上游几何级数形状，总覆盖 = 该距离）→ 层内 4 步即覆盖全程。
+  // spanToTop=false（地面方向等）退回原固定覆盖语义。
+  float camH = length(rayOrigin) - bottomRadius;
+  float sunUp = max(dot(rayDirection, normalize(rayOrigin)), 0.08);
+  float topSpan = spanToTop ? max((maxHeight - camH) / sunUp, 0.0) : 0.0;
+  float spanScale =
+    (pow(secondaryStepScale, float(iterationCount)) - 1.0)
+    / max(secondaryStepScale - 1.0, 1e-3);
+  float stepSize = topSpan > minSecondaryStepSize
+    ? topSpan / max(spanScale, 1e-3)
+    : minSecondaryStepSize / float(iterationCount);
   float nextDistance = stepSize * jitter;
   float opticalDepth = 0.0;
   for (int i = 0; i < iterationCount; ++i) {
@@ -455,6 +471,7 @@ float marchOpticalDepth(
     maxIterationCount,
     mipLevel,
     jitter,
+    false,
     rayDistance
   );
 }
@@ -769,6 +786,7 @@ vec4 marchClouds(
             maxIterationCountToSun,
             mipLevel,
             marchJitter,
+            true,
             cachedSunRayDistance
           );
 
@@ -812,6 +830,7 @@ vec4 marchClouds(
           maxIterationCountToSun,
           mipLevel,
           marchJitter,
+          true,
           moonRayDistance
         );
         float cosThetaMoon = dot(moonDirection, rayDirection);
