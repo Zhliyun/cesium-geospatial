@@ -587,7 +587,7 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     const tus = um.targetUvScale() as Cartesian2
     expect(tus.x).toBe(1)
     expect(tus.y).toBe(1)
-    expect(um.mipLevelScale()).toBe(0.25)
+    expect(um.mipLevelScale()).toBe(1) // 【v86p】原 0.25=1/divisor，改为 1.0（见 CloudsPass 注释）
     expect(um.frame()).toBe(5)
     pass.destroy()
   })
@@ -622,7 +622,7 @@ describe('M4 T6 temporalUpscale 低分模式', () => {
     expect(res.y).toBe(1080)
     const tus = um.targetUvScale() as Cartesian2
     expect(tus.x).toBe(1)
-    expect(um.mipLevelScale()).toBe(0.5) // 1/divisor
+    expect(um.mipLevelScale()).toBe(1) // 【v86p】原 0.5=1/divisor，改为 1.0
     pass.destroy()
   })
 

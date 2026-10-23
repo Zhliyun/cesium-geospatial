@@ -426,20 +426,16 @@ export function createCloudsPass(
   // 跟随同类型（M2 不消费，但保持 MRT attachment 类型一致避免类型 mismatch）。
   const pixelDatatype = resolveCloudsHdrDatatype(scene)
 
-  // ── 3 MRT color attachment（CLAMP_TO_EDGE；att0 过滤见下）──
-  // 【v82 采样语义修复】原「NEAREST 像素对齐（同 spike SPIKE_SAMPLER）」是全 MRT 统一
-  // NEAREST：对 att1/att2（depthVelocity/shadowLength，消费端全走 texelFetch）等价无害，
-  // 但 att0 colorTex 被 resolve 用 texture()/textureOffset() 做低分→全分上采样——NEAREST
-  // 下那是最近 texel 复制而非插值。修法：colorTex 单用 LINEAR（texelFetch 不受 sampler
-  // 过滤影响 → currentColor 的 bilinear、despeckle、getClosestFragment 等精确取值路径零回归；
-  // 受益的是 varianceClipping 的 textureOffset AABB 采样）。HALF_FLOAT 的 LINEAR 在 WebGL2
-  // 为内置能力，无需扩展。
-  // ⚠️ 归因更正（2026-10-12 受控对照）：本改动**不是** N>1 方块（BLOCK 类伪影，尺寸严格
-  // ∝ upscaleDivisor）的修复。同机位 NEAREST vs LINEAR 双拍对照块几乎相同（全图差分 15.4%
-  // 但块形态一致）；α/γ/jitterScale/jitterMask/despeckle/atlas/LOD/weatherBias 十项亦全无效。
-  // 真因是 march 输出在低分 texel 上的二值化（「一格纯云、一格纯海」，cloudsResolveDebug=1
-  // 直显可见）——上采样只能让边界渐变，改不了整格二值。消除需提高 march 采样密度或守 N=1
-  //（缺省 upscaleDivisor=1，无此伪影）。保留本改动 = 语义正确 + 零回归。
+  // ── 3 MRT color attachment（CLAMP_TO_EDGE；过滤见下）──
+  // 【v82 低分方块根治】原「NEAREST 像素对齐（同 spike SPIKE_SAMPLER）」是全 MRT 统一
+  // NEAREST —— 对 att1/att2（depthVelocity/shadowLength，消费端全走 texelFetch）等价无害，
+  // **但 att0 colorTex 被 resolve 用 texture()/textureOffset() 采样做低分→全分上采样**：
+  // NEAREST 使采样退化为最近 texel 复制 → 每个低分 texel 的 N×N 屏幕块内取值恒定 → 硬边
+  // 方块（实测块尺寸严格 ∝ upscaleDivisor：N=4≈4-10px、N=2≈2-5px、N=1 无块）。这也解释了
+  // 为何 α/γ/despeckle/jitter 全无效：它们都在 texel 网格内做算术，改变不了「复制」本身。
+  // 修法：colorTex 单用 LINEAR（texelFetch 不受 sampler 过滤影响 → 全部精确取值路径零回归；
+  // 只有 texture()/textureOffset() 的插值采样被修复）。HALF_FLOAT 的 LINEAR 在 WebGL2 为内置
+  // 能力，无需扩展。
   const mrtSampler = new Sampler({
     minificationFilter: TextureMinificationFilter.NEAREST,
     magnificationFilter: TextureMagnificationFilter.NEAREST,
@@ -595,7 +591,14 @@ export function createCloudsPass(
     cameraHeight,
     resolution,
     targetUvScale: () => (temporalUpscale ? targetUvScaleTemporal : params.targetUvScale),
-    mipLevelScale: () => (temporalUpscale ? 1 / upscaleDivisor : params.mipLevelScale),
+    // 【v86p 2026-10-23】mipLevelScale 由 1/divisor 改为 1.0（temporal 时）。
+    // 溯源：resolution 已补偿成全分等效（marchWidth*divisor，见上），故 getMipLevel 的
+    // dFdx 自动含 +log2(divisor) 级（N=4 → +2）；原式再乘 1/divisor 又减 1 级 → 净只剩
+    // +1 级。低分 march 每个 texel 覆盖 divisor² 个屏幕像素，+1 级不足以把密度场压到
+    // 「一个 texel 一个值」的平滑度 → 上采样后残留高频 = 用户所见「N=4 颗粒感强烈」。
+    // 改回 1.0 → 净 +2 级（与 texel 覆盖面积匹配）。用户 2026-10-23 方向建议：远处
+    // 保留云的整体轮廓、牺牲高频细节，以换取 N>1 的画质/性能平衡。
+    mipLevelScale: () => (temporalUpscale ? 1.0 : params.mipLevelScale),
 
     // 主 raymarch
     maxIterationCount: () => params.maxIterationCount,

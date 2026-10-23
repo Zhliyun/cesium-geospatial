@@ -60,11 +60,6 @@ export interface CloudsResolvePassOptions {
   /** 【v49 调查用调试】0=关缺省；1=直显 march 原始输出（current）。demo `?cloudsResolveDebug=1`。 */
   resolveDebug?: number
   /**
-   * 【v83 N>1 方块治理】低分域 3×3 高斯低通强度（0=关=旧 bilinear；1=全低通）。
-   * 仅 N>1（TEMPORAL_UPSCALE）编译消费。demo `?cloudsUpsampleLowpass=`。
-   */
-  upsampleLowpass?: number
-  /**
    * 【2026-10-09 F2】逐帧启用闭包（缺省恒启用）：false 时 resolve update 不压 command
    * ——与 march enabled 同源（overlay heightFade 全隐时全链跳过）。
    */
@@ -125,13 +120,6 @@ export function createCloudsResolvePass(
   // 【v35 静止重投影禁用】1=正常重投影 / 0=静止禁用（createCloudsStage 按相机运动量每帧设）。
   let reprojectionStrength = 1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
-  // 【v100 缺省关闭（定案）2026-10-22】git 二分 + 真机拖动验收结论：
-  //   低通 texelFetch 版（ec43f61，开） → 无波纹
-  //   低通关闭（5f4f1f7）             → 无波纹
-  //   低通 bilinear 版（3c386b3 起，开）→ **拖动时出现同心波纹**
-  // 即 bilinear 低通（texture() 按低分 texel 偏移采样）在运动帧引入波纹；缺省关闭。
-  // ?cloudsUpsampleLowpass=1 仍可手动开启（用于压 N>1 的 texel 方块，代价是运动波纹）。
-  let upsampleLowpass = options.upsampleLowpass ?? 0
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
 
@@ -165,7 +153,6 @@ export function createCloudsResolvePass(
     varianceGamma: () => varianceGamma,
     temporalAlpha: () => temporalAlpha,
     temporalDisocclusion: () => temporalDisocclusion,
-    u_upsampleLowpass: () => upsampleLowpass,
     u_reprojectionStrength: () => reprojectionStrength,
     u_spatialDespeckle: () => options.spatialDespeckle ?? 0,
     u_resolveDebug: () => options.resolveDebug ?? 0

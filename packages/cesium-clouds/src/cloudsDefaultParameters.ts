@@ -319,6 +319,9 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 主 raymarch（qualityPresets defaults = high）
     maxIterationCount: 500,
     minStepSize: 50,
+    // 【v86o 2026-10-23】空区步长上限保持 1000m。曾试 5000m：N=4 45→60fps 但用户
+    // 真机判定「颗粒感明显变强」（空区大步使云边缘采样点跳变更大）；2km/3km 中间档
+    // 同样强烈 → 该方向不成立，回退。`?cloudsMaxStep=` 旋钮保留供性能档使用。
     maxStepSize: 1000,
     maxRayDistance: 2e5,
     perspectiveStepScale: 1.01,
@@ -327,6 +330,8 @@ export function defaultCloudsParameters(): CloudsParameters {
     minTransmittance: 1e-2,
 
     // 次 raymarch（qualityPresets defaults）
+    // 【v86i 2026-10-23】缺省 2，实际生效值由 createCloudsStage 统一覆盖为 8（治白点/
+    // 白扇形，见那里的 v86j 注释）。用户 ?cloudsToSunIter= 显式覆盖优先。
     maxIterationCountToSun: 2,
     maxIterationCountToGround: 3,
     minSecondaryStepSize: 100,

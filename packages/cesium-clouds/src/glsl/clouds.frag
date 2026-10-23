@@ -420,14 +420,41 @@ float marchOpticalDepth(
   const float jitter,
   out float rayDistance
 ) {
-  int iterationCount = int(
-    max(0.0, remap(mipLevel, 0.0, 1.0, float(maxIterationCount + 1), 1.0) - jitter)
+  // 【v86f 2026-10-23 量化台阶根治】原式 `int(...)` 是向下截断：mipLevel 连续变化时
+  // 采样数呈台阶，跨台阶的相邻像素整条光深 ray 的步数差 1 → 光深/radiance 整段跳变。
+  // 缺省 maxIterationCountToSun=2 → 只有 0/1/2 三档，且 0 档直接返回常数 0.5（上游
+  // fudge factor）→ 台阶两侧数值差异巨大。用户真机实证：贴云底下沿视角「无云区散满
+  // 孤立白点 + 屏幕下方白色圆弧」；?cloudsToSunIter=8/16 后两者同时消失（台阶变细），
+  // 但 fps 下降大。jitter/α/unfreeze/层内雾化/隐式 LOD 五项实验全排除，锁定此处。
+  // 修法=随机舍入（stochastic rounding）：按小数部分的比例在 ⌊f⌋ 与 ⌊f⌋+1 之间
+  // 随机二选一，期望值 = 原浮点值 → 系统性台阶被打散为空间细噪声（而非系统性亮斑），
+  // 零采样开销。抖动用屏幕空间白噪声（不依赖帧，静止画面同样生效）。
+  // 【v86g 2026-10-23】下限钉 1：`iterationCount == 0` 直接 `return 0.5`（上游 fudge
+  // factor，与真实光深无关的常数）。远景像素 mipLevel 大 → remap≈1 → fCount=1-jitter
+  // 经常 <1 → 走 0 档 → 与相邻像素的真实光深(1-2 步)差一大截 = 孤立亮点。随机舍入
+  //（v86f）只把台阶打散成噪声、幅度未变，故无效（用户真机：默认档仍有白点）。
+  // 钉下限后最差 1 步全步长采样，成本仅远景像素 +1 次 3D 采样。
+  float fIterationCount = max(
+    1.0,
+    remap(mipLevel, 0.0, 1.0, float(maxIterationCount + 1), 1.0) - jitter
   );
+  float countDither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  // 【v86l 2026-10-23】maxIterationCount<=0 = 只用 BSM 光深（性能/诊断模式）：
+  // 返回 0 且不改写 out rayDistance（调用方初始化为 0）→ 后续 sampleShadowOpticalDepth
+  // 从 0 距离开始算全程光深（而不是「march 之后的部分」）。用户 ?cloudsToSunIter=0 触发。
+  // 目的是验证「8 步 march 的光深能否被阴影图完全替代」——若能，次级 march 全砍。
+  if (maxIterationCount <= 0) {
+    return 0.0;
+  }
+  int iterationCount = int(floor(fIterationCount + countDither));
   if (iterationCount == 0) {
     // Fudge factor to approximate the mean optical depth.
     // TODO: Remove it.
     return 0.5;
   }
+  // 【v86h 已回退 2026-10-23】曾试「覆盖长度恒定 3200m，步数换精度」——用户真机实测
+  // 反而更差（云层变密集白点）：2 个采样点跨 3200m 时，光深完全由采样点落点决定，
+  // 方差比原来更大。正解只能是够步数（实测 2/4 档有白点，8 档干净）。
   float stepSize = minSecondaryStepSize / float(iterationCount);
   float nextDistance = stepSize * jitter;
   float opticalDepth = 0.0;
@@ -565,6 +592,16 @@ vec4 marchClouds(
   float weightedDistanceSum = 0.0;
   float transmittanceSum = 0.0;
 
+  // 【v86k 2026-10-23 光深缓存】朝太阳 march 是「每个受照样本各跑一次」——主 march 在
+  // 云内 50-100m 步长、500 步上限 → 单像素可调用上百次 × 8 次 3D 采样。用户真机实测：
+  // toSun 2→8 治好了孤立白点+白色圆弧（步数不足→光深低估→云被错误点亮），但 N=2 从
+  // 34fps 掉到 20fps、N=1 更差。修法=按「沿视线前进距离」门控重算：光深随位置缓慢
+  // 变化（云内 200m 尺度），200m 内复用上次结果。云内 1km 路径从上百次降到 ~5 次。
+  // 近处（步长小）自然密、远处（步长大）自然疏，无需额外 LOD 逻辑。
+  float cachedSunOpticalDepth = 0.0;
+  float cachedSunRayDistance = 0.0;
+  float lastSunODDistance = -1e9;
+
   float maxRayDistance = rayNearFar.y - rayNearFar.x;
   float stepSize = minStepSize + (perspectiveStepScale - 1.0) * rayNearFar.x;
   // 【太空俯视步长 clamp（2026-09-03）】透视步长公式在相机远离云甲时崩溃：near≫段长
@@ -620,21 +657,8 @@ vec4 marchClouds(
   // 薄段细化：段长<300m 时段长/12（保 12 步采样密度）；厚段原步进（LOD 大步横穿）。
   // 【v3.2 连续化 2026-09-29】300m 阶跃在近水平层内相机的「逐像素段长剧变」下产生
   // 处理分支域拼贴=弧状色带（1688 实测）——细化比例改 400→200m smoothstep 连续过渡。
-  // 【v84 弧线根治 2026-10-13】/12 → /32。机位 camera=7.0033,40.2079,1613,156.9,-6.0
-  // （相机贴 L0 层底 113m）屏幕下方出现锐利圆弧：亮度在 <24px 内 95→222 突跳，弧心在
-  // 相机正下方=「视线穿出 L0 层底」的等距线（多 x 剖面跳变点 936/912/888/876/888 呈弧形）。
-  // 判据链：ul>tra（minStepSize 10m）剖面完全平滑 → 与步长强相关；?cloudsMaxIter=200 无效
-  //（不是步数耗尽）；?cloudsInLayerFog=0 弧仍在（不在雾化门控内）；coverage 0.2/0.8 弧消失
-  //（云量相关，非纯几何）；depth 裁剪屏蔽后弧不变（非 rayDistanceToScene）。→ 机制=层内段
-  // 只有 100-400m（相机离层底 113m/sinθ）而 high 档步长 100m → 层内仅 1-4 个采样点，相邻
-  // 像素落在云内/云外的组合二值跳变=弧。ultra 档（10m 步长/500 步）逐像素足够采样故无弧。
-  // /12 在段长 260m 处只把步长从 100 降到 ~39m（仍 7 步）不够；/32 给 ~8m≈ultra 的 10m。
-  // 实测 thinSegment=1（完全细化）→ 弧线彻底消失（剖面 221→200 单调无跳变，v84 实测）
-  // → 门控须覆盖弧区段长：1613 机位的弧对应段长 226-1081m，旧上界 400m 只给 0.78 权重不够。
-  // 新门控 (400,900)：段长 ≤400m 完全细化、900m 以上回到原步进（长段性能不受影响，
-  // 与 line 649 的 stepBudgetLen/32「32 步预算」设计一致——细步长上限即 32 步）。
-  float thinSegment = 1.0 - smoothstep(400.0, 900.0, maxRayDistance);
-  stepSize = mix(stepSize, max(maxRayDistance * 0.03125, 1.0), inLayerCam * thinSegment);
+  float thinSegment = 1.0 - smoothstep(200.0, 400.0, maxRayDistance);
+  stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam * thinSegment);
   // 【层内步数上限 v3.2】禁早退全横穿必须有限步完成：密云区无空区大步，minStepSize 100m/步
   // 走 3.9-8.6km 段 = 39-86 步 × 全屏 × 每步光照采样 → 帧时爆炸（1650/1740 实测页面导航
   // 超时级卡顿）。段长/64 在 minStepSize=100m 地板下不生效（61m<100m）——升段长/32 直接
@@ -666,17 +690,8 @@ vec4 marchClouds(
   // 非密度场纹理）。归零只保留给短段（f49589b 闪屏域=veil alpha 二值跳变的薄段）；
   // 长段恢复蓝噪声相位打碎驻波（静止帧 STBN 层冻结=M4 temporal 静止不递增 → 噪点固定
   // 不闪；运动帧 TAA 平滑）。
-  // 【v96 2026-10-22 低分 march 水波纹】归零只对 N=1 保留：mipLevelScale 在 temporal 路径
-  // = 1/N（N=1 时为 1）→ 用它判别。N>1 时仍归零 → 步进相位逐 texel 同步 → 同心驻波环
-  // = 用户报告的「以相机为圆心、边界处云形突变的水波纹」（cloudsMipBoost=0 时更密，证明
-  // 与 mip 提升无关，是低分 march 固有）。N>1 保留蓝噪声相位打碎驻波，噪声由 resolve 的
-  // 时域累积（N>1 α=0.08）吸收。
-  // 【v99 回退 v96 2026-10-22】恢复「层内薄段归零 jitter」（会话前语义）。
-  // v96 曾对 N>1 取消归零以打碎驻波，但实测未能消除波纹，且改变了层内路径行为 →
-  // 按「先回到无回归基线」原则回退。
-  float jitterZeroGate = inLayerCam * thinSegment;
-  marchJitter = mix(marchJitter, 0.0, jitterZeroGate);
-  startJitter = mix(startJitter, 0.0, jitterZeroGate);
+  marchJitter = mix(marchJitter, 0.0, inLayerCam * thinSegment);
+  startJitter = mix(startJitter, 0.0, inLayerCam * thinSegment);
   float rayDistance = stepSize * startJitter * 2.0;
   // 【云内步长恢复 2026-09-29 五轮】空隙/无云分支的 stepSize×=perspectiveStepScale 是
   // 单向指数放大且从不恢复——跨层相机（7618 在卷云带，俯视跨空隙进 L1）的步长到达云顶
@@ -695,25 +710,20 @@ vec4 marchClouds(
     vec3 position = rayDistance * rayDirection + rayOrigin;
     float height = length(position) - bottomRadius;
     float mipLevel = log2(max(1.0, rayStartTexelsPerPixel + rayDistance * 1e-5));
-    // 【v102 关键修正 2026-10-22】stepMip 必须扣回**与提升相同的量**，即乘上
-    // CLOUDS_MIP_BOOST。原式写死 log2(1/mipLevelScale)：当 mipBoost=0（缺省）时
-    // stepMip = mipLevel - 2 → 负数 → mix(stepSize, maxStepSize, min(1.0, 负数)) 得到
-    // **负步长** → 步进错乱 → 以相机为圆心的同心波纹（用户真机症状）。
-    // 这条也让此前所有 boost=0 的对照失效，是「低通关了仍有波纹」的真正原因。
-    float stepMip = mipLevel - CLOUDS_MIP_BOOST * log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
-    float sampleMip = mipLevel;
 
     #if !defined(DEBUG_MARCH_INTERVALS)
     if (insideLayerIntervals(height)) {
       stepSize *= perspectiveStepScale;
-      rayDistance += mix(stepSize, maxStepSize, min(1.0, stepMip));
+      // 【v86q 已回退 2026-10-23】曾试步长用半速 mip（min(1.0, mipLevel*0.5)）解耦纹理
+      // 平滑与采样密度：用户真机实测「变化不大」——颗粒源在 STBN 相位而非步长，回退。
+      rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel));
       continue;
     }
     #endif // !defined(DEBUG_MARCH_INTERVALS)
 
     // Sample rough weather.
     vec2 uv = getGlobeUv(position);
-    WeatherSample weather = sampleWeather(uv, position, height, sampleMip);
+    WeatherSample weather = sampleWeather(uv, position, height, mipLevel);
 
     #ifdef DEBUG_SHOW_SAMPLE_COUNT
     ++sampleCount.x;
@@ -724,12 +734,12 @@ vec4 marchClouds(
       // TODO: This produces banding artifacts.
       // Possible improvement: Binary search refinement
       stepSize *= perspectiveStepScale;
-      rayDistance += mix(stepSize, maxStepSize, min(1.0, stepMip));
+      rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel));
       continue;
     }
 
     // Sample detailed participating media.
-    MediaSample media = sampleMedia(weather, position, uv, sampleMip, marchJitter, sampleCount);
+    MediaSample media = sampleMedia(weather, position, uv, mipLevel, marchJitter, sampleCount);
 
     if (media.extinction > minExtinction) {
       // 【2026-10-09 颗粒带判别 v2】media.extinction 直显（shape 3D 修正后的有效密度，
@@ -784,27 +794,37 @@ vec4 marchClouds(
       float sunRayDistance = 0.0;
       float opticalDepth = 0.0;
       if (any(notEqual(sunIrradiance, vec3(0.0)))) {
-        opticalDepth = marchOpticalDepth(
-          position,
-          sunDirection,
-          maxIterationCountToSun,
-          mipLevel,
-          marchJitter,
-          sunRayDistance
-        );
-
-        if (height < shadowTopHeight) {
-          // Obtain the optical depth from BSM at the ray position.
-          opticalDepth += sampleShadowOpticalDepth(
+        // 【v86k】距离门控重算（见函数开头缓存变量注释）。首次必算。
+        // 【v86n 已回退 2026-10-23】曾试 800m 间隔：用户实测 N=4 43→45fps、N=2 23→25fps
+        // （收益仅 +2fps）却让 N=2 出现轻微白色扇形 → 不划算，回退 200m。
+        // 附带结论：光深调度不是瓶颈（关掉全部光深 march 也只有 25fps@N=1），主 march 才是。
+        if (rayDistance - lastSunODDistance >= 200.0 || lastSunODDistance < -1e8) {
+          cachedSunRayDistance = 0.0;
+          cachedSunOpticalDepth = marchOpticalDepth(
             position,
-            // Take account of only positions further than the marched ray
-            // distance.
-            sunRayDistance,
-            // Apply PCF only when the sun is close to the horizon.
-            maxShadowFilterRadius * remapClamped(dot(sunDirection, surfaceNormal), 0.1, 0.0),
-            marchJitter
+            sunDirection,
+            maxIterationCountToSun,
+            mipLevel,
+            marchJitter,
+            cachedSunRayDistance
           );
+
+          if (height < shadowTopHeight) {
+            // Obtain the optical depth from BSM at the ray position.
+            cachedSunOpticalDepth += sampleShadowOpticalDepth(
+              position,
+              // Take account of only positions further than the marched ray
+              // distance.
+              cachedSunRayDistance,
+              // Apply PCF only when the sun is close to the horizon.
+              maxShadowFilterRadius * remapClamped(dot(sunDirection, surfaceNormal), 0.1, 0.0),
+              marchJitter
+            );
+          }
+          lastSunODDistance = rayDistance;
         }
+        opticalDepth = cachedSunOpticalDepth;
+        sunRayDistance = cachedSunRayDistance;
       }
 
       g_probeOD = opticalDepth;
@@ -899,7 +919,7 @@ vec4 marchClouds(
       // 注意不可写在白化前——NaN 会经 max/mix 传播（Metal max(NaN,x) 未定义）。
       if (isnan(radiance.x) || isnan(radiance.y) || isnan(radiance.z)) {
         stepSize *= perspectiveStepScale;
-        rayDistance += mix(stepSize, maxStepSize, min(1.0, stepMip));
+        rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel));
         continue;
       }
       // 【2026-09-29 编译扰动锚（2022m 黑斑压制实验）】Mac ANGLE→Metal fast-math 在本函数
@@ -1276,20 +1296,8 @@ void main() {
 
     float mipLevel = getMipLevel(globeUv * localWeatherRepeat) * mipLevelScale;
     mipLevel = mix(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / maxHeight));
-    // 【v94 2026-10-22】STBN 分域必须用**未提升**的基础 mip：v93 把 log2(N) 加进 mipLevel
-    // 后，几乎所有像素都越过 u_unfreezeMip=1.0 阈值 → 全屏每帧轮换 STBN 噪声层，配 α=0.08
-    // 的 EMA 残留，运动时呈波纹状闪烁（用户：「水波纹还在，只是变稀了」）。
-    // STBN 的冻结/轮换是**时间稳定性**决策，与「采样足迹 → 密度 mip」无关，故保留基础值。
-    float stbnMipLevel = mipLevel;
-    // 【v93 颗粒根治（保持）】低分 march 采样足迹 ×N，mip 必须 +log2(N) 才能采样到预滤波
-    // 的密度场；否则 1/4 分辨率 march 采未滤波高频 → 空间混叠 = 逐 texel 颗粒。
-    // 【v95】倍率可由 ?cloudsMipBoost= 扫档（0=不提升 / 1=完整），用于真机定位平衡点。
-    #ifndef CLOUDS_MIP_BOOST
-    #define CLOUDS_MIP_BOOST 1.0
-    #endif
-    mipLevel += CLOUDS_MIP_BOOST * log2(max(1.0, 1.0 / max(mipLevelScale, 1e-3)));
     // 【白点治理】天空分支按 mip 分域取 STBN 层（高 mip 轮换治白点/低 mip 冻结防闪动）
-    stbn = getSTBN(stbnMipLevel);
+    stbn = getSTBN(mipLevel);
 
     float marchedFrontDepth;
     ivec3 sampleCount = ivec3(0);

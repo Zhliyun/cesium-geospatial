@@ -64,12 +64,6 @@ export interface CloudsMainOptions {
    */
   accurateSunSkyLight?: boolean
   /**
-   * 【v95 2026-10-22】低分 march 的密度 mip 提升倍率（乘在 log2(N) 上）。
-   * 1=完整提升（N=4 → +2 级，颗粒已修；但引入 iso-距离分界/水波纹）、0=不提升（回到 v91 前）。
-   * demo `?cloudsMipBoost=`，用于真机扫档定位「波纹 vs 颗粒」的平衡点。
-   */
-  mipBoost?: number
-  /**
    * Debug 视图（clouds.frag DEBUG_SHOW_* 分支，M2 视觉调试用）：
    *   'uv'（globeUv checker 映射）/ 'frontDepth'（turbo 云前深度）/ 'sampleCount'（march 采样数）/
    *   'shadowMap'（BSM 可视化，M3）/ 'cascades'（cascade 分层着色：红=0 绿=1 蓝=2，越界=白）。
@@ -110,12 +104,7 @@ const DEFAULTS: ResolvedCloudsMainOptions = {
   debugShow: null,
   lightShafts: true,
   shadowCascadeCount: 3,
-  upscaleDivisor: 1,
-  // 【v98 2026-10-22 缺省回 0】mip 提升是「近距离颗粒 ↔ 中远距斑点/弧纹」同一取舍的两端：
-  // boost=1 修好 1733m 的颗粒，但 4061m 出现大片斑点与同心弧（会话起点版本无此现象，
-  // git 二分 + 截图实锤）。缺省回到 0 = 与会话前一致（零回归）；压近景颗粒时用
-  // ?cloudsMipBoost=1 单独开启。
-  mipBoost: 0
+  upscaleDivisor: 1
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include
@@ -166,12 +155,6 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     ...CLOUDS_MAIN_DEFINES,
     '#define PERSPECTIVE_CAMERA', // getViewZ perspectiveDepthToViewZ 分支（Cesium 相机恒透视）
     '#define SHADOW_CASCADE_COUNT ' + o.shadowCascadeCount,
-    // 【v103 修复 2026-10-22】fallback 必须是 0（与 DEFAULTS 一致）。原写 `?? 1`：
-    // createCloudsStage 传的是 `mipBoost: options.mipBoost`（未传时值为 undefined 但**键存在**），
-    // 对象展开会覆盖 DEFAULTS 的 0 → `?? 1` → **boost 实际一直是 1**，
-    // 导致「缺省改 0」从未生效（只有显式写 ?cloudsMipBoost=0 才真正关闭）——
-    // 这是每一版都仍有波纹的根源。
-    '#define CLOUDS_MIP_BOOST ' + (o.mipBoost ?? 0).toFixed(3),
     lowResMarch ? '#define LOW_RES_MARCH' : '',
     o.accurateSunSkyLight ? '#define ACCURATE_SUN_SKY_LIGHT' : '',
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',

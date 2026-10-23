@@ -119,6 +119,20 @@ async function main(): Promise<void> {
   // scene.globe.tilesLoaded / 触发截帧。不改任何渲染行为，仅挂全局引用。
   ;(window as unknown as { __viewer?: Viewer }).__viewer = viewer
 
+  // 【诊断 2026-10-23】WebGL 上下文丢失/恢复监听。用户报「偶尔卡死、刷新后恢复」——
+  // 本仓库全链无 while 循环、纹理只在初始化创建（已 grep 核实），JS 侧没有可挂死的点，
+  // 故卡死大概率在 GPU 侧（驱动看门狗 TDR / 显存耗尽）。卡死时若控制台打出下面这条，
+  // 即可确认是 context lost 而非 JS 死循环；没打则需另找（如 rAF 被浏览器节流）。
+  scene.canvas.addEventListener('webglcontextlost', (e: Event) => {
+    console.error(
+      '[diagnostic] WebGL context lost — 卡死属 GPU 侧（TDR/显存），非 JS 循环',
+      (e as WebGLContextEvent).statusMessage
+    )
+  })
+  scene.canvas.addEventListener('webglcontextrestored', () => {
+    console.warn('[diagnostic] WebGL context restored')
+  })
+
   // FPS 显示（性能优化 Phase 0 基线工具）：默认关闭（2026-09-03 拍板——验收角标非产品形态，
   // 裸 URL 不再常驻右上角）；?fps=1 开启（ms/帧 + FPS）。覆盖所有 mode（大气/sky/depth 通用）。
   // 注意：只给整体帧率；各 PostProcessStage（atmosphere/tonemap/lensflare/depthTemporal）
@@ -616,18 +630,12 @@ async function main(): Promise<void> {
           // 【v49 调查用调试】?cloudsResolveDebug=1 直显 march 原始输出（current）
           ...(getNumber('cloudsResolveDebug') != null
             ? { resolveDebug: getNumber('cloudsResolveDebug')! } : {}),
-          // 【v83 N>1 方块治理】?cloudsUpsampleLowpass=0..1 低分域 3×3 高斯低通（0=关缺省）
-          ...(getNumber('cloudsUpsampleLowpass') != null
-            ? { upsampleLowpass: getNumber('cloudsUpsampleLowpass')! } : {}),
           // 【v49 调查用调试】?cloudsJitterMask=N（1=ray 2=depth 4=阴影相位；缺省 7）
           ...(getNumber('cloudsJitterMask') != null
             ? { jitterMask: getNumber('cloudsJitterMask')! } : {}),
           // 【v77】?cloudsJitterScale=N jitter 幅度缩放（缺省 0.25）——颗粒↔抖动旋钮
           ...(getNumber('cloudsJitterScale') != null
             ? { jitterScale: getNumber('cloudsJitterScale')! } : {}),
-          // 【v95】?cloudsMipBoost=N 低分 march 密度 mip 提升倍率（缺省 1；0=不提升）
-          ...(getNumber('cloudsMipBoost') != null
-            ? { mipBoost: getNumber('cloudsMipBoost')! } : {}),
           // 【2026-10-08 白点治理】?cloudsUnfreezeMip=N STBN 相位分域阈值（mip>N 轮换
           // 治白点；≤N 冻结防云缘闪动；0=全轮换）
           ...(getNumber('cloudsUnfreezeMip') != null
@@ -647,6 +655,12 @@ async function main(): Promise<void> {
             ? { minTransmittance: getNumber('cloudsMinTrans')! } : {}),
           ...(getNumber('cloudsToSunIter') != null
             ? { maxIterationCountToSun: getNumber('cloudsToSunIter')! } : {}),
+          // 【v86m 2026-10-23】?cloudsSecStep=<米> 朝太阳 march 起始步长（缺省 100）。
+          // 总覆盖 = (minStep/count)·(scale^count−1)，与 count 指数相关：minStep=100 时
+          // 2 步覆盖 150m / 4 步 375m / 8 步 3187m；minStep=200 时 4 步即覆盖 750m。
+          // 用于扫「光深精度 vs 步数」的性价比点（用户实测 8 步治白点/白扇形但太贵）。
+          ...(getNumber('cloudsSecStep') != null
+            ? { minSecondaryStepSize: getNumber('cloudsSecStep')! } : {}),
           ...(getNumber('cloudsMaxStep') != null
             ? { maxStepSize: getNumber('cloudsMaxStep')! } : {}),
           // 【2026-09-05 P1 光柱 march 步长标定旋钮】?cloudsShaftStep=<米> shadowLength march

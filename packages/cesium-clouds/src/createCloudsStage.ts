@@ -238,23 +238,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   spatialDespeckle?: number
   /** 【v49 调查用调试】0=关缺省；1=直显 march 原始输出（current）。demo `?cloudsResolveDebug=1`。 */
   resolveDebug?: number
-  /**
-   * 【v83 N>1 方块治理】低分域 3×3 高斯低通强度（0=关=旧 bilinear；1=全低通）。
-   * 背景：N>1 时 march 输出在低分 texel 上呈二值交替（「一格纯云、一格纯海」）→ 上采样后
-   * 成 N×N 硬边方块；十几项 resolve 参数（α/γ/jitter/despeckle/atlas/LOD/mipLevelScale）
-   * 实测全无效——它们都在 texel 网格内做算术。3×3 低分核把相邻 texel 的二值差摊成分数值，
-   * 块对比度按核面积摊薄。**代价=低分域细节被平滑**（N>1 本就是降分档）。
-   * 仅 N>1（TEMPORAL_UPSCALE）编译消费 → N=1 全分路径零影响。demo `?cloudsUpsampleLowpass=`。
-   */
-  upsampleLowpass?: number
   /** 【v77】jitter 幅度缩放（缺省 0.25）——「颗粒 ↔ 抖动」旋钮。demo `?cloudsJitterScale=`。 */
   jitterScale?: number
-  /**
-   * 【v95 2026-10-22】低分 march 的密度 mip 提升倍率（乘在 log2(N) 上，缺省 1）。
-   * 1 = 完整提升（N=4 → +2 级，颗粒已修，但用户报告出现 iso-距离分界/水波纹）；
-   * 0 = 不提升（回到 v93 前，颗粒会回来）。demo `?cloudsMipBoost=` 扫档定位平衡点。
-   */
-  mipBoost?: number
   /**
    * M3 BSM 自阴影生成开关（默认 true）。false = 诊断基线：不创建 CascadedShadowMaps/
    * ShadowPass，state.shadow 恒 undefined → 主 march fallback 全 0 dummy → Beer=1
@@ -608,6 +593,16 @@ function buildCloudsStageImpl(
   //（BSM 结构 cascadeCount/mapSize）；applied 由调用方传入（勿在本函数重复 resolve）。
   const params: CloudsParameters = applied.params
 
+  // 【v86j 2026-10-23】朝太阳光深 march 步数 2 → 8。白点根因=该 march 步数不足导致光深
+  // 被低估（minStep=100/scale=2 时 2 步只覆盖 150m、4 步 375m、8 步 3187m），覆盖不到
+  // 云层深处 → 云被错误点亮为孤立白点 + 屏幕下方白色圆弧。用户真机同机位逐档实测：
+  // 2/4 档有白点+圆弧，8 档干净；且该覆盖长度与 march 分辨率无关，N=1/N=2/N=4 三档都
+  // 需要 8。成本由 clouds.frag v86k 的 200m 距离门控缓存吸收（原每受照样本各跑一次
+  // → 云内上百次/像素，现 ~5 次）。用户显式 ?cloudsToSunIter= 优先。
+  if (options.parameters?.maxIterationCountToSun == null) {
+    params.maxIterationCountToSun = 8
+  }
+
   // ── T6 altitudeOffset 派生链（spec §6.1，红队 BLOCKER-4 闭环）──
   // 仅显式传时派生：applyAltitudeOffset（L0/L1 加 clamp 偏移）→ packLayerUniforms 重算全部
   // 15 项层 packed uniforms。不传保持 defaults 写死值（零回归 + 防 clobber 用户显式层参数）；
@@ -788,9 +783,7 @@ function buildCloudsStageImpl(
       // 防止 options.upscaleDivisor 原键（若有）漏档位合并，这里显式覆盖为 applied 值
       upscaleDivisor: applied.upscaleDivisor,
       // 【v49 调查用调试】jitter 注入点掩码（demo ?cloudsJitterMask=）
-      jitterMask: options.jitterMask,
-      // 【v95】低分 march 密度 mip 提升倍率（demo ?cloudsMipBoost=）
-      mipBoost: options.mipBoost
+      jitterMask: options.jitterMask
     })
 
     // ── ShadowPass 生成端（options.shadowPass=false 跳过——诊断基线 Beer=1）──
@@ -889,8 +882,6 @@ function buildCloudsStageImpl(
           spatialDespeckle: options.spatialDespeckle,
           // 【v49】调查用调试：直显 current（demo ?cloudsResolveDebug=1）
           resolveDebug: options.resolveDebug,
-          // 【v83 N>1 方块治理】低分域 3×3 高斯低通（demo ?cloudsUpsampleLowpass=）
-          upsampleLowpass: options.upsampleLowpass,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,
@@ -1126,11 +1117,6 @@ function buildCloudsStageImpl(
           const d = Cartesian3.dot(prevDirWC, camera.directionWC)
           dirAngle = Math.acos(Math.min(1, Math.max(-1, d)))
         }
-        // 【v98 回归修复 2026-10-22】撤销 v91 起的「N>1 静止 base α 提到 0.15/0.18/0.08」。
-        // 该改动原本用于压俯视颗粒，但与「静止跳过 variance clipping」配对后，使低分 march
-        // 的采样斑点失去 clip 的空间降噪、被时域累积保留 → 用户报「以相机为圆心的水波纹/
-        // 大片斑点」。git 二分 3c386b3（α=0 + clip 常在）同机位干净、f7aff57 复现。
-        // α 恢复全档为 params.temporalAlpha（缺省 0），画面回到会话前基线。
         motionAlphaCurrent = computeMotionAlpha(
           transM + dirAngle * MOTION_EQUIV_RADIUS_M,
           params.temporalAlpha,

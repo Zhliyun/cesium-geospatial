@@ -27,9 +27,6 @@ uniform int frame;
 uniform float varianceGamma;
 uniform float temporalAlpha;
 uniform float temporalDisocclusion;
-// 【v83 N>1 方块治理】低分域 3×3 高斯低通强度（0=关/旧 bilinear，1=全低通）。仅
-// TEMPORAL_UPSCALE（N>1）编译消费。demo `?cloudsUpsampleLowpass=`。
-uniform float u_upsampleLowpass;
 uniform vec2 jitterOffset;
 // 【v35 静止重投影禁用】静止帧（相机无位移/转向）时 0 → velocity 归零。根因（2026-10-10
 // v28-v34 探针链）：jitter 16 相位轮换使「同一像素相邻帧的 ray」指向不同亚像素位置，
@@ -180,47 +177,6 @@ void temporalUpscale(
   } else {
     currentColor = mix(mix(s00, s10, fr.x), mix(s01, s11, fr.x), fr.y); // 全黑：保持原样
   }
-  // 【v83 N>1 方块治理】低分域 3×3 高斯低通（u_upsampleLowpass：0=关=旧 bilinear，1=全低通）。
-  // 背景：N>1 时 march 输出在低分 texel 上呈二值交替（「一格纯云、一格纯海」，
-  // cloudsResolveDebug=1 直显可见），块尺寸严格 ∝ upscaleDivisor（N=4≈10-20px、N=2≈5-8px、
-  // N=1 无块），关云即消失。bilinear 上采样只让**边界**渐变，texel 中心值原样保留 →
-  // N×N 硬边方块仍在（受控对照：α 0/0.1/0.3/1.0、γ 0.0001/0.5/2.0、jitterScale/jitterMask、
-  // despeckle、atlas、shape LOD、weatherBias、mipLevelScale 十余项全无效——它们都在 texel
-  // 网格内做算术）。3×3 低分核把相邻 texel 的二值差摊成分数值：核内 texel 越多，单 texel
-  // 的权重越低，块对比度按核面积摊薄。仅 TEMPORAL_UPSCALE（N>1）编译 → N=1 全分路径零影响。
-  if (u_upsampleLowpass > 0.0) {
-    // 【v89 修正 2026-10-22】原实现用 texelFetch(i00 + offset)：i00 是 floor 到低分 texel
-    // 的整数坐标，因此整个核在**一个 texel 跨度内恒定** → mix 权重 1 时输出退化为「逐 texel
-    // 分段常数」= 4×4 硬方块（用户截图里的白色方格网），加宽核只会让方块更大更糊。
-    // 改为 **bilinear 采样**（colorTex sampler 已是 LINEAR）：核跟随亚 texel 位置连续变化，
-    // 既能摊平 texel 间差异，又不产生分段常数与 texel 边界接缝。核半径固定 ±1 texel。
-    vec2 ts = 1.0 / mrtSz2;
-    vec3 lp = vec3(0.0);
-    float lpa = 0.0;
-    float lpw = 0.0;   // rgb 权重（按不透明度）
-    float lpwA = 0.0;  // transmittance 权重（平权）
-    // 【v90 不透明度加权 2026-10-22】att0.a = **不透明度**（1=不透，resolve 的遮挡翻转判据
-    // 与「黑 texel=a 显著」注释同源）。低通若直接平均 rgb，会把「rgb=0 的透明 texel」摊进
-    // 云里 → 用户复现机位（camera=7.0857,42.1025,7551,201.5,-6.2, N=4）成片黑色小方块；
-    // 受控对照关掉低通即全部消失，锁定此处。修法：rgb 按不透明度加权（透明样本权重→0），
-    // 不透明度平权单独平均；并保留黑 texel 剔除。
-    for (int j = 0; j < 3; ++j) {
-      for (int i = 0; i < 3; ++i) {
-        vec4 s = texture(colorBuffer, vUv + vec2(float(i - 1), float(j - 1)) * ts);
-        float w = (i == 1 ? 2.0 : 1.0) * (j == 1 ? 2.0 : 1.0);
-        float opacity = clamp(s.a, 0.0, 1.0);
-        bool blk = dot(s.rgb, vec3(0.299, 0.587, 0.114)) < 0.012 && opacity > 0.05;
-        float wr = blk ? 0.0 : w * opacity;
-        lp += s.rgb * wr;
-        lpw += wr;
-        lpa += opacity * w;
-        lpwA += w;
-      }
-    }
-    if (lpw > 1e-3) {
-      currentColor = mix(currentColor, vec4(lp / lpw, lpa / lpwA), u_upsampleLowpass);
-    }
-  }
   #ifdef SHADOW_LENGTH
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, lowResCoord, 0).rgb, 1.0);
   #endif // SHADOW_LENGTH
@@ -267,21 +223,11 @@ void temporalUpscale(
   // 抖动；运动时尤为明显——用户 2026-10-12 真机报告「拖动相机时类似抖动」）。其原修的两个
   // 黑块 bug（2026-09-02 云地平线 / 2026-09-03 穿云）根因均为 velocity 错位 → history 采到
   // 死值——该错位已由 v44 重投影修复消除（jitter 双重注入移除 + 上帧 jitter 补偿）。
-  // 上游 resolve 本就无 rejection。条件恒 false 保留分支体便于故障回退（GLSL 裁剪死代码）。
   // 【v87 运动黑块 2026-10-22】rejection 改为**仅运动时**启用（u_reprojectionStrength：
-  // 静止 0 / 运动 1）。v44 把它整段关掉是为了治静止抖动——静止时 jitter 相位轮换让云缘
-  // |Δa| 恒超阈，rejection 变成"每帧直出 current"=抖动；但运动时这条判据正是遮挡翻转的
-  // 正确信号，关掉后拖动相机（尤其相机贴近/进入云层、N>1 降分域）会出现黑色块。
+  // 静止 0 / 运动 1）。v44 整段关掉是为治静止抖动——静止时 jitter 相位轮换让云缘 |Δa|
+  // 恒超阈，rejection 变成「每帧直出 current」=抖动；但运动时这条判据正是遮挡翻转的
+  // 正确信号，关掉后拖动相机（尤其相机贴近/进入云层、N>1 降分域）出现黑色块。
   // 门控后：静止逐位不变（jitter 修复保住），运动恢复 2026-09-02 的黑块修复语义。
-  // 【v99 回退 v87 2026-10-22】恢复恒 false（会话前语义）。v87 曾改为「仅运动时启用」，
-  // 但触发时直出 currentColor = 未经时域平均的 march 原始结果 → 拖动相机时低分 march 的
-  // 采样斑点/同心弧全部暴露（用户：「移动视角时能看到明显水波纹」，而静止截图干净——
-  // 这正是只在运动帧生效的路径特征）。运动黑块问题回到会话前状态，另行处理。
-  // 【v100 恢复 v87 运动门控 2026-10-22】真机逐版本拖动验收：
-  //   5f4f1f7（rejection 运动门控 ON + 低通 OFF）→ **无波纹**
-  //   v100   （rejection OFF        + 低通 OFF）→ **有波纹**
-  // → 运动 rejection 实际上在**抑制**波纹：命中时直出 current，绕开了 history/clip
-  //   那条会产生同心环的路径。故保留「仅运动时启用」（静止仍恒 false，保住静止无抖）。
   if (u_reprojectionStrength > 0.5 && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
@@ -291,11 +237,6 @@ void temporalUpscale(
   }
   // 【v66 回归上游语义】clip 始终生效（撤销 v43/v44 的「静止跳过 AABB」——skip 使 history
   // 完全自持=冻结）。clip 的 AABB 调整是全分 history 的持续演化机制（噪声压制 + 细节刷新）。
-  // 【v98 回归修复 2026-10-22】恢复「始终做 variance clipping」。v91 曾改为静止跳过 clip，
-  // 假设「静止无重投影误差 → 不需要 clip」；实测这是**错误的**：AABB 一直在充当空间降噪器
-  // （每帧把 history 收向当前帧邻域统计），关掉后低分 march 的采样斑点被时域累积保留下来
-  // → 用户报「以相机为圆心的水波纹/大片斑点」。git 二分：3c386b3（clip 常在）同机位干净，
-  // f7aff57（跳过 clip + α>0）复现；boost=0 时 mip 路径恒等，故锁定此处。
   vec4 clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
   // 【2026-09-02 静止收敛抖动修复】three 原文 outputColor = clippedColor 直出——variance
   // clip 的 AABB 逐帧随 current(Bayer ±2px 轮换采样)移动,history 被 clip 拉向本帧
@@ -356,21 +297,11 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   // 抖动；运动时尤为明显——用户 2026-10-12 真机报告「拖动相机时类似抖动」）。其原修的两个
   // 黑块 bug（2026-09-02 云地平线 / 2026-09-03 穿云）根因均为 velocity 错位 → history 采到
   // 死值——该错位已由 v44 重投影修复消除（jitter 双重注入移除 + 上帧 jitter 补偿）。
-  // 上游 resolve 本就无 rejection。条件恒 false 保留分支体便于故障回退（GLSL 裁剪死代码）。
   // 【v87 运动黑块 2026-10-22】rejection 改为**仅运动时**启用（u_reprojectionStrength：
-  // 静止 0 / 运动 1）。v44 把它整段关掉是为了治静止抖动——静止时 jitter 相位轮换让云缘
-  // |Δa| 恒超阈，rejection 变成"每帧直出 current"=抖动；但运动时这条判据正是遮挡翻转的
-  // 正确信号，关掉后拖动相机（尤其相机贴近/进入云层、N>1 降分域）会出现黑色块。
+  // 静止 0 / 运动 1）。v44 整段关掉是为治静止抖动——静止时 jitter 相位轮换让云缘 |Δa|
+  // 恒超阈，rejection 变成「每帧直出 current」=抖动；但运动时这条判据正是遮挡翻转的
+  // 正确信号，关掉后拖动相机（尤其相机贴近/进入云层、N>1 降分域）出现黑色块。
   // 门控后：静止逐位不变（jitter 修复保住），运动恢复 2026-09-02 的黑块修复语义。
-  // 【v99 回退 v87 2026-10-22】恢复恒 false（会话前语义）。v87 曾改为「仅运动时启用」，
-  // 但触发时直出 currentColor = 未经时域平均的 march 原始结果 → 拖动相机时低分 march 的
-  // 采样斑点/同心弧全部暴露（用户：「移动视角时能看到明显水波纹」，而静止截图干净——
-  // 这正是只在运动帧生效的路径特征）。运动黑块问题回到会话前状态，另行处理。
-  // 【v100 恢复 v87 运动门控 2026-10-22】真机逐版本拖动验收：
-  //   5f4f1f7（rejection 运动门控 ON + 低通 OFF）→ **无波纹**
-  //   v100   （rejection OFF        + 低通 OFF）→ **有波纹**
-  // → 运动 rejection 实际上在**抑制**波纹：命中时直出 current，绕开了 history/clip
-  //   那条会产生同心环的路径。故保留「仅运动时启用」（静止仍恒 false，保住静止无抖）。
   if (u_reprojectionStrength > 0.5 && abs(currentColor.a - historyColor.a) > temporalDisocclusion) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
@@ -430,46 +361,36 @@ void main() {
   #endif // TEMPORAL_UPSCALE
 
   // 【2026-10-08 白点治理】孤点中值替换（u_spatialDespeckle>0 才走，全屏一致分支）：
-  // 当前像素 luma 与邻域中值差超阈（0.1 线性域）= 孤立亮/暗点 → 中值替换。
-  // 【5×5 窗】云缘颗粒带密度高（>44%），3×3 中值（抗 44%）失效——5×5 中值抗 ~52%
-  // 且窗更大覆盖 2px 簇；25 texelFetch+插入排序成本 ~1ms/1080p（resolve 全屏 pass）。
+  // 当前像素 luma 与参照 luma 差超阈 = 孤立亮/暗点 → 向参照替换。
   if (u_spatialDespeckle > 0.0) {
-    // 【2026-10-10 低分 march 域修复】邻域索引必须用 march 域坐标：coord 是 resolve RT
-    // 坐标（全分/超分域），colorBuffer 是 march RT（N=2/4 降分时低分）——直接用 coord
-    // 在 N>1 时越界 texelFetch（返回 0）→ 半屏黑点 + x=1/divisor 处竖分界
-    //（上界外像素邻域全 0 → 均值被拉黑 → 反向替换）。N=1/超分时两域重合，行为不变。
-    // 【v89 修正 2026-10-22】原实现 texelFetch(despeckleCoord + offset)：参考均值在整个
-    // 低分 texel 内恒定，而被比较的 outputColor 是逐全分像素变化的 → 在 texel 跨度内
-    // 必然出现「一半像素被判超阈、另一半不判」的**逐 texel 二值化**，把全分辨率像素往
-    // 低分常数上拉 → 用户截图里的**规则暗点阵**（N=4 间距≈4px）。
-    // 改为 bilinear 采样（colorTex sampler 已是 LINEAR）：参考值随亚 texel 位置连续变化，
-    // 判据在空间上连续，不再产生 texel 级二值拉拽。
-    vec2 dts = 1.0 / vec2(textureSize(colorBuffer, 0));
-    vec3 meanColor = vec3(0.0);
-    float meanA = 0.0;
-    for (int dy = -2; dy <= 2; dy += 2) {
-      for (int dx = -2; dx <= 2; dx += 2) {
-        vec4 cn = texture(colorBuffer, vUv + vec2(float(dx), float(dy)) * dts);
-        meanColor += cn.rgb;
-        meanA += cn.a;
-      }
-    }
-    meanColor /= 9.0;
-    meanA /= 9.0;
+    // 【v86d 2026-10-22 参照改为 bilinear 采样】前两版都用「低分域常数参照」：
+    // - v86（25-tap 均值含中心）→ 白点替换后残留 (1-1/25)·自身，削不净；
+    // - v86c（剔除中心的环均值）→ 点确实变弱，但**变大且发糊**：ringColor 在低分域是
+    //   一个常数，同一个低分 texel 覆盖的 4×4 个全分像素被替换成同值 → 把 resolve 的
+    //   连续渐变压成 4×4 常数块（用户真机「白点变弱、变大了、有变糊」实证）。
+    // 正解=参照值必须**空间连续**：colorBuffer 的采样器已是 LINEAR（6ceda5b），
+    // texture(colorBuffer, vUv) 在全分域每个像素各得一个插值 → 无块；且单个亮 texel
+    // 在双线性权重里只占 1/4~1/16，参照本身已贴近背景。N=1 时 vUv 落在 texel 中心，
+    // 双线性退化为精确取值 → 零模糊。
+    vec4 refSample = texture(colorBuffer, vUv);
     float lumaOut = dot(outputColor.rgb, vec3(0.299, 0.587, 0.114));
-    float lumaMean = dot(meanColor, vec3(0.299, 0.587, 0.114));
+    float lumaMean = dot(refSample.rgb, vec3(0.299, 0.587, 0.114));
     // 【2026-10-09 分通道方向性滤波】rgb=对称（亮喷溅+黑点都治——黑点=暗离群，
     // 单侧版实测 5950m 黑点回潮 28.0）；α=单侧只填透明洞——对称 α 替换会在云边界
     // 内侧把高 α 拉向跨边界低均值=云啃成半透明透出暗地形（3021m 层内实测黑方块）。
     // 替换量∝离群幅度（连续化防色带）。
+    // 【v86r 2026-10-23】阈值 0.015→0.006、斜率 12→40：N=4 俯视颗粒实测为一层密布
+    // 1-2px 白点（ego 截图确认），原阈值只抓明显离群点，密集颗粒区邻域参照本身被拉高 →
+    // 检测失效。斜率 40 使 luma 差 ≥0.025 即全替换。N=1 对照同样有细颗粒但不被放大，
+    // 故此加强只在「颗粒被上采样放大」时显著，代价是云的真实高频细节一起被抹（需目视）。
     float lumDiff = lumaOut - lumaMean;
-    if (abs(lumDiff) > 0.02) {
-      outputColor.rgb = mix(outputColor.rgb, meanColor,
-        min(1.0, abs(lumDiff) * 4.0) * u_spatialDespeckle);
+    if (abs(lumDiff) > 0.015) {
+      outputColor.rgb = mix(outputColor.rgb, refSample.rgb,
+        min(1.0, abs(lumDiff) * 12.0) * u_spatialDespeckle);
     }
-    float aDeficit = meanA - outputColor.a;
+    float aDeficit = refSample.a - outputColor.a;
     if (aDeficit > 0.05) {
-      outputColor.a = mix(outputColor.a, meanA,
+      outputColor.a = mix(outputColor.a, refSample.a,
         min(1.0, aDeficit * 4.0) * u_spatialDespeckle);
     }
   }
