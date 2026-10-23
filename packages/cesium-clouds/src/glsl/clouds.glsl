@@ -133,11 +133,10 @@ WeatherSample sampleWeather(const vec2 uv, const vec3 position, const float heig
   // 的顶面高度近恒定 → 近中景顶面仍是平面切片。shape 噪声降频 16× 提供 1-10km 中频
   // 谷脊（mix 0.6-1.0 深谷权重），与 weather 圆丘包络相乘——顶面高度场跨三个频率层级
   // （weather 十 km+ 包络 / shape 中频谷脊 / detail 高频侵蚀），平面切片被彻底打破。
-  // 【v86e 2026-10-23】隐式 LOD → 显式 textureLod：本函数在 march 循环内被逐样本调用，
-  // 相邻像素的循环进度不同 → 隐式导数无定义 → 每个像素的采样 LOD 各不相同 → 密度场
-  // 逐像素跳变（用户真机：贴云底下沿视角「无云区里散满孤立白点」，jitter/α/层内雾化
-  // 三项实验全排除后锁定此处）。与下方 shape 采样 205 行的显式 LOD 同一修法。
-  float puffMid = textureLod(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset, max(mipLevel * 1.5, 1.5)).r;
+  // 【v86e 已回退 2026-10-23】曾把三处隐式 texture() 改 textureLod（理由：march 循环内
+  // 导数无定义）。实测 N=1 帧时 34.7ms→101ms（3D 纹理显式 LOD 在 Metal/ANGLE 上远比
+  // 隐式采样贵），且画质无可见改善 → 全部回退。附：光深缓存已改为按主 march 步数门控。
+  float puffMid = texture(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset).r;
   vec4 puffTop = mix(vec4(0.74), vec4(0.97),
     clamp(localWeather, 0.0, 1.0) * mix(0.6, 1.0, puffMid));
   vec4 puffPlateau = smoothstep(vec4(0.70), vec4(0.85), weather.heightFraction)
@@ -187,7 +186,7 @@ MediaSample sampleMedia(
   // 【v86e 2026-10-23】隐式 LOD → 显式：同 sampleWeather 的 puffMid（循环内导数无定义）。
   turbulence =
     turbulenceDisplacement *
-    (textureLod(turbulenceTexture, turbulenceUv, max(mipLevel * 1.5, 1.5)).rgb * 2.0 - 1.0) *
+    (texture(turbulenceTexture, turbulenceUv).rgb * 2.0 - 1.0) *
     dot(density, remapClamped(weather.heightFraction, vec4(0.3), vec4(0.0)));
   #endif // TURBULENCE
 
@@ -221,8 +220,7 @@ MediaSample sampleMedia(
   #ifdef SHAPE_DETAIL
   if (mipLevel * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
     vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset + u_detailWindOffset;
-    // 【v86e 2026-10-23】隐式 LOD → 显式：同 puffMid/turbulence（循环内导数无定义）。
-    float detail = textureLod(shapeDetailTexture, detailPosition, max(mipLevel * 1.5, 1.5)).r;
+    float detail = texture(shapeDetailTexture, detailPosition).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(
       vec4(pow(detail, 6.0)),

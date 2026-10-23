@@ -600,7 +600,7 @@ vec4 marchClouds(
   // 近处（步长小）自然密、远处（步长大）自然疏，无需额外 LOD 逻辑。
   float cachedSunOpticalDepth = 0.0;
   float cachedSunRayDistance = 0.0;
-  float lastSunODDistance = -1e9;
+  int lastSunODStep = -1000;
 
   float maxRayDistance = rayNearFar.y - rayNearFar.x;
   float stepSize = minStepSize + (perspectiveStepScale - 1.0) * rayNearFar.x;
@@ -798,7 +798,11 @@ vec4 marchClouds(
         // 【v86n 已回退 2026-10-23】曾试 800m 间隔：用户实测 N=4 43→45fps、N=2 23→25fps
         // （收益仅 +2fps）却让 N=2 出现轻微白色扇形 → 不划算，回退 200m。
         // 附带结论：光深调度不是瓶颈（关掉全部光深 march 也只有 25fps@N=1），主 march 才是。
-        if (rayDistance - lastSunODDistance >= 200.0 || lastSunODDistance < -1e8) {
+        // 【2026-10-23 按主 march 步数门控 + 8 步间隔】原 200m 距离门控在层内机位失效：
+        // 层内主 march 步长本身 100-300m，每步都跨过 200m → 缓存等于没生效 → 每步跑 8 次
+        // 光深采样（main 每步 2 次）→ N=1 实测 101ms vs main 34.7ms。改按主 march 步数
+        // 门控、每 8 步重算一次：成本 8/8=1 次/步 < main 的 2 次/步，且不随机位漂移。
+        if (i - lastSunODStep >= 8 || lastSunODStep < -999) {
           cachedSunRayDistance = 0.0;
           cachedSunOpticalDepth = marchOpticalDepth(
             position,
@@ -821,7 +825,7 @@ vec4 marchClouds(
               marchJitter
             );
           }
-          lastSunODDistance = rayDistance;
+          lastSunODStep = i;
         }
         opticalDepth = cachedSunOpticalDepth;
         sunRayDistance = cachedSunRayDistance;
