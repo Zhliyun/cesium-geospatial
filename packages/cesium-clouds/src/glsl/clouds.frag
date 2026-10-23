@@ -764,7 +764,7 @@ vec4 marchClouds(
       float opticalDepth = 0.0;
       if (any(notEqual(sunIrradiance, vec3(0.0)))) {
         // 【2026-10-23 移植】200m 距离门控重算（见函数开头缓存变量注释）。首次必算。
-        if (i - lastSunODStep >= 8 || lastSunODStep < -999) {
+        if (i - lastSunODStep >= 1 || lastSunODStep < -999) {
           cachedSunRayDistance = 0.0;
           cachedSunOpticalDepth = marchOpticalDepth(
             position,
