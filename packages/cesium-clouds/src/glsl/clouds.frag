@@ -795,6 +795,19 @@ vec4 marchClouds(
 
       g_probeOD = opticalDepth;
       vec3 radiance = sunIrradiance * approximateMultipleScattering(opticalDepth, cosTheta);
+      // 【2026-10-23 层外黑块】radiance 原式只含太阳直射的多次散射近似——6 个 octave 的
+      // exp(-OD·0.5^k) 在厚云（OD 大）时全部趋零 → radiance≈0，而 alpha 仍高 → 成片黑云。
+      // main 缺省 toSun=2 光深欠估（OD 小）所以不暴露；本分支 toSun=4 让光深更真实后
+      // 暴露（用户 5060m 机位；cloudsDebug=12 显示黑块区 G/B 双零=零受照亮度）。
+      // 物理依据：真实云底有天空漫射 + 地面反照，不会是纯黑。这里补一个与环境光同源、
+      // 与层内 fogExitFloor 同量级的地板（RECIPROCAL_PI4 · skyLightScale · 0.02），
+      // max 语义下只在 radiance 更暗时托底，正常受光云零影响。
+      // 量级标定：0.02 会把层内浓雾冲淡（白化），降到 0.006 且乘 (1−inLayerCam) 只补层外
+      //（层内已有 fogExitFloor 托底）。
+      radiance = max(
+        radiance,
+        skyIrradiance * (RECIPROCAL_PI4 * skyLightScale * 0.006) * (1.0 - inLayerCam)
+      );
 
       // 月光散射项（spec §6.1）：独立构造 moonIrradiance（非 sun 项乘系数——夜间 LUT 太阳
       // 项已归零）；朝月独立 march 光深（复用太阳方向会杀死「云顶被月光照亮」主视觉——

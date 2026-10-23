@@ -339,6 +339,8 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 用户显式 ?cloudsToSunIter= 优先。
     maxIterationCountToSun: 4,
     maxIterationCountToGround: 3,
+    // 【2026-10-23】保持 100：曾试 50（配 toSun=4 让覆盖 375→187m）压黑块，但实测层内
+    // 云整体变亮/变平（光深变小）→ 回退。黑块改由 clouds.frag 的环境光地板（层外）解决。
     minSecondaryStepSize: 100,
     secondaryStepScale: 2,
 
