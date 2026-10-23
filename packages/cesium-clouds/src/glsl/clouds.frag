@@ -246,10 +246,16 @@ float readShadowOpticalDepth(
   // Also see the discussion here: https://x.com/shotamatsuda/status/1885322308908442106
   vec4 shadow = texture(shadowBuffer, vec3(uv, float(cascadeIndex)));
   float distanceToFront = max(0.0, distanceToTop - distanceOffset - shadow.r);
-  // 【2026-10-23 尝试已回退】曾改用「总光深(b+a) × 距离比例」替代「meanExt × 距离」以修
-  // BSM 在低密度灰雾下的低估：光深量级对了，但云边缘（fullDist 很小、ratio 跳变）出现
-  // 密集黑点（远端实测截图）→ 回退。BSM 低估问题保留为已知项。
-  return min(shadow.b + shadow.a, shadow.g * distanceToFront);
+  // 【2026-10-23 薄云处自阴影过估修复】用户俯视机位云块边缘出现深色/黑区，?cloudsShadow=0
+  // 后消失 → BSM 自阴影过估。机制：云边缘的 texel 平均消光 meanExt（shadow.g）很小，但
+  // distanceToFront 很大 → `meanExt × distance` 这一项在薄云/边缘处被距离放大；同时
+  // shadow.b+shadow.a（maxOpticalDepth，低分辨率级联里被邻近浓云抬高的上限）又很高 →
+  // min() 取到过大的光深 → 该像素被压黑。厚云区 meanExt 大、两项自洽，问题不显现。
+  // 修：按 meanExt 做薄云门控 —— 消光低于阈值的 texel 视为「阴影不可靠」，线性淡出其
+  // 自阴影贡献；厚云的 meanExt 远高于阈值，权重保持 1，立体感不受影响。
+  // 阈值量级参考 extinction 的物理量级（minExtinction=1e-5，浓云可达 1e-2 以上）。
+  float thinFade = smoothstep(0.0, 0.2, shadow.g);
+  return min(shadow.b + shadow.a, shadow.g * distanceToFront) * thinFade;
 }
 
 float sampleShadowOpticalDepthPCF(
