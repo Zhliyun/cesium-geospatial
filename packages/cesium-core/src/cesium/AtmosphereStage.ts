@@ -120,6 +120,12 @@ export interface AtmosphereStageOptions extends AerialPerspectiveFragOptions {
   distanceScale?: number // 散射距离缩放（方案 A，1.0=phase1 物理，>1 中近距散射强，建议 1.0-3.0，超 3 需评估 half-float 灾消）
   inscatterScale?: number // inscatter 放大（方案 B 远处白雾浓，1.0=phase1 物理，>1 远处雾浓，直接 ×inscatter 可超物理饱和）
   ditherScale?: number // input+display dithering 强度倍率（1.0=phase1 默认；>1 更强打散 inscatterScale 放大 ACES 输入暴露的 banding，但噪声增）
+  // 【2026-10-24 移植 AGX】色调映射模式：1=AGX（对齐参考库）/ 0=ACES Filmic（旧行为）。
+  // URL ?toneMap=aces|agx。参考库 three-geospatial/navara storybook 用 AGX。
+  toneMapMode?: number
+  // AGX 曝光（仅 toneMapMode=1 生效）。本项目曝光已由 atmosphere stage 的 exposure 施加，
+  // 故缺省 1.0；参考库 storybook 的 exposure=10 是其场景辐射量级对应的值，不可直接照搬。
+  agxExposure?: number
   // limb outer glow（太空视角大气边缘向外扩散辉光）：消除 Bruneton GetSkyRadiance 在 topR 硬切的 limb 圆弧。
   // limbGlowIntensity 默认 0.3（?limbGlow=N 调强度，0=关）；limbGlowDecayKm 默认 30（?limbDecay=N 调扩散范围 km）。
   limbGlowIntensity?: number
@@ -217,6 +223,9 @@ export interface ResolvedAtmosphereStageOptions
   distanceScale: number
   inscatterScale: number
   ditherScale: number
+  // 【2026-10-24 移植 AGX】色调映射模式与 AGX 曝光（toneMapMode: 1=AGX / 0=ACES）
+  toneMapMode: number
+  agxExposure: number
   // limb outer glow resolved（太空视角大气边缘扩散辉光）
   limbGlowIntensity: number
   limbGlowDecayKm: number
@@ -342,6 +351,10 @@ export function validateAtmosphereOptions(
     distanceScale: options.distanceScale ?? 1.0, // 默认 1.0 = phase1 行为零回归
     inscatterScale: options.inscatterScale ?? 8.0, // 2026-09-02 用户定稿 25→8（近景海景视角实测）；URL ?inscatterScale=1 回退 phase1 物理量级、=25 回退旧默认
     ditherScale: options.ditherScale ?? 1.0, // 默认 1.0 = phase1 dithering ±1.5/255 零回归
+    // 【2026-10-24 移植 AGX】缺省 AGX（对齐参考库）；toneMapMode=0 回退 ACES Filmic。
+    // agxExposure 缺省 1.0——本项目 exposure 已在 atmosphere stage 施过，AGX 段不再二次放大。
+    toneMapMode: options.toneMapMode ?? 1,
+    agxExposure: options.agxExposure ?? 1.0,
     // limb outer glow 默认（太空视角大气边缘扩散辉光）：intensity 1.0 线性域（独立加 finalColor，不 ×inscatterScale）、decay 30km 扩散范围，URL ?limbGlow/?limbDecay 调
     limbGlowIntensity: options.limbGlowIntensity ?? 1.0,
     limbGlowDecayKm: options.limbGlowDecayKm ?? 30.0,
@@ -669,7 +682,14 @@ export function createAtmosphereStage(
     return new PostProcessStage({
       name: 'tonemap', // 语义名：demo ?profile=1 计时输出键用
       fragmentShader: buildTonemapFragmentShader(),
-      uniforms: { u_debugMode: resolved.debugMode, u_ditherScale: resolved.ditherScale }, // 与 atmosphere 同源；setMode rebuild 同步
+      // 【2026-10-24】u_agxExposure/u_toneMapMode：AGX 色调映射（对齐参考库 three-geospatial
+      // storybook 的 ToneMappingMode.AGX；exposure 由本项目 atmosphere stage 施加故 AGX 侧 1.0）。
+      uniforms: {
+        u_debugMode: resolved.debugMode,
+        u_ditherScale: resolved.ditherScale,
+        u_agxExposure: resolved.agxExposure,
+        u_toneMapMode: resolved.toneMapMode
+      }, // 与 atmosphere 同源；setMode rebuild 同步
       sampleMode: PostProcessStageSampleMode.NEAREST // 显式钉死（防上游默认变更；保护 input dithering 经 RT 中转）
     })
   }

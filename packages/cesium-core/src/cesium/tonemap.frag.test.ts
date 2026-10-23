@@ -63,8 +63,13 @@ describe('buildTonemapFragmentShader（链尾 ToneMapping stage）', () => {
 })
 
 describe('TONEMAP_UNIFORM_NAMES', () => {
-  it('u_debugMode + u_ditherScale（colorTexture 是 Cesium 内建白名单）', () => {
-    expect(TONEMAP_UNIFORM_NAMES).toEqual(['u_debugMode', 'u_ditherScale'])
+  it('u_debugMode + u_ditherScale + u_agxExposure + u_toneMapMode（colorTexture 是 Cesium 内建白名单）', () => {
+    expect(TONEMAP_UNIFORM_NAMES).toEqual([
+      'u_debugMode',
+      'u_ditherScale',
+      'u_agxExposure',
+      'u_toneMapMode'
+    ])
   })
 
   it('TONEMAP_UNIFORM_NAMES 与 shader 声明的 uniform 一致（colorTexture 白名单）', () => {

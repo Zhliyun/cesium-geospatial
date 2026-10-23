@@ -368,6 +368,10 @@ async function main(): Promise<void> {
       ...(getNumber('inscatterScale') != null ? { inscatterScale: getNumber('inscatterScale')! } : {}),
       // dithering 强度倍率：默认 1.0=phase1；?ditherScale=N 放大 input+display dithering 打散 inscatterScale 放大 ACES 输入暴露的弧线波纹
       ...(getNumber('ditherScale') != null ? { ditherScale: getNumber('ditherScale')! } : {}),
+      // 【2026-10-24 移植 AGX】色调映射：缺省 AGX（对齐参考库）；?toneMap=aces 回 ACES Filmic 做 A/B。
+      // ?agxExposure=N 标定 AGX 曝光（缺省 1.0，本项目 exposure 已在 atmosphere 施加）。
+      ...(getString('toneMap') === 'aces' ? { toneMapMode: 0 } : {}),
+      ...(getNumber('agxExposure') != null ? { agxExposure: getNumber('agxExposure')! } : {}),
       // limb outer glow（太空视角大气边缘向外扩散辉光）：默认 intensity=0.3 / decay=30km；
       // ?limbGlow=N 调强度（0=关），?limbDecay=N 调扩散范围 km。验收视角：camera=93.9439,31.6997,61883,89.2,-19.0
       ...(getNumber('limbGlow') != null ? { limbGlowIntensity: getNumber('limbGlow')! } : {}),

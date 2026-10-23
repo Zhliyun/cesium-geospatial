@@ -301,6 +301,9 @@ describe('validateAtmosphereOptions', () => {
       distanceScale: 1.0,
       inscatterScale: 8.0, // 2026-09-02 用户定稿 25→8
       ditherScale: 1.0,
+      // 【2026-10-24 移植 AGX】缺省 AGX（对齐参考库），agxExposure 1.0（本项目 exposure 已在 atmosphere 施加）
+      toneMapMode: 1,
+      agxExposure: 1.0,
       // limb outer glow（太空视角大气边缘扩散辉光）：默认 intensity 1.0（线性域独立加 finalColor）/ decay 30km
       limbGlowIntensity: 1.0,
       limbGlowDecayKm: 30.0,
