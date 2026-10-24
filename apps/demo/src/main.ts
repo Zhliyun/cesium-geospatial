@@ -609,6 +609,7 @@ async function main(): Promise<void> {
           // 【2026-10-08 白点排查】?cloudsFrameUnfreeze=1 静止帧 frame 解冻（STBN 相位
           // 轮换+resolve 多帧平均——march 采样方差白点的时序抑制判别实验）
           ...(getString('cloudsFrameUnfreeze') === '1' ? { frameUnfreeze: true } : {}),
+          ...(getString('cloudsFrameUnfreeze') === '0' ? { frameUnfreeze: false } : {}),
           // 【2026-10-08 白点治理】?cloudsDespeckle=1 resolve 输出端孤点中值滤波（清时序
           // 平均后的残余稳态白点；0=关缺省零回归）
           ...(getNumber('cloudsDespeckle') != null

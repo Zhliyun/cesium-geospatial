@@ -14,7 +14,9 @@ float getSTBN(const float mipLevel) {
   // 可平均的对象 → 这就是「砂纸颗粒」的真正来源（参考库同 shader 无此分域，所以几乎
   // 看不到颗粒）。mipLevel 参数保留（调用点不动），但不再参与相位选择。
   // 代价：冻结帧下若 frame 不推进，相位仍不变——故 marchFrame 需随帧推进（缺省开启）。
-  float layer = float(frame % size.z);
+  // 阈值 -1（缺省）= 全部 mip 轮换（参考库语义）；0 = 仅 mip>0 轮换（2026-10-08 旧行为，
+  // 近云相位冻结 = 颗粒被烤进画面），供 A/B 与回退。
+  float layer = mipLevel > u_unfreezeMipThreshold ? float(frame % size.z) : 0.0;
   return texture(stbnTexture, vec3(gl_FragCoord.xy, layer) * scale).r;
 }
 
