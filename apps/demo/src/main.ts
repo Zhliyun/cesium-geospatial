@@ -714,6 +714,7 @@ async function main(): Promise<void> {
             || getNumber('temporalAlpha') != null || getNumber('temporalGamma') != null
             || getNumber('cloudsDisocclusion') != null || getNumber('cloudsMotionAlpha') != null
             || getNumber('cloudsInLayerFog') != null || getNumber('cloudsTopPuff') != null
+            || getNumber('cloudsJitterZero') != null
             ? {
                 parameters: {
                   // 【2026-09-05 P1 光柱 march 步长】?cloudsShaftStep=<米>（缺省 100；
@@ -759,6 +760,10 @@ async function main(): Promise<void> {
                   // 1692 蓝板单点平刷；缺省 1 开，0=逐位回退（排查对照用）
                   ...(getNumber('cloudsInLayerFog') != null
                     ? { inLayerFog: getNumber('cloudsInLayerFog')! }
+                    : {}),
+                  // 【2026-10-24】短段/层内薄段 jitter 归零（1=旧确定性处置，回归黑块/闪屏用）
+                  ...(getNumber('cloudsJitterZero') != null
+                    ? { jitterZeroing: getNumber('cloudsJitterZero')! }
                     : {}),
                   // ?cloudsTopPuff= 顶面蓬松化权重（2026-09-29 密度分布专项）：0=关（逐位
                   // 回退，排查对照）；1=恢复缺省 (1,1,0,0)（L0/L1 开、L2 卷云关）

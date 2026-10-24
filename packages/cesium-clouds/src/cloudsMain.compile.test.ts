@@ -606,9 +606,11 @@ describe('穿云黑块修复：depth 采样 jitter 仅 LOW_RES_MARCH（upscaleDi
 // 归零（对齐 temporal=0 的稳定采样行为，A/B 实证 0 黑帧）。
 // ─────────────────────────────────────────────────────────────────────────────
 describe('穿云黑块修复 II：march 起点 jitter 段长守卫', () => {
-  it('段长守卫在场：rayDistance 起点 jitter 经 startJitter 守卫（<8 步薄段归零）', () => {
+  it('段长守卫在场且可选：startJitter 经 u_jitterZeroing 门控（缺省 0=关=参考库语义）', () => {
     const src = buildCloudsMainFragmentShader(M2_OPTIONS)
-    expect(src).toContain('float startJitter = maxRayDistance < stepSize * 8.0 ? 0.0 : jitter;')
+    // 【2026-10-24 观感对齐】归零改为 u_jitterZeroing 门控，缺省 0 = 参考库「任何情况都用 jitter」
+    expect(src).toContain('* u_jitterZeroing')
+    expect(src).toContain('float startJitter = mix(jitter, 0.0, shortSegment);')
     expect(src).toContain('float rayDistance = stepSize * startJitter * 2.0;')
   })
 

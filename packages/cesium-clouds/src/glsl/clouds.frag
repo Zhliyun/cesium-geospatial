@@ -93,6 +93,8 @@ uniform float u_twilightSkyBoost;
 // 去饱和提亮（治深部蓝 ambient）+ 出口 alpha 软化（浓雾透底=雾感非墙感）。
 // 0=整路径逐位回退（门控 uniform 全屏一致，mix 恒等）。?cloudsInLayerFog= 即调。
 uniform float u_inLayerFog;
+// 【2026-10-24 观感对齐】短段/层内薄段的 jitter 归零开关（0=关=参考库语义；1=旧确定性处置）
+uniform float u_jitterZeroing;
 
 // 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
 // （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/
@@ -597,9 +599,12 @@ vec4 marchClouds(
   // 门与采样相位 → veil alpha 二值跳变 → 拖拽视角全屏闪动（白板↔见地逐帧翻转，同机位
   // 冻结时间下密度场静止、物理上不该变——真机连拍实证）。短段本无空间抖动收益
   // （采样数不足以铺开噪声），确定性优先。
-  float shortSegment = maxRayDistance < stepSize * 8.0 ? 1.0 : 0.0;
+  // 【2026-10-24 观感对齐】归零改为可选（u_jitterZeroing，缺省 0=关=参考库语义：
+  // 参考库任何情况都用 jitter）。开（=1）退回 2026-09-03/09-28 的确定性化处置，
+  // 用于黑块/层内闪屏复发的逃生门。
+  float shortSegment = (maxRayDistance < stepSize * 8.0 ? 1.0 : 0.0) * u_jitterZeroing;
   float marchJitter = mix(jitter, 0.0, shortSegment);
-  float startJitter = maxRayDistance < stepSize * 8.0 ? 0.0 : jitter;
+  float startJitter = mix(jitter, 0.0, shortSegment);
   // 【2026-09-28 层内雾化（方案 A，用户拍板）】门控=相机在层带内（带外逐位不受影响——
   // 1450 层下 / 2500+ 层上 / 太空全部 inLayerCam=0 走原路径）。1692 蓝板/1536 白板两例
   // 排查实证：层内相机段被 minStepSize=50m 地板钉死步长 + 首样本 ext≥0.1/m 即
@@ -667,8 +672,8 @@ vec4 marchClouds(
   // 非密度场纹理）。归零只保留给短段（f49589b 闪屏域=veil alpha 二值跳变的薄段）；
   // 长段恢复蓝噪声相位打碎驻波（静止帧 STBN 层冻结=M4 temporal 静止不递增 → 噪点固定
   // 不闪；运动帧 TAA 平滑）。
-  marchJitter = mix(marchJitter, 0.0, inLayerCam * thinSegment);
-  startJitter = mix(startJitter, 0.0, inLayerCam * thinSegment);
+  marchJitter = mix(marchJitter, 0.0, inLayerCam * thinSegment * u_jitterZeroing);
+  startJitter = mix(startJitter, 0.0, inLayerCam * thinSegment * u_jitterZeroing);
   float rayDistance = stepSize * startJitter * 2.0;
   // 【云内步长恢复 2026-09-29 五轮】空隙/无云分支的 stepSize×=perspectiveStepScale 是
   // 单向指数放大且从不恢复——跨层相机（7618 在卷云带，俯视跨空隙进 L1）的步长到达云顶

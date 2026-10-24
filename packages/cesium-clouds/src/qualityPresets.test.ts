@@ -54,8 +54,7 @@ describe('cloudsQualityPresets 档位表（spec §3 逐字对齐）', () => {
     expect(p.params).toMatchObject({ minStepSize: 10, shadowCascadeCount: 3 })
     expect(p.shadow).toEqual({ ...cloudsQualityPresets.high.shadow, mapSize: 1024 })
     expect(p.main).toEqual(cloudsQualityPresets.high.main)
-    expect(p.upscaleDivisor).toBe(2)
-    // 【2026-10-24 与参考库对齐】high 由 2 改 4（参考库固定 1/4 分辨率）
+    expect(p.upscaleDivisor).toBe(4) // 【2026-10-24 观感对齐】ultra 也改 4
     expect(cloudsQualityPresets.high.upscaleDivisor).toBe(4)
   })
 })
@@ -88,7 +87,7 @@ describe('applyQualityPreset 合并语义（spec §5）', () => {
     expect(r.shadow).toEqual({ cascadeCount: 3, mapSize: 512 })
   })
   it('upscaleDivisor 合并：high/ultra 档默认 2/4；用户显式 > 档位；其余档 = 1（2026-09-02 定稿全分 TAA）', () => {
-    expect(applyQualityPreset('ultra', {}).upscaleDivisor).toBe(2)
+    expect(applyQualityPreset('ultra', {}).upscaleDivisor).toBe(4)
     expect(applyQualityPreset('high', {}).upscaleDivisor).toBe(4)
     expect(applyQualityPreset('ultra', { upscaleDivisor: 4 }).upscaleDivisor).toBe(4) // 用户显式优先
     expect(applyQualityPreset('high', { upscaleDivisor: 2 }).upscaleDivisor).toBe(2)

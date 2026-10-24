@@ -96,6 +96,9 @@ export interface CloudsParameters {
    * 拆分版行为）。demo `?cloudsUnfreezeMip=`。
    */
   unfreezeMipThreshold?: number
+  /** 【2026-10-24】短段/层内薄段 jitter 归零开关：0=关（参考库语义，缺省）/1=旧确定性处置
+   * （治贴甲底黑块与层内闪屏）。demo `?cloudsJitterZero=1`。 */
+  jitterZeroing?: number
   /**
    * 【2026-10-09 颗粒带优化】weather 采样 mip 偏置（密度场低通预滤波，0=关缺省零回归）。
    * 上游对照实锤云缘颗粒带为固有观感但我们的更强——密度场高频是光照放大的输入，
@@ -450,7 +453,10 @@ export function defaultCloudsParameters(): CloudsParameters {
     // 2026-09-02 黑块修复新增，three 无此项）
     temporalVarianceGamma: 2.0,
     temporalAlpha: 0.1,
-    temporalDisocclusion: 0.5,
+    // 【2026-10-24 观感对齐】0.5 → 1.01：|Δa|>1.01 永不成立 = 关闭 rejection。
+  // 参考库 resolve 只有 prevUv 越界 rejection，没有这条；它让云缘（α 在 0↔1 摆动）
+  // 每帧直出原始噪声、完全失去时域累积 = 「云缘颗粒带」。?cloudsDisocclusion=0.5 可回退。
+  temporalDisocclusion: 1.01,
     motionAlpha: 0.4
   }
 }

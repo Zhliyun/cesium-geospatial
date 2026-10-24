@@ -62,6 +62,10 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
       shadowCascadeCount: 2
     },
     shadow: { cascadeCount: 2, mapSize: 256, march: { ...HIGH_MARCH, maxIterationCount: 25, minDensity: 1e-4, minExtinction: 1e-4, minTransmittance: 1e-2 } },
+    // 【2026-10-24 观感对齐】参考库 temporalUpscale 恒 true（CloudsMaterial.ts:138，
+    // 四档无一改动），即全档 1/4 分辨率 march + 16 相位。此处对齐（原来不设→回落 1，
+    // 比参考库贵 16 倍 march 像素且画质更差）。
+    upscaleDivisor: 4,
     groundShadowSamples: 4
   },
   // medium：仅 shapeDetail 开；阈值放宽；次 march 2/1；BSM 3 级联 256
@@ -70,6 +74,7 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
     main: { lightShafts: false, shapeDetail: true, turbulence: false, accurateSunSkyLight: false },
     params: { minDensity: 1e-4, minExtinction: 1e-4, maxIterationCountToGround: 1, shadowCascadeCount: 3 },
     shadow: { cascadeCount: 3, mapSize: 256, march: { ...HIGH_MARCH, minDensity: 1e-4, minExtinction: 1e-4 } },
+    upscaleDivisor: 4, // 【2026-10-24 观感对齐】同 low
     groundShadowSamples: 8
   },
   // high = defaults（零回归基线；params 仅投影 shadowCascadeCount）
@@ -93,7 +98,8 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
     main: { ...HIGH_MAIN },
     params: { minStepSize: 10, shadowCascadeCount: 3 },
     shadow: { cascadeCount: 3, mapSize: 1024, march: { ...HIGH_MARCH } },
-    upscaleDivisor: 2,
+    // 【2026-10-24 观感对齐】2 → 4：原来 ultra 分辨率反而低于 high（语义倒挂）
+    upscaleDivisor: 4,
     groundShadowSamples: 16
   }
 }
@@ -166,7 +172,7 @@ export function applyQualityPreset(quality: CloudsQualityPreset, options: Clouds
 
   // upscaleDivisor：用户显式 > 档位 > 缺省 1（2026-09-02 用户定稿全分 TAA 档为默认；
   // T1 合并时缺省 4=three 原文零回归，ultra 档显式 2 沿用）
-  const upscaleDivisor: 1 | 2 | 4 = options.upscaleDivisor ?? preset.upscaleDivisor ?? 1
+  const upscaleDivisor: 1 | 2 | 4 = options.upscaleDivisor ?? preset.upscaleDivisor ?? 4
 
   return { main, params, shadow: { cascadeCount: n, mapSize: preset.shadow.mapSize }, groundShadowSamples: preset.groundShadowSamples, upscaleDivisor }
 }

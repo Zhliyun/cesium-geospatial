@@ -104,10 +104,10 @@ const DEFAULTS: ResolvedCloudsMainOptions = {
   debugShow: null,
   lightShafts: true,
   shadowCascadeCount: 3,
-  // 【2026-10-23】缺省降分 1 → 2：用户验收结论「最低能接受 N=2」（N=4 颗粒/形态不可接受）。
-  // 远端实测（RTX 5060 Ti / 1920x1080）：N=2 俯视 59fps、层内 42fps；N=1 层内仅 16fps。
-  // N=2 相比 N=1 主 march 像素数减半，画质保留 mip 分级重建。
-  upscaleDivisor: 2
+  // 【2026-10-24 观感对齐】2 → 4：参考库 temporalUpscale 恒 true（1/4 分辨率 + 16 相位），
+  // 且 N=4 实测比 N=2 颗粒低 36%、帧时更低（march 像素 1/16）。2026-10-23「最低接受
+  // N=2」的依据（despeckle 缺省 1 下的 12px 模糊 + STBN 相位冻结）均已失效。
+  upscaleDivisor: 4
 }
 
 // Bruneton 大气 LUT 纹理尺寸 + 单位换算 + 多阶散射开关——clouds.frag 经 #include
@@ -139,7 +139,9 @@ const CLOUDS_MAIN_DEFINES = [
   // M3 cascade 数 4→3 对齐 CascadedShadowMaps；cascade define 移至 buildM2Defines 按参数生成
   // （shadowCascadeCount，spec §6——low 档 2 级联）。
   '#define SHADOW_SAMPLE_COUNT 16',
-  '#define MULTI_SCATTERING_OCTAVES 6',
+  // 【2026-10-24 观感对齐】6 → 8（参考库 qualityPresets.ts:15）；第 7/8 阶贡献
+  // ≈2.3%，影响 ≤0.03 stop，但无成本且消掉一处结构性差异。
+  '#define MULTI_SCATTERING_OCTAVES 8',
   '#define LOCAL_WEATHER_CHANNELS rgba',
   '#define DEPTH_PACKING 0',
   // M3 决策 D4：powder 效果（clouds.frag L581 面向光源边缘变暗）。three CloudsMaterial 在

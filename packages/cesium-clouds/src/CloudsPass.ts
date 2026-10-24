@@ -609,6 +609,7 @@ export function createCloudsPass(
     u_twilightSkyBoost: () => params.twilightSkyBoost,
     // 层内雾化总开关（2026-09-28 方案 A；?cloudsInLayerFog= URL 调，0=逐位回退）
     u_inLayerFog: () => params.inLayerFog,
+    u_jitterZeroing: () => params.jitterZeroing ?? 0,
 
     // depth（M6 提前接通，2026-08-14）：真实 globe depthTexture（log-depth 编码，shader 内
     // czm_reverseLogDepthWindow 反演）→ 云被地形正确截断/遮挡（青藏「云浮地形上」修）。
