@@ -426,19 +426,55 @@ function createPngFallbackAtlas(
 ): WeatherAtlas {
   const ctx = context as CesiumContext
   const gl = (ctx as unknown as { _gl: WebGL2RenderingContext })._gl
-  const atlasTexture = new Texture3D({
-    context: ctx,
-    source: {
+  // 【2026-10-25 对齐参考库】PNG 路径加 mip 链：带 source 的构造走 texStorage3D(levels=1)
+  // immutable，generateMipmap 会 INVALID_OPERATION；改无 source 构造（可变存储）+ 裸 GL
+  // 上传 + generateMipmap（与 weatherTextures.createMippedTexture3D 同法）。
+  // 无 mip 时 textureLod 被 clamp 到 LOD0 → 远云天气场欠采样（噪点/闪烁）。
+  const texData = tilePngLayers(png, ATLAS_SLICES)
+  const mippedSampler = new Sampler({
+    wrapS: TextureWrap.REPEAT,
+    wrapT: TextureWrap.REPEAT,
+    wrapR: TextureWrap.REPEAT,
+    minificationFilter: TextureMinificationFilter.LINEAR_MIPMAP_LINEAR,
+    magnificationFilter: TextureMagnificationFilter.LINEAR
+  })
+  let atlasTexture: Texture3D
+  if (gl != null) {
+    atlasTexture = new Texture3D({
+      context: ctx,
       width: png.width,
       height: png.height,
       depth: ATLAS_SLICES,
-      arrayBufferView: tilePngLayers(png, ATLAS_SLICES)
-    },
-    pixelFormat: PixelFormat.RGBA,
-    pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-    sampler: linearSampler(),
-    flipY: false // flipY=true 时 Texture3D.loadBufferSource console.warn 且不受支持
-  })
+      pixelFormat: PixelFormat.RGBA,
+      pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+      sampler: mippedSampler,
+      flipY: false
+    } as unknown as ConstructorParameters<typeof Texture3D>[0])
+    const rawTex = (atlasTexture as unknown as { _texture: WebGLTexture })._texture
+    const prevBinding = gl.getParameter(gl.TEXTURE_BINDING_3D) as WebGLTexture | null
+    gl.bindTexture(gl.TEXTURE_3D, rawTex)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    gl.texSubImage3D(
+      gl.TEXTURE_3D, 0, 0, 0, 0, png.width, png.height, ATLAS_SLICES,
+      gl.RGBA, gl.UNSIGNED_BYTE, texData
+    )
+    gl.generateMipmap(gl.TEXTURE_3D)
+    gl.bindTexture(gl.TEXTURE_3D, prevBinding)
+  } else {
+    atlasTexture = new Texture3D({
+      context: ctx,
+      source: {
+        width: png.width,
+        height: png.height,
+        depth: ATLAS_SLICES,
+        arrayBufferView: texData
+      },
+      pixelFormat: PixelFormat.RGBA,
+      pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+      sampler: mippedSampler,
+      flipY: false
+    })
+  }
   let destroyed = false
   return {
     atlasTexture,

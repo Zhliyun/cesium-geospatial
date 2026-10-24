@@ -334,6 +334,10 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * 逃生两用）。raw 缺失（PNG decode 失败）时退化为 warn + 1×1×1 全白 dummy（连续云墙降级）。
    */
   atlasDisabled?: boolean
+  /** 【2026-10-25】天气场烘焙开关。缺省 false = 直接用 local_weather.png（参考库语义）；
+   *  true = 用 weatherBake.frag 合成演化天气场（本项目扩展，云形态与参考库不同）。
+   *  demo `?cloudsAtlas=1`。 */
+  atlasBake?: boolean
   /**
    * T6 调试钩子（spec §4.1 演化验收解耦）：秒级偏移演化相位与平流输入
    * （atlasT = f(tSec + phase)、windOffset = g(tSec + phase)），不动太阳/天光——验收时
@@ -865,6 +869,8 @@ function buildCloudsStageImpl(
     let prevJitter: Cartesian2 | undefined
     // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
     let prevCameraPos: Cartesian3 | undefined
+    // 【2026-10-25】静止后已推进的相位帧数（达到 MARCH_WARMUP_FRAMES 即冻结）
+    let stillFrames = 0
     // 运动自适应 α（T2，2026-09-02）：上帧 look 方向（旋转分量）+ 当前 α 状态（lerp 平滑）
     let prevDirWC: Cartesian3 | undefined
     let motionAlphaCurrent: number | undefined
@@ -892,10 +898,19 @@ function buildCloudsStageImpl(
         //   逐帧噪声图案去相关 → resolve 混合=多帧平均，白点=march 能量积分采样方差的
         //   时序抑制）。未开启时与 frame 同步递增（行为与旧版逐位一致）。
         if (params.marchFrame == null) params.marchFrame = params.frame
-        // 【2026-10-24 缺省解冻】STBN 每帧换层后必须让 marchFrame 跟着走，否则静止时
-        // 相位仍固定 = 颗粒照样烤进画面（参考库 march 的 frame 也每帧推进）。
-        // ?cloudsFrameUnfreeze=0 可关回冻结档。
-        if (options.frameUnfreeze !== false || !still) {
+        // 【2026-10-25 先收敛、再冻结】静止时相位轮换的作用是让 16 个 Bayer 相位都进入
+        // 历史平均（消颗粒）；但纯累积（resolve 直出 clippedColor）收敛后若继续轮换，
+        // 每帧的 AABB 随当前帧相位变化 → 历史被反复裁剪 → 用户看到的「整体快速抖动」。
+        // 处置：静止后先推进 MARCH_WARMUP_FRAMES 帧完成收敛（16 相位 ×2 轮），之后冻结
+        // 相位——纯累积模式下历史不会再被 current 拉走，冻结即「保持收敛后的平均值」，
+        // 颗粒与抖动同时消掉。相机一动即恢复轮换。
+        // 关掉解冻（?cloudsFrameUnfreeze=0）= 一直冻结（旧确定性档）。
+        if (!still) {
+          stillFrames = 0
+        } else if (stillFrames < MARCH_WARMUP_FRAMES) {
+          stillFrames++
+        }
+        if (options.frameUnfreeze !== false && (!still || stillFrames < MARCH_WARMUP_FRAMES)) {
           params.marchFrame++
         }
         if (!still) {
@@ -1241,6 +1256,9 @@ function buildCloudsStageImpl(
  * @param options clouds 开关 + CloudsPassOptions 透传 + quality 档位。
  * @returns handle；options.clouds=false 时返 undefined（零回归，demo 可无条件调用）。
  */
+/** 【2026-10-25】静止后推进相位的帧数：16 相位 ×2 轮 */
+const MARCH_WARMUP_FRAMES = 32
+
 export function createCloudsStage(
   scene: Scene,
   luts: AtmosphereLUTs,
