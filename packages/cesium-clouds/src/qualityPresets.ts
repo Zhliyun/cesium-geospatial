@@ -77,15 +77,10 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
     main: { ...HIGH_MAIN },
     params: { shadowCascadeCount: 3 },
     shadow: { cascadeCount: 3, mapSize: 512, march: { ...HIGH_MARCH } },
-    // 【2026-10-24 与参考库对齐】high（demo 缺省档）n=2 → n=4：参考库 three-geospatial /
-    // navara 的云固定 1/4 分辨率 march + 4×4 Bayer 16 相位时域超采样，本档此前因
-    // N=4 的方块/白点/颗粒被降级到 N=2。那三个伪影的根因已在 2026-10-13~24 修掉：
-    // 方块=低分域 3×3 高斯低通、白点=despeckle（含今日的坐标域修复）、颗粒=窗口 3×3。
-    // 同机位实测（1920x1080，coverage 0.45，AGX，despeckle=1）静止颗粒：
-    //   N=1 13.51 / N=2 11.92 / N=4 7.63  → N=4 比 N=2 低 36%
-    // 帧时（同批顺序测量）：N=1 18.98ms / N=2 10.32ms / N=4 8.71ms → N=4 也更快。
-    // 回退：?cloudsUpscale=2。
-    upscaleDivisor: 4,
+    // 【2026-10-24】N=4 曾短暂设为缺省（对齐参考库 1/4 分辨率），用户目验否决
+    //（「效果很差」），回退 N=2。N=4 的颗粒静态指标更低，但观感不被接受——
+    // 说明静态 3×3 拉普拉斯指标不能代替目验。想试 N=4 用 ?cloudsUpscale=4。
+    upscaleDivisor: 2,
     groundShadowSamples: 16
   },
   // ultra：仅 minStepSize 50→10 + mapSize 512→1024
