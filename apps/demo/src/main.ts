@@ -652,12 +652,11 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsEvolutionPhase') != null
             ? { evolutionPhaseS: getNumber('cloudsEvolutionPhase')! } : {}),
           // 逃生门：?cloudsAtlas=0 跳过 WeatherAtlas 烘焙回旧静态云图采样
-          // 【2026-10-25 对齐参考库】缺省走 local_weather.png（参考库就是直接采样它），
-          // 我们的烘焙演化天气场（云形态不同）改为 ?cloudsAtlas=1 显式开启。
-          ...(getString('cloudsAtlas') !== '1' ? { atlasDisabled: true } : {}),
-          // 【2026-10-25 对齐参考库】缺省用 local_weather.png（同参考库）；
-          // ?cloudsAtlas=1 打开我们的烘焙演化天气场（云形态与参考库不同）
-          ...(getString('cloudsAtlas') === '1' ? { atlasBake: true } : {}),
+          // 【2026-10-25 回退】曾改为缺省用参考库 local_weather.png，用户目验：
+          // 效果与本项目烘焙场差不多，且本项目当初正是从该 PNG 调整到烘焙场——
+          // 换回去等于走回头路。恢复缺省=烘焙场；?cloudsAtlas=0 仍可对照 PNG。
+          ...(getString('cloudsAtlas') === '0' ? { atlasDisabled: true } : {}),
+
           // 烘焙输入四键（缺省 5.3h / 8 m/s / 1337 / 100；仅这些变化才需重烘——
           // 采样时调制走 uniform 热切）
           ...(getNumber('cloudsEvolutionHours') != null || getNumber('cloudsWind') != null
