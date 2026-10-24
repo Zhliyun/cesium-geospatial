@@ -103,13 +103,17 @@ describe('M2 T1 buildCloudsMainFragmentShader —— three clouds.frag → Cesiu
     expect(src).toMatch(/in vec2 v_textureCoordinates;/)
   })
 
-  it('M2 不 define SHADOW_LENGTH / HAZE（M5 默认开后此用例为显式关基线）', () => {
-    const src = buildCloudsMainFragmentShader({ ...M2_OPTIONS, lightShafts: false })
+  it('显式关基线：SHADOW_LENGTH / HAZE / GROUND_BOUNCE 均不 define', () => {
+    const src = buildCloudsMainFragmentShader({ ...M2_OPTIONS, lightShafts: false, haze: false })
     // SHADOW_LENGTH 不 define → marchShadowLength / outputShadowLength(loc2) 不编译
     expect(src).not.toMatch(/#define SHADOW_LENGTH/)
     // HAZE 不 define → approximateHaze / getHazeRayNearFar 不编译
     expect(src).not.toMatch(/#define HAZE/)
     expect(src).not.toMatch(/#define GROUND_BOUNCE/)
+  })
+
+  it('HAZE 缺省开启（对齐参考库 defaults.haze=true）', () => {
+    expect(buildCloudsMainFragmentShader(M2_OPTIONS)).toMatch(/#define HAZE/)
   })
 
   it('M2 define PERSPECTIVE_CAMERA / ACCURATE_SUN_SKY_LIGHT / SHAPE_DETAIL / TURBULENCE', () => {

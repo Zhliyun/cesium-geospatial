@@ -216,6 +216,11 @@ export interface CloudsParameters {
   shapeDetailOffset: Cartesian3
   turbulenceRepeat: Cartesian2
   turbulenceDisplacement: number
+  /** 【2026-10-24 观感对齐】HAZE 指数雾层参数（逐字对齐参考库 CloudsMaterial.ts:252-255）。 */
+  hazeDensityScale: number
+  hazeExponent: number
+  hazeScatteringCoefficient: number
+  hazeAbsorptionCoefficient: number
 
   // ── 云层 packed（CloudLayers.DEFAULT 经 packValues/packSums/packIntervalHeights 展开）──
   /** minLayerHeights = packValues('altitude') = (l0.altitude, l1.altitude, l2.altitude, l3.altitude)。 */
@@ -409,6 +414,11 @@ export function defaultCloudsParameters(): CloudsParameters {
     shapeDetailOffset: new Cartesian3(0.0, 0.0, 0.0),
     turbulenceRepeat: new Cartesian2(20.0, 20.0),
     turbulenceDisplacement: 350.0,
+    // 【2026-10-24 观感对齐】HAZE 指数雾层（参考库 CloudsMaterial.ts:252-255 同值）
+    hazeDensityScale: 3e-5,
+    hazeExponent: 1e-3,
+    hazeScatteringCoefficient: 0.9,
+    hazeAbsorptionCoefficient: 0.5,
 
     // 云层 packed：从 DEFAULT_CLOUD_LAYERS 单一来源派生（2026-09-04 前系逐字段手抄副本，
     // 层缺省调整时会静默脱钩——此后改层缺省只动 cloudLayersPacking.ts 一处）

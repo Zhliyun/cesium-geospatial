@@ -280,6 +280,12 @@ export function buildSharedCloudsUniforms(
     turbulenceTexture: () => turbulenceTexture,
     turbulenceRepeat: () => params.turbulenceRepeat,
     turbulenceDisplacement: () => params.turbulenceDisplacement,
+    // 【2026-10-24 观感对齐】HAZE 雾层（参考库缺省开启）。shader/uniform 声明早已移植，
+    // 只是从未定义 HAZE；值逐字对齐参考库 CloudsMaterial.ts:252-255。
+    hazeDensityScale: () => params.hazeDensityScale,
+    hazeExponent: () => params.hazeExponent,
+    hazeScatteringCoefficient: () => params.hazeScatteringCoefficient,
+    hazeAbsorptionCoefficient: () => params.hazeAbsorptionCoefficient,
 
     // 云层 packed（CloudLayers.DEFAULT 展开）
     minLayerHeights: () => params.minLayerHeights,

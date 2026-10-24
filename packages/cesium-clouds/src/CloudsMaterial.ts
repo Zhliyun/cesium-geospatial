@@ -58,6 +58,11 @@ export interface CloudsMainOptions {
    */
   turbulence?: boolean
   /**
+   * HAZE 分支开关（march 内指数雾层；参考库 qualityPresets defaults `haze: true`）。
+   * 【2026-10-24】shader/uniform/调用点早已移植，但从未定义过 HAZE——一直没生效。
+   */
+  haze?: boolean
+  /**
    * ACCURATE_SUN_SKY_LIGHT 开关（getCloudsSunSkyIrradiance 走 bruneton runtime
    * GetSunAndSkyScalarIrradiance 直算，绕过 vGroundIrradiance/vCloudsIrradiance varying）。
    * 默认 true（fragment 重建下避免顶点 irradiance 预计算；M2 clouds.vert 不走）。
@@ -100,6 +105,7 @@ type ResolvedCloudsMainOptions = Required<CloudsMainOptions>
 const DEFAULTS: ResolvedCloudsMainOptions = {
   shapeDetail: true,
   turbulence: true,
+  haze: true,
   accurateSunSkyLight: true,
   debugShow: null,
   lightShafts: true,
@@ -162,6 +168,7 @@ function buildM2Defines(o: ResolvedCloudsMainOptions): string[] {
     '#define SHADOW_CASCADE_COUNT ' + o.shadowCascadeCount,
     lowResMarch ? '#define LOW_RES_MARCH' : '',
     o.accurateSunSkyLight ? '#define ACCURATE_SUN_SKY_LIGHT' : '',
+    o.haze !== false ? '#define HAZE' : '',
     o.shapeDetail ? '#define SHAPE_DETAIL' : '',
     o.turbulence ? '#define TURBULENCE' : '',
     o.debugShow === 'uv' ? '#define DEBUG_SHOW_UV' : '',
