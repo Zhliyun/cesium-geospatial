@@ -658,8 +658,12 @@ export function createCloudsPass(
       destroyed = true
       primitives.remove(primitive)
       primitive.destroy() // 释放 MRT FBO（GL framebuffer handle），destroyAttachments=false 不连带 texture
+      // 【2026-10-24 二次销毁修复】shadowLenTex 已在 mrtTextures 里（428-429 行），
+      // 此处再 destroy 一次会让 Cesium Texture 抛 "This object was destroyed"——
+      // 该异常从 destroy() 抛出会中断 setQuality 的重建路径（实测 high/ultra 档
+      // lightShafts=true 时 setQuality 必抛，重建后画面全粉），也是 resize 重建的
+      // 拦路虎。只销毁一次。
       mrtTextures.forEach((t) => t.destroy())
-      shadowLenTex?.destroy()
       dummyDepthBuffer.destroy()
       dummyTurbulence.destroy()
       // dummyWeatherAtlas Texture3D destroy（公开 .d.ts 未声明 destroy，cast 调用——dummyShadowBuffer 同款）

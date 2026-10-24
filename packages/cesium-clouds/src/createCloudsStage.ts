@@ -1306,14 +1306,71 @@ export function createCloudsStage(
     }
   }
 
-  // ── 零直捕 listener（spec §7 v2 写死，评审 MAJOR）：体内零直捕局部量、一切经 impl——
-  //    任何漏网直捕会静默驱动已销毁 impl（frame 计数分叉、矩阵停更）。listener 只挂一次，
-  //    setQuality 换 impl 引用即切换驱动对象。
+  // ── 画布尺寸变化（resize）处理 ──────────────────────────────────────────────
+  // 【2026-10-24 修复】低分 march / resolve RT 的尺寸在 buildCloudsStageImpl 里由
+  // context.drawingBufferWidth/Height 一次性定死；Cesium 的画布会随窗口 resize 变化，
+  // 但此前**没有任何 resize 重建逻辑**——resize 后 march RT 仍是旧尺寸（实测 1920×1080
+  // 画布上 march 只有 256×276，等于把 1/4 低分图放大 7.5× 而非 4×），画面既糊又放大
+  // 颗粒，且与参考库（three-geospatial 的 CloudsEffect 会 setSize 重建）行为不一致。
+  // 处置：preRender 里检测 drawingBuffer 尺寸，连续 3 帧稳定后按当前档位重建 impl
+  //（与 setQuality 同路径，含天气预设重放）。拖拽 resize 期间不重建，松手后一次。
+  const readCanvasSize = (): [number, number] => {
+    const ctx = (scene as unknown as {
+      context?: { drawingBufferWidth?: number; drawingBufferHeight?: number }
+    }).context
+    return [ctx?.drawingBufferWidth ?? 0, ctx?.drawingBufferHeight ?? 0]
+  }
+  let builtSize = readCanvasSize()
+  let pendingSize: [number, number] | null = null
+  let pendingStableFrames = 0
+
+  // 零直捕 listener（spec §7 v2 写死，评审 MAJOR）：体内零直捕局部量、一切经 impl——
+  // 任何漏网直捕会静默驱动已销毁 impl（frame 计数分叉、矩阵停更）。listener 只挂一次，
+  // setQuality 换 impl 引用即切换驱动对象。
   const removePreRender = scene.preRender.addEventListener(
     (_scene: Scene, time: JulianDate) => {
-      if (!destroyed) impl.onPreRender(time)
+      if (destroyed) return
+      const size = readCanvasSize()
+      if (size[0] > 0 && (size[0] !== builtSize[0] || size[1] !== builtSize[1])) {
+        if (pendingSize != null && pendingSize[0] === size[0] && pendingSize[1] === size[1]) {
+          pendingStableFrames++
+        } else {
+          pendingSize = size
+          pendingStableFrames = 1
+        }
+        if (pendingStableFrames >= 3) {
+          pendingSize = null
+          pendingStableFrames = 0
+          builtSize = size
+          try {
+            rebuildImpl()
+          } catch (e) {
+            console.warn('[clouds] resize 重建失败，保留旧 impl', e)
+          }
+          return
+        }
+      } else {
+        pendingSize = null
+        pendingStableFrames = 0
+      }
+      impl.onPreRender(time)
     }
   )
+
+  // 重建 impl（setQuality 换档与 resize 共用）：销毁旧 impl + 按当前档位重建 + 天气预设重放。
+  // 失败语义同 setQuality（原子性：摘 overlay + destroyed，防悬空 bridge）。
+  function rebuildImpl(nextQuality: CloudsQualityPreset = currentQuality): void {
+    impl.destroy()
+    try {
+      impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(nextQuality, options))
+      currentQuality = nextQuality
+      if (activePreset != null) impl.setWeatherPreset(activePreset)
+    } catch (e) {
+      destroyed = true
+      removeOverlay()
+      throw e
+    }
+  }
 
   // ── handle：公开字段 getter 委托 impl（对外形状/只读语义不变，spec §7）──
   const handle: CloudsStageHandle = {
@@ -1346,19 +1403,7 @@ export function createCloudsStage(
         return
       }
       if (next === currentQuality) return
-      impl.destroy()
-      try {
-        impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(next, options))
-        currentQuality = next
-        // T6：激活中的预设重放到新 impl（跨换档保持；undefined=无预设，新 impl 天然缺省态）
-        if (activePreset != null) impl.setWeatherPreset(activePreset)
-      } catch (e) {
-        // 原子性（spec §7 v3）+ v2 BLOCKER 修订：顶层 overlay 必须同步摘除——否则残留链上
-        // 每帧读已销毁 impl 的悬空 bridge（GL 纹理名已删），静默黑帧/脏画面。
-        destroyed = true
-        removeOverlay()
-        throw e
-      }
+      rebuildImpl(next)
     },
     // T6 天气预设热切：委托当前 impl（写 params/state 闭包引用即生效）+ handle 侧记忆
     // activePreset（setQuality 重建后重放）。destroy 后 no-op + warn（对齐 setQuality 风格）。
