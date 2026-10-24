@@ -77,10 +77,14 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
     main: { ...HIGH_MAIN },
     params: { shadowCascadeCount: 3 },
     shadow: { cascadeCount: 3, mapSize: 512, march: { ...HIGH_MARCH } },
-    // 【2026-10-24】N=4 曾短暂设为缺省（对齐参考库 1/4 分辨率），用户目验否决
-    //（「效果很差」），回退 N=2。N=4 的颗粒静态指标更低，但观感不被接受——
-    // 说明静态 3×3 拉普拉斯指标不能代替目验。想试 N=4 用 ?cloudsUpscale=4。
-    upscaleDivisor: 2,
+    // 【2026-10-24 定稿】high（demo 缺省）= 1/4 分辨率 march，与参考库一致。
+    // 同帧实测（2026-01-15T12Z 欧洲云甲俯视，1920x1080，静止）：
+    //   N=2 颗粒 20.43 / 77fps     N=4 颗粒 9.41 / 114fps   → 颗粒 −54% 且快 48%
+    // 说明：上一轮「N=4 不可接受」的目验是在 despeckle 缺省为 1 的构建上做的——
+    // 那时 N>1 的 despeckle 窗口在低分域相当于屏幕 12px 模糊，观感被判死刑。
+    // 现在 despeckle 缺省为 0，N=4 是清晰度与噪声同时更好的档位。
+    // 回退：?cloudsUpscale=2。
+    upscaleDivisor: 4,
     groundShadowSamples: 16
   },
   // ultra：仅 minStepSize 50→10 + mapSize 512→1024

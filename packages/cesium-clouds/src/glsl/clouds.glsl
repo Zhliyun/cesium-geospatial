@@ -131,7 +131,7 @@ WeatherSample sampleWeather(const vec2 uv, const vec3 position, const float heig
   // （weather 十 km+ 包络 / shape 中频谷脊 / detail 高频侵蚀），平面切片被彻底打破。
   // 【2026-10-23 移植】隐式 LOD → 显式：本函数在 march 循环内被逐样本调用，相邻像素的
   // 循环进度不同 → 隐式导数无定义 → 每个像素的采样 LOD 各不相同 → 密度场逐像素跳变。
-  float puffMid = textureLod(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset, max(mipLevel * 1.5, 1.5)).r;
+  float puffMid = textureLod(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset, (mipLevel * 1.5)).r;
   vec4 puffTop = mix(vec4(0.74), vec4(0.97),
     clamp(localWeather, 0.0, 1.0) * mix(0.6, 1.0, puffMid));
   vec4 puffPlateau = smoothstep(vec4(0.70), vec4(0.85), weather.heightFraction)
@@ -181,7 +181,7 @@ MediaSample sampleMedia(
   // 【2026-10-23 移植】隐式 LOD → 显式：同 sampleWeather 的 puffMid（循环内导数无定义）。
   turbulence =
     turbulenceDisplacement *
-    (textureLod(turbulenceTexture, turbulenceUv, max(mipLevel * 1.5, 1.5)).rgb * 2.0 - 1.0) *
+    (textureLod(turbulenceTexture, turbulenceUv, (mipLevel * 1.5)).rgb * 2.0 - 1.0) *
     dot(density, remapClamped(weather.heightFraction, vec4(0.3), vec4(0.0)));
   #endif // TURBULENCE
 
@@ -194,10 +194,12 @@ MediaSample sampleMedia(
   // N=4 半分 march 的 texel 粗→隐式 LOD 反而高（意外平滑）——N=1 全分下必须显式。
   // 换算 ×1.5（用户现象「越远颗粒越强」=缩小采样欠奈奎斯特，weather mip 尺度对
   // shape 高频不足——加大远云压制；近云 mip≈0-1 域受影响小）。
-  // 【2026-10-23】mip 链已可用（见 weatherTextures.createMippedTexture3D）。加下限 1.0：
-  // 近处 mipLevel≈0 → LOD 0 = 128³ 全频细胞结构直出（N=1 无时域超采样压不住）→ 颗粒。
-  // 下限 1.0 让近处也走半分辨率 mip（64³），远处仍由 mipLevel*1.5 主导。
-  float shape = textureLod(shapeTexture, shapePosition, max(mipLevel * 1.5, 1.5)).r;
+  // 【2026-10-24 去 mip 下限】2026-10-23 曾把下限设成 1.5（近处也强制走 64³ mip），
+  // 实测等于把所有云体细节模糊约 3 倍——用户反馈「糊/没有细节/形状难看」。参考库
+  // 对 shape/detail/turbulence 一律用隐式 LOD 的 texture()（近处=mip0 全细节）。此处
+  // 保留显式 textureLod（循环内隐式导数无定义）但去掉下限：近处 mipLevel≈0 → LOD 0，
+  // 与参考库清晰度对齐；远处仍由 mipLevel*1.5 压制欠采样噪声。
+  float shape = textureLod(shapeTexture, shapePosition, (mipLevel * 1.5)).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
   #ifdef DEBUG_SHOW_SAMPLE_COUNT
@@ -208,7 +210,7 @@ MediaSample sampleMedia(
   if (mipLevel * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
     vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset + u_detailWindOffset;
     // 【2026-10-23 移植】隐式 LOD → 显式：同 puffMid/turbulence（循环内导数无定义）。
-    float detail = textureLod(shapeDetailTexture, detailPosition, max(mipLevel * 1.5, 1.5)).r;
+    float detail = textureLod(shapeDetailTexture, detailPosition, (mipLevel * 1.5)).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(
       vec4(pow(detail, 6.0)),
