@@ -177,14 +177,14 @@ void temporalUpscale(
     return; // Disocclusion rejection
   }
   vec4 clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
-  // 【2026-09-02 静止收敛抖动修复】three 原文 outputColor = clippedColor 直出——variance
-  // clip 的 AABB 逐帧随 current(Bayer ±2px 轮换采样)移动,history 被 clip 拉向本帧
-  // current → 输出跟随 current 轮换不收敛。高对比云区(近云视角)显示层持续抖动
-  // (连拍 20-40% 像素逐帧变化;低对比远景/three storybook 场景不可见——分辨率×对比度
-  // 放大,机制 three 同款)。修法=TAA 标准混合:输出 = mix(clip(history), current, α)
-  // ——Bayer 轮换分量指数衰减(α=0.1 → 16 相位残留 0.9^16≈18%),fresh 直出帧保持
-  // 超采样语义不变。
-  outputColor = mix(clippedColor, currentColor, temporalAlpha);
+  // 【2026-10-25 观感对齐：回到参考库的纯累积】参考库的 upscale 分支（生产路径，恒 N=4）
+  // 是 `outputColor = clippedColor`——历史经当前帧邻域 AABB 裁剪后直接写回，**不混入
+  // 当前帧**。我们 2026-09-02 为治静止抖动加了 mix(clipped, current, α=0.1)：当时噪声
+  // 相位是冻结的（STBN mip 门控），所以看不出副作用；2026-10-24 相位改为每帧轮换后，
+  // 这 10% 直通就让每帧的新噪声原样透出 = 用户反馈的「整体快速抖动」。
+  // 恢复参考库语义：纯累积，噪声由 16 相位的历史平均消掉。
+  // 回退：`?cloudsUpscale=1` 走下面的 TAA 分支（那里保留 α 混合，与参考库 TAA 分支一致）。
+  outputColor = clippedColor;
   // 【outputColorSanityGuard】NaN 兜底：任何上游残留 NaN（含 mix 的 IEEE 传播）直出 current。
   if (any(isnan(outputColor.rgb))) {
     outputColor = currentColor;
