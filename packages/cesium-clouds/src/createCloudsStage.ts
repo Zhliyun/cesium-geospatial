@@ -892,7 +892,10 @@ function buildCloudsStageImpl(
         //   逐帧噪声图案去相关 → resolve 混合=多帧平均，白点=march 能量积分采样方差的
         //   时序抑制）。未开启时与 frame 同步递增（行为与旧版逐位一致）。
         if (params.marchFrame == null) params.marchFrame = params.frame
-        if (options.frameUnfreeze === true || !still) {
+        // 【2026-10-24 缺省解冻】STBN 每帧换层后必须让 marchFrame 跟着走，否则静止时
+        // 相位仍固定 = 颗粒照样烤进画面（参考库 march 的 frame 也每帧推进）。
+        // ?cloudsFrameUnfreeze=0 可关回冻结档。
+        if (options.frameUnfreeze !== false || !still) {
           params.marchFrame++
         }
         if (!still) {

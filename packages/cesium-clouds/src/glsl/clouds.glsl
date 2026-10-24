@@ -8,11 +8,13 @@ uniform float u_weatherMipBias;
 float getSTBN(const float mipLevel) {
   ivec3 size = textureSize(stbnTexture, 0);
   vec3 scale = 1.0 / vec3(size);
-  // 【2026-10-08 白点治理】mip 分域相位（frameUnfreeze 配套）：高 mip（远云域=白点
-  // 重灾区）→ frame 轮换层（resolve 多帧平均治白点）；低 mip（近云/云缘域）→ 恒 0 层
-  //（M4 冻结语义——相位轮换在高对比云缘的帧间重建差=雪花状闪动，5950m 俯视实测）。
-  // u_unfreezeMipThreshold 缺省 0.0=mip>0 即轮换（拆分版行为）；demo ?cloudsUnfreezeMip= 标定。
-  float layer = mipLevel > u_unfreezeMipThreshold ? float(frame % size.z) : 0.0;
+  // 【2026-10-24 颗粒根因修复】回归参考库语义：**每帧无条件换 STBN 层**。
+  // 2026-10-08 的「白点治理」曾按 mip 分域：近云/云缘（mip≈0，即画面主体）恒定第 0 层，
+  // 相位永不轮换 → march 的逐像素噪声图案被永久烤进静态画面，resolve 的时域累积没有
+  // 可平均的对象 → 这就是「砂纸颗粒」的真正来源（参考库同 shader 无此分域，所以几乎
+  // 看不到颗粒）。mipLevel 参数保留（调用点不动），但不再参与相位选择。
+  // 代价：冻结帧下若 frame 不推进，相位仍不变——故 marchFrame 需随帧推进（缺省开启）。
+  float layer = float(frame % size.z);
   return texture(stbnTexture, vec3(gl_FragCoord.xy, layer) * scale).r;
 }
 

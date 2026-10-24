@@ -322,6 +322,9 @@ export interface CloudsPass {
   getShadowLengthBridge(): { _texture: unknown; _target: number } | undefined
   /** att0 color Tex bridge（{_texture,_target}，注入 overlay PostProcessStage uniform）。 */
   getColorBridge(): { _texture: unknown; _target: number }
+  /** 当前 impl 的参数对象（uniformMap 闭包逐帧读取它——**运行时改写标量即可热调**，
+   *  同页面会话内 A/B 无需重载。demo 挂 window.__cloudsParams）。 */
+  readonly parameters: CloudsParameters
   /** att0 color Tex（直接引用，调试/probe 用；temporal 时为低分）。 */
   readonly colorTexture: Texture
   /**
@@ -646,6 +649,7 @@ export function createCloudsPass(
   let destroyed = false
   return {
     primitive,
+    parameters: params,
     colorTexture: colorTex,
     depthVelocityTexture: depthVelTex,
     shadowLengthTexture: shadowLenTex,

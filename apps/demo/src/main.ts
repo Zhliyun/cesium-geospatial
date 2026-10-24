@@ -818,6 +818,13 @@ async function main(): Promise<void> {
           : undefined
         ;(window as unknown as { __cloudsStage?: unknown }).__cloudsStage =
           cloudsHandle
+        // 【2026-10-24 调试】云参数对象直挂：uniformMap 闭包逐帧读它，改标量即热生效，
+        // 同页面会话内可做 A/B（避免每次重载天气场变化污染对照）。
+        // getter 形式：setQuality / resize 会重建 impl，静态引用会指向已销毁的旧 params
+        Object.defineProperty(window, '__cloudsParams', {
+          configurable: true,
+          get: () => cloudsHandle?.cloudsPass.parameters
+        })
         if (cloudsHandle != null) {
           // v2 spec §7：云 overlay 编排——插入 atmosphere 与 lensFlare 之间（halo 画在云上）。
           // insert 失败处置（spec §6.3）：console.error（区别 weather 失败的 warn）+ 回收
