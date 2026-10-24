@@ -709,6 +709,11 @@ async function main(): Promise<void> {
           // parameters.moonLightScale，默认 25000，2026-08-31 偏亮反馈拍板减半）；?moon=0 全关诊断基线 → 云月光强制乘 0
           // （排在显式 moonLightScale 之后，全关语义优先盖过）
           ...(getNumber('cloudsNightAmbient') != null || getNumber('cloudsNightRetreat') != null || getNumber('cloudsMotionShaft') != null || getNumber('moonLightScale') != null || getString('moon') === '0' || getString('cloudsTint') != null || getNumber('cloudsTwilightBoost') != null || getNumber('cloudsCoverage') != null || getNumber('cloudsClimateBands') != null || getNumber('cloudsShaftStep') != null || getNumber('cloudsPowderScale') != null || getNumber('cloudsWeatherBias') != null
+            // 【2026-10-24 修复】以下 6 个键写在 parameters 块里却没进本门控名单——
+            // 单独传时整块 parameters 不注入 = 静默零效果（多次「改了没差」的根因）：
+            || getNumber('temporalAlpha') != null || getNumber('temporalGamma') != null
+            || getNumber('cloudsDisocclusion') != null || getNumber('cloudsMotionAlpha') != null
+            || getNumber('cloudsInLayerFog') != null || getNumber('cloudsTopPuff') != null
             ? {
                 parameters: {
                   // 【2026-09-05 P1 光柱 march 步长】?cloudsShaftStep=<米>（缺省 100；

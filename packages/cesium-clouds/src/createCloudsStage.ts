@@ -996,8 +996,12 @@ function buildCloudsStageImpl(
       //（multi-frustum 分段前，velocity 数学只用投影 xy 系数与 w → 分段无关，plan D5）。
       // 写入 params 的既有 Matrix4 实例（clone 覆写不换引用——uniformMap 闭包持引用）。
       if (temporal) {
+        // 【2026-10-24 相位错位修复】jitter 相位必须与 march STBN（CloudsPass frame 绑定）
+        // 和 resolve 直通相位（本文件 swapBuffers 段）同源：三者都用 marchFrame。此前
+        // jitter 用 params.frame（静止冻结），而 STBN/直通用 marchFrame（逐帧推进）→
+        // 静止时直通帧暴露的 Bayer 相位与实际渲染相位不一致。
         computeTemporalJitter(
-          params.frame,
+          params.marchFrame ?? params.frame,
           cloudsPass.marchWidth,
           cloudsPass.marchHeight,
           params.temporalJitter
