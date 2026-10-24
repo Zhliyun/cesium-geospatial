@@ -666,6 +666,8 @@ async function main(): Promise<void> {
           ...(cloudsDebugShow != null ? { debugShow: cloudsDebugShow } : {}),
           ...(getString('cloudsShapeDetail') === '0' ? { shapeDetail: false } : {}),
           ...(getString('cloudsTurbulence') === '0' ? { turbulence: false } : {}),
+          // 【2026-10-24 观感对齐】HAZE 指数雾层（缺省开=参考库）；?cloudsHaze=0 关
+          ...(getString('cloudsHaze') === '0' ? { haze: false } : {}),
           ...(getString('cloudsAccurate') === '0' ? { accurateSunSkyLight: false } : {}),
           // M3 BSM 云自阴影诊断基线：?cloudsShadow=0 跳过 ShadowPass（主 march fallback
           // 全 0 dummy → Beer=1 无自阴影；开/关对比云体积感用）
