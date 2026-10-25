@@ -224,6 +224,12 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    */
   frameUnfreeze?: boolean
   /**
+   * 【2026-10-25】相机运动时是否继续轮换 STBN 相位。缺省 false = 运动时冻结相位
+   *（治拖动/旋转抖动：运动中重投影本就有误差，再叠每帧不同噪声 → 历史平均逐帧偏移）；
+   *  true = 参考库语义（永远轮换）。demo `?cloudsMotionPhase=1`。
+   */
+  motionPhaseRotate?: boolean
+  /**
    * 【2026-10-08 白点治理】resolve 输出端孤点中值滤波强度（0=关缺省零回归；1=全替换）。
    * 配合 frameUnfreeze 使用（时序平均消 ~95%，滤波清残余稳态孤点）。demo `?cloudsDespeckle=1`。
    */
@@ -910,7 +916,17 @@ function buildCloudsStageImpl(
         } else if (stillFrames < MARCH_WARMUP_FRAMES) {
           stillFrames++
         }
-        if (options.frameUnfreeze !== false && (!still || stillFrames < MARCH_WARMUP_FRAMES)) {
+        // 【2026-10-25 拖动抖动治本】相位推进只在「静止收敛期」发生：
+        // 相机运动时重投影本身有误差（云缘 alpha/速度跳变处尤甚），再叠加每帧不同的
+        // STBN 相位，历史平均逐帧被拉向不同噪声实现 → 用户看到的「拖动/旋转时抖动」。
+        // 参考库是持续动画场景，这个代价被画面自身的运动掩盖，我们的静态/操控场景不会。
+        // ?cloudsMotionPhase=1 可开回参考库语义（运动中也不断轮换）。
+        // prevCameraPos == null（首帧）也走收敛推进，避免首帧相位卡死
+        const advancePhase =
+          prevCameraPos == null || still
+            ? stillFrames < MARCH_WARMUP_FRAMES
+            : options.motionPhaseRotate === true
+        if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
         }
         if (!still) {

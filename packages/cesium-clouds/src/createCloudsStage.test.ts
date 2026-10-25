@@ -776,9 +776,12 @@ describe('M4 T7 temporal 编排', () => {
     handle!.destroy()
   })
 
-  it('frame 每帧递增 + temporalJitter 写入 params（Bayer 相位随帧变化）+ preRender 开头 swap', () => {
+  it('运动 + motionPhaseRotate：相位随帧变化（参考库语义）；缺省运动时冻结见下一用例', () => {
     const scene = createMockScene()
-    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
+    // 【2026-10-25】缺省运动时冻结相位（治拖动抖动）；本用例显式开回轮换语义
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true, temporal: true, motionPhaseRotate: true
+    })
     const inst = resolvePassProbe.instances[0]
     // 相机逐帧移动（Bayer 相位轮换需要 frame 递增——静止冻结是另一用例）
     const camera = scene.camera as { positionWC: Cartesian3 }
@@ -797,6 +800,22 @@ describe('M4 T7 temporal 编排', () => {
     firePreRender(scene)
     const j2 = paramsOf(handle!)!.temporalJitter
     expect(j2.x).not.toBeCloseTo(j1.x, 6)
+    handle!.destroy()
+  })
+
+  it('缺省：相机运动时冻结相位（治拖动/旋转抖动）', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
+    const camera = scene.camera as { positionWC: Cartesian3 }
+    const basePos = Cartesian3.clone(camera.positionWC)
+    firePreRender(scene)
+    const j1 = Cartesian2.clone(paramsOf(handle!)!.temporalJitter)
+    Cartesian3.add(basePos, new Cartesian3(50, 0, 0), camera.positionWC)
+    firePreRender(scene)
+    Cartesian3.add(basePos, new Cartesian3(100, 0, 0), camera.positionWC)
+    firePreRender(scene)
+    const j2 = paramsOf(handle!)!.temporalJitter
+    expect(j2.x).toBeCloseTo(j1.x, 9)
     handle!.destroy()
   })
 
