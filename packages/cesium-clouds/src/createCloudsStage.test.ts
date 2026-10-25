@@ -146,6 +146,7 @@ vi.mock('./CloudsResolvePass', () => ({
       getResolvedBridge: vi.fn(() => ({ _texture: { id: 'resolve' }, _target: 0x0de1 })),
       // T2 运动自适应 α（2026-09-02）：onPreRender 每帧调——记录调用序列供断言
       setTemporalAlpha: vi.fn((v: number) => { inst.lastMotionAlpha = v }),
+      setBayerDirectThrough: vi.fn((v: number) => { inst.lastDirectThrough = v }),
       lastMotionAlpha: undefined as number | undefined,
       destroy: vi.fn()
     }

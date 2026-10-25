@@ -35,6 +35,10 @@ uniform float u_spatialDespeckle;
 // 【2026-10-25 探针】0=关历史重投影（直接用 vUv 采历史，用于判定拖动静止带垂直漂移
 // 是否来自 velocity）。缺省 1=正常。
 uniform float u_reprojectionEnabled;
+// 【2026-10-25】Bayer 直通开关（相位冻结时必须 0）。直通像素绕过累积直显原始 march 噪声；
+// 相位冻结后这批像素固定不变 → 规则格点（实测 N=4 下 4px×2px、FFT 主峰 16135，
+// N=1 全分路径无此峰）。参考库相位永远轮换，所以直通不会固化。
+uniform float u_bayerDirectThrough;
 
 in vec2 vUv;
 
@@ -273,11 +277,11 @@ void main() {
   #if UPSCALE_DIVISOR == 2
   ivec2 lowResCoord = coord / 2;
   int bayerValue = bayerIndices2[(coord.y % 2) * 2 + (coord.x % 2)];
-  bool currentFrame = bayerValue == frame % 4;
+  bool currentFrame = (bayerValue == frame % 4) && u_bayerDirectThrough > 0.5;
   #else // UPSCALE_DIVISOR == 2
   ivec2 lowResCoord = coord / 4;
   int bayerValue = bayerIndices[coord.x % 4][coord.y % 4];
-  bool currentFrame = bayerValue == frame % 16;
+  bool currentFrame = (bayerValue == frame % 16) && u_bayerDirectThrough > 0.5;
   #endif // UPSCALE_DIVISOR == 2
   temporalUpscale(coord, lowResCoord, currentFrame, outputColor, outputShadowLength);
   #else // TEMPORAL_UPSCALE

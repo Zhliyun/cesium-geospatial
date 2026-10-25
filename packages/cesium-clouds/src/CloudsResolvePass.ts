@@ -57,6 +57,8 @@ export interface CloudsResolvePassOptions {
    * demo `?cloudsDespeckle=1`。
    */
   spatialDespeckle?: number
+  /** 【2026-10-25】Bayer 直通开关（缺省 1） */
+  bayerDirectThrough?: number
   /** 【2026-10-25 探针】0=关历史重投影（排查拖动静止垂直漂移是否来自 velocity）。缺省 1。 */
   reprojectionEnabled?: number
   /**
@@ -91,6 +93,8 @@ export interface CloudsResolvePass {
    * preRender 按相机速度驱动。
    */
   setTemporalAlpha(value: number): void
+  /** 【2026-10-25】Bayer 直通开关（0=关；相位冻结时必须关） */
+  setBayerDirectThrough(value: number): void
   /** 释放：双内部 primitive（各含 FBO）+ 双 Texture。幂等。 */
   destroy(): void
 }
@@ -105,6 +109,8 @@ export function createCloudsResolvePass(
   const varianceGamma = options.varianceGamma ?? 2
   // T2（2026-09-02）：α 由 const 改 let——setTemporalAlpha 每帧改写，uniformMap 闭包读最新值
   let temporalAlpha = options.temporalAlpha ?? 0.1
+  // 【2026-10-25】Bayer 直通开关（缺省 1）；相位冻结时由上层每帧置 0（见 shader 注释）
+  let bayerDirectThrough = options.bayerDirectThrough ?? 1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
@@ -142,7 +148,8 @@ export function createCloudsResolvePass(
     // 【2026-10-24】despeckle 缺省回到 0：曾设为 1（窗口 3×3 后零成本），但它是空间
     // 滤波，会让云面偏「磨砂」——用户目验否决。保留为 ?cloudsDespeckle=1 手动开启。
     u_spatialDespeckle: () => options.spatialDespeckle ?? 0,
-    u_reprojectionEnabled: () => options.reprojectionEnabled ?? 1
+    u_reprojectionEnabled: () => options.reprojectionEnabled ?? 1,
+    u_bayerDirectThrough: () => bayerDirectThrough
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——
@@ -207,6 +214,9 @@ export function createCloudsResolvePass(
     getResolvedBridge(): { _texture: unknown; _target: number } {
       const internal = resolveTex as unknown as { _texture: unknown; _target: number }
       return { _texture: internal._texture, _target: internal._target }
+    },
+    setBayerDirectThrough(value: number): void {
+      bayerDirectThrough = value
     },
     setTemporalAlpha(value: number): void {
       temporalAlpha = value

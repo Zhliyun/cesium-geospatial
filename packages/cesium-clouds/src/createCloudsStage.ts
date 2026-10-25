@@ -947,6 +947,10 @@ function buildCloudsStageImpl(
         if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
         }
+        // 【2026-10-25】相位不推进（冻结）时必须关 Bayer 直通：直通像素绕过累积直显原始
+        // 噪声，相位不变时这批像素固定 → 规则格点（实测 N=4 下 4px×2px、FFT 主峰 16135；
+        // N=1 全分路径无此峰）。推进时保持 1（参考库语义：每帧 1/16 像素直通采样新相位）。
+        resolvePass?.setBayerDirectThrough(advancePhase ? 1 : 0)
         if (!still) {
           // 运动：frame 递增；静止冻结（jitter/BSM 相位恒定，M4 语义不变）
           params.frame++
