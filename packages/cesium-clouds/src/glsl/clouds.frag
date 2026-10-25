@@ -444,7 +444,7 @@ float marchOpticalDepth(
     vec2 uv = getGlobeUv(position);
     float height = length(position) - bottomRadius;
     WeatherSample weather = sampleWeather(uv, position, height, mipLevel);
-    MediaSample media = sampleMedia(weather, position, uv, mipLevel, jitter);
+    MediaSample media = sampleMedia(weather, position, uv, mipLevel, jitter, stepSize);
     opticalDepth += media.extinction * stepSize;
     nextDistance += stepSize;
     stepSize *= secondaryStepScale;
@@ -719,7 +719,7 @@ vec4 marchClouds(
     }
 
     // Sample detailed participating media.
-    MediaSample media = sampleMedia(weather, position, uv, mipLevel, marchJitter, sampleCount);
+    MediaSample media = sampleMedia(weather, position, uv, mipLevel, marchJitter, stepSize, sampleCount);
 
     if (media.extinction > minExtinction) {
       // 【2026-10-09 颗粒带判别 v2】media.extinction 直显（shape 3D 修正后的有效密度，

@@ -5,6 +5,12 @@ uniform float u_unfreezeMipThreshold;
 // 声明放这里（clouds.glsl）而非 clouds.frag：本文件在 clouds.frag 的 #include 处就要用到它。
 // shadow 端不引用 → uniform 不活跃 → uniformMap 缺绑不崩（同 u_unfreezeMipThreshold 先例）。
 uniform float u_detailLodFloor;
+// 【2026-10-25】噪声纹理边长（与 weatherTextures.ts SHAPE_SIZE / SHAPE_DETAIL_SIZE 同步）。
+// 用于按「每个采样点的实际步长」算显式 LOD：march 步长 50-1000m 远大于 texel 尺度
+//（shape ≈26m/texel，detail ≈5.2m/texel）→ 沿视线必然欠采样；隐式 LOD 在循环内不可靠，
+// 相位冻结后走样会固化成随画面平移的亮点。
+#define SHAPE_TEX_SIZE 128.0
+#define DETAIL_TEX_SIZE 32.0
 
 // 【2026-10-09 颗粒带优化】weather 采样 mip 偏置（密度场低通）：0=关缺省零回归。
 uniform float u_weatherMipBias;
@@ -179,6 +185,7 @@ MediaSample sampleMedia(
   const vec2 uv,
   const float mipLevel,
   const float jitter,
+  const float stepLength,
   out ivec3 sampleCount
 ) {
   vec4 density = weather.density;
@@ -207,7 +214,9 @@ MediaSample sampleMedia(
   // 对 shape/detail/turbulence 一律用隐式 LOD 的 texture()（近处=mip0 全细节）。此处
   // 保留显式 textureLod（循环内隐式导数无定义）但去掉下限：近处 mipLevel≈0 → LOD 0，
   // 与参考库清晰度对齐；远处仍由 mipLevel*1.5 压制欠采样噪声。
-  float shape = texture(shapeTexture, shapePosition).r;
+  // 沿视线的采样足迹 = 步长 → 纹理单位 → texel 数；取 log2 即 LOD。
+  float shapeLod = log2(max(1.0, stepLength * abs(shapeRepeat.x) * SHAPE_TEX_SIZE));
+  float shape = textureLod(shapeTexture, shapePosition, shapeLod).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
   #ifdef DEBUG_SHOW_SAMPLE_COUNT
@@ -223,7 +232,8 @@ MediaSample sampleMedia(
     // 一片随画面平移的亮点（用户「拖动时噪声点垂直移动」）。按 mipLevel（随 rayDistance
     // 增长）给显式 LOD 下限，把近处步进内的 detail 采样压到可分辨尺度。
     // shape/turbulence 频率低 5-20 倍，保持隐式 LOD（与参考库一致）。
-    float detail = textureLod(shapeDetailTexture, detailPosition, max(mipLevel * 1.5, u_detailLodFloor)).r;
+    float detailLod = log2(max(1.0, stepLength * abs(shapeDetailRepeat.x) * DETAIL_TEX_SIZE));
+    float detail = textureLod(shapeDetailTexture, detailPosition, max(detailLod, u_detailLodFloor)).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(
       vec4(pow(detail, 6.0)),
@@ -255,8 +265,9 @@ MediaSample sampleMedia(
   const vec3 position,
   const vec2 uv,
   const float mipLevel,
-  const float jitter
+  const float jitter,
+  const float stepLength
 ) {
   ivec3 sampleCount;
-  return sampleMedia(weather, position, uv, mipLevel, jitter, sampleCount);
+  return sampleMedia(weather, position, uv, mipLevel, jitter, stepLength, sampleCount);
 }
