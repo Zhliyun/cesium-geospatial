@@ -1,6 +1,10 @@
 // 【2026-10-08 白点治理】STBN 相位分域阈值（getSTBN 消费；march/shadow 两编译单元
 // 共享此声明——shadow 端 getSTBN 未调用→uniform 不活跃→uniformMap 缺绑不崩）。
 uniform float u_unfreezeMipThreshold;
+// 【2026-10-25】shapeDetail 显式 LOD 下限（0=隐式/参考库语义；缺省 1.5 压拖动走样）。
+// 声明放这里（clouds.glsl）而非 clouds.frag：本文件在 clouds.frag 的 #include 处就要用到它。
+// shadow 端不引用 → uniform 不活跃 → uniformMap 缺绑不崩（同 u_unfreezeMipThreshold 先例）。
+uniform float u_detailLodFloor;
 
 // 【2026-10-09 颗粒带优化】weather 采样 mip 偏置（密度场低通）：0=关缺省零回归。
 uniform float u_weatherMipBias;
@@ -213,8 +217,13 @@ MediaSample sampleMedia(
   #ifdef SHAPE_DETAIL
   if (mipLevel * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
     vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset + u_detailWindOffset;
-    // 【2026-10-23 移植】隐式 LOD → 显式：同 puffMid/turbulence（循环内导数无定义）。
-    float detail = texture(shapeDetailTexture, detailPosition).r;
+    // 【2026-10-25 拖动「移动噪点」修复】detail 是三层里频率最高的一层（repeat 0.006 →
+    // 1 纹理单位 ≈167m，128³ → ≈1.3m/texel）。march 步长 50-1000m ≫ texel → 沿视线
+    // 严重欠采样；隐式 LOD 在循环内不可靠（导数按 quad 取），相位冻结时这些走样就固化成
+    // 一片随画面平移的亮点（用户「拖动时噪声点垂直移动」）。按 mipLevel（随 rayDistance
+    // 增长）给显式 LOD 下限，把近处步进内的 detail 采样压到可分辨尺度。
+    // shape/turbulence 频率低 5-20 倍，保持隐式 LOD（与参考库一致）。
+    float detail = textureLod(shapeDetailTexture, detailPosition, max(mipLevel * 1.5, u_detailLodFloor)).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(
       vec4(pow(detail, 6.0)),

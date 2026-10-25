@@ -99,6 +99,9 @@ export interface CloudsParameters {
   /** 【2026-10-24】短段/层内薄段 jitter 归零开关：0=关（参考库语义，缺省）/1=旧确定性处置
    * （治贴甲底黑块与层内闪屏）。demo `?cloudsJitterZero=1`。 */
   jitterZeroing?: number
+  /** 【2026-10-25】shapeDetail 显式 LOD 下限（0=隐式；缺省 1.5 压拖动走样）。
+   *  demo `?cloudsDetailLod=`。 */
+  detailLodFloor?: number
   /**
    * 【2026-10-09 颗粒带优化】weather 采样 mip 偏置（密度场低通预滤波，0=关缺省零回归）。
    * 上游对照实锤云缘颗粒带为固有观感但我们的更强——密度场高频是光照放大的输入，

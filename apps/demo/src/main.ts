@@ -678,6 +678,8 @@ async function main(): Promise<void> {
           ...(getString('cloudsWarmup') === '1' ? { warmupOnEveryStop: true } : {}),
           // 【2026-10-25】首次收敛窗口帧数（缺省 6；0=单相位零过渡）
           ...(getNumber('cloudsWarmupFrames') != null ? { warmupFrames: getNumber('cloudsWarmupFrames')! } : {}),
+          // 【2026-10-25】shapeDetail LOD 下限（0=隐式/参考库；缺省 1.5）
+          ...(getNumber('cloudsDetailLod') != null ? { detailLodFloor: getNumber('cloudsDetailLod')! } : {}),
           ...(getString('cloudsAccurate') === '0' ? { accurateSunSkyLight: false } : {}),
           // M3 BSM 云自阴影诊断基线：?cloudsShadow=0 跳过 ShadowPass（主 march fallback
           // 全 0 dummy → Beer=1 无自阴影；开/关对比云体积感用）
