@@ -32,6 +32,9 @@ uniform vec2 jitterOffset;
 // 白点=march 能量积分采样方差的 1px 亮度尖峰（伴生暗斑族对称），时序平均
 // （frameUnfreeze）消掉 ~95% 后的残余为每帧随机注入的稳态——邻域中值直接替换。
 uniform float u_spatialDespeckle;
+// 【2026-10-25 探针】0=关历史重投影（直接用 vUv 采历史，用于判定拖动静止带垂直漂移
+// 是否来自 velocity）。缺省 1=正常。
+uniform float u_reprojectionEnabled;
 
 in vec2 vUv;
 
@@ -144,7 +147,7 @@ void temporalUpscale(
 
   vec4 depthVelocity = getClosestFragment(lowResCoord);
   vec2 velocity = depthVelocity.gb;
-  vec2 prevUv = vUv - velocity;
+  vec2 prevUv = mix(vUv, vUv - velocity, u_reprojectionEnabled);
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
@@ -216,7 +219,7 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   vec4 depthVelocity = getClosestFragment(coord);
   vec2 velocity = depthVelocity.gb;
 
-  vec2 prevUv = vUv - velocity;
+  vec2 prevUv = mix(vUv, vUv - velocity, u_reprojectionEnabled);
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH

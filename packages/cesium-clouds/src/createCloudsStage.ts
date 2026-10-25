@@ -231,6 +231,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   motionPhaseRotate?: boolean
   /** 【2026-10-25】首次收敛窗口帧数（缺省 6，≈0.1s；0=从不轮换，单相位）。 */
   warmupFrames?: number
+  /** 【2026-10-25 探针】0=关历史重投影（缺省 1）。demo `?cloudsReproj=0`。 */
+  reprojectionEnabled?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
    *  缺省 false = 只在首次加载收敛一次。demo `?cloudsWarmup=1`。 */
   warmupOnEveryStop?: boolean
@@ -857,6 +859,7 @@ function buildCloudsStageImpl(
           frame: () => params.marchFrame ?? params.frame,
           // 【2026-10-08 白点治理】输出端孤点中值滤波（demo ?cloudsDespeckle=1）
           spatialDespeckle: options.spatialDespeckle,
+          reprojectionEnabled: options.reprojectionEnabled,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,

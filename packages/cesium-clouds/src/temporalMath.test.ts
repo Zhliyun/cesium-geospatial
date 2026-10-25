@@ -88,11 +88,14 @@ describe('M4 T1 temporalMath', () => {
       prevJitter
     )
 
-    // 性质 1：reprojection = (prevP − prevJitter) * prevV
+    // 性质 1：reprojection = (prevP + prevJitter·2) * prevV
+    // 【2026-10-25 符号修正】列 2 的偏移经 w=−z 除法后 NDC 反号，故「让 prevUv 减去
+    // 上帧 jitter」在矩阵里是 **加** prevJitter*2（旧断言写 −= 与错误实现同源，已更正；
+    // 数值真值验证见 temporalMath.reprojection.test.ts）。
     const expected = Matrix4.clone(prevP)
     const col = Matrix4.getColumn(expected, 2, new Cartesian4())
-    col.x -= prevJitter.x * 2
-    col.y -= prevJitter.y * 2
+    col.x += prevJitter.x * 2
+    col.y += prevJitter.y * 2
     Matrix4.setColumn(expected, 2, col, expected)
     Matrix4.multiply(expected, prevV, expected)
     expect(reprojectionMatrix).toEqual(expected)

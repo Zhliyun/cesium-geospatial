@@ -99,9 +99,13 @@ export function buildReprojectionMatrices(
   // 要采「上帧同世界方向」的像素 q（q + j(t−1) = p + j(t) → q = p + j(t) − j(t−1)），
   // 须在 prevClip **减去上帧** jitter。无 prevJitter（首帧）不补偿，一帧后自愈。
   if (prevJitter != null) {
+    // 【2026-10-25 符号修正】列 2 的偏移经 w=−z 除法后 NDC 反号：加 −2j 实际得到 +j。
+    // 之前写 -= 使 prevUv 落在 u_prev + j_p（应为 u_prev − j_p），历史每帧偏移 2×jitter
+    // = 最多 1 个低分 texel —— 拖动静止时的错位/漂移来源之一。数值验证见
+    // src/zz-temp-reproj.test.ts（纯 yaw + 非零 jitter，断言误差 <1e-5）。
     const col = Matrix4.getColumn(result.reprojectionMatrix, 2, columnScratch)
-    col.x -= prevJitter.x * 2
-    col.y -= prevJitter.y * 2
+    col.x += prevJitter.x * 2
+    col.y += prevJitter.y * 2
     Matrix4.setColumn(result.reprojectionMatrix, 2, col, result.reprojectionMatrix)
   }
   void jitter
