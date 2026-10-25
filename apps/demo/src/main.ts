@@ -169,6 +169,21 @@ async function main(): Promise<void> {
     }
   }
 
+  // 【2026-10-25 调试】精确驱动相机（排查拖动类伪影用）：调用方给绝对朝向/俯仰，
+  // 用于在无鼠标事件的情况下逐帧小幅转动并连拍测量，避免依赖鼠标拖拽的事件路径。
+  ;(window as unknown as { __setCamera?: unknown }).__setCamera = (
+    lon: number, lat: number, h: number, headingDeg: number, pitchDeg: number
+  ): void => {
+    viewer.camera.setView({
+      destination: Cartesian3.fromDegrees(lon, lat, h),
+      orientation: {
+        heading: CesiumMath.toRadians(headingDeg),
+        pitch: CesiumMath.toRadians(pitchDeg),
+        roll: 0
+      }
+    })
+  }
+
   // 视角实时写入 URL hash（复现/分享视角用）：相机停稳后地址栏 #camera= 自动更新为当前
   // lon,lat,height,heading,pitch。排查 artifact 时转到问题视角停一下，复制地址栏即可精确复现。
   viewer.camera.moveEnd.addEventListener(() => {
