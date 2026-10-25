@@ -229,6 +229,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    *  true = 参考库语义（永远轮换）。demo `?cloudsMotionPhase=1`。
    */
   motionPhaseRotate?: boolean
+  /** 【2026-10-25】首次收敛窗口帧数（缺省 6，≈0.1s；0=从不轮换，单相位）。 */
+  warmupFrames?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
    *  缺省 false = 只在首次加载收敛一次。demo `?cloudsWarmup=1`。 */
   warmupOnEveryStop?: boolean
@@ -878,10 +880,12 @@ function buildCloudsStageImpl(
     let prevJitter: Cartesian2 | undefined
     // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
     let prevCameraPos: Cartesian3 | undefined
-    // 【2026-10-25】静止后已推进的相位帧数（达到 MARCH_WARMUP_FRAMES 即冻结）
+    // 【2026-10-25】静止后已推进的相位帧数（达到 warmupFrames 即冻结）
     let stillFrames = 0
     // 【2026-10-25】首次收敛是否已完成（只做一次，避免每次停下都抖一秒）
     let warmedUp = false
+    // 【2026-10-25】收敛窗口帧数（?cloudsWarmupFrames=N；0=从不轮换）
+    const warmupFrames = options.warmupFrames ?? MARCH_WARMUP_FRAMES_DEFAULT
     // 运动自适应 α（T2，2026-09-02）：上帧 look 方向（旋转分量）+ 当前 α 状态（lerp 平滑）
     let prevDirWC: Cartesian3 | undefined
     let motionAlphaCurrent: number | undefined
@@ -912,13 +916,13 @@ function buildCloudsStageImpl(
         // 【2026-10-25 先收敛、再冻结】静止时相位轮换的作用是让 16 个 Bayer 相位都进入
         // 历史平均（消颗粒）；但纯累积（resolve 直出 clippedColor）收敛后若继续轮换，
         // 每帧的 AABB 随当前帧相位变化 → 历史被反复裁剪 → 用户看到的「整体快速抖动」。
-        // 处置：静止后先推进 MARCH_WARMUP_FRAMES 帧完成收敛（16 相位 ×2 轮），之后冻结
+        // 处置：静止后先推进 warmupFrames 帧完成收敛（16 相位 ×2 轮），之后冻结
         // 相位——纯累积模式下历史不会再被 current 拉走，冻结即「保持收敛后的平均值」，
         // 颗粒与抖动同时消掉。相机一动即恢复轮换。
         // 关掉解冻（?cloudsFrameUnfreeze=0）= 一直冻结（旧确定性档）。
         if (!still) {
           stillFrames = 0
-        } else if (stillFrames < MARCH_WARMUP_FRAMES) {
+        } else if (stillFrames < warmupFrames) {
           stillFrames++
         }
         // 【2026-10-25 拖动/停稳抖动治本（两段）】
@@ -932,11 +936,11 @@ function buildCloudsStageImpl(
           if (options.warmupOnEveryStop === true) stillFrames = 0
         } else if (!warmedUp) {
           stillFrames++
-          if (stillFrames >= MARCH_WARMUP_FRAMES) warmedUp = true
+          if (stillFrames >= warmupFrames) warmedUp = true
         }
         const advancePhase =
           options.motionPhaseRotate === true ||
-          (still && !warmedUp && stillFrames < MARCH_WARMUP_FRAMES)
+          (still && !warmedUp && stillFrames < warmupFrames)
         if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
         }
@@ -1283,8 +1287,13 @@ function buildCloudsStageImpl(
  * @param options clouds 开关 + CloudsPassOptions 透传 + quality 档位。
  * @returns handle；options.clouds=false 时返 undefined（零回归，demo 可无条件调用）。
  */
-/** 【2026-10-25】静止后推进相位的帧数：16 相位 ×2 轮 */
-const MARCH_WARMUP_FRAMES = 32
+/**
+ * 【2026-10-25】首次收敛窗口帧数（静止时推进相位的帧数）。
+ * 原为 32 帧（16 相位×2 轮）：60fps 下 ≈0.5s、30fps ≈1s，用户能明显看到首屏与停稳后的
+ * 过渡抖动。缩到 6 帧（≈0.1s，感知阈值以下），仍平均掉 6 个相位的噪声。
+ * `?cloudsWarmupFrames=N` 可调（0 = 完全不轮换 = 单相位，颗粒最大但零过渡）。
+ */
+const MARCH_WARMUP_FRAMES_DEFAULT = 6
 
 export function createCloudsStage(
   scene: Scene,
