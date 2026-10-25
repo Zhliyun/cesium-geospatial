@@ -316,6 +316,8 @@ export function buildSharedCloudsUniforms(
     // 【2026-10-25】shadow 端也调 sampleMedia（shadow.frag:94）→ 必须进共享段，
     // 否则生成端 uniformMap 缺绑 = Unknown uniform 崩帧（2026-09 先例）。
     u_detailLodFloor: () => params.detailLodFloor ?? 1.5,
+    // 【2026-10-26 探针】天气 UV 映射切换（shadow 端同用 getGlobeUv → 必须入共享段）
+    u_globeUvCube: () => params.globeUvCube ?? 0,
     // 【2026-10-09 颗粒带优化】weather 密度场低通偏置（缺省 0=关；?cloudsWeatherBias=）
     u_weatherMipBias: () => params.weatherMipBias ?? 0.0,
     stbnTexture: () => weather.stbn

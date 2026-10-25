@@ -745,7 +745,7 @@ async function main(): Promise<void> {
             || getNumber('temporalAlpha') != null || getNumber('temporalGamma') != null
             || getNumber('cloudsDisocclusion') != null || getNumber('cloudsMotionAlpha') != null
             || getNumber('cloudsInLayerFog') != null || getNumber('cloudsTopPuff') != null
-            || getNumber('cloudsJitterZero') != null
+            || getNumber('cloudsJitterZero') != null || getString('cloudsUv') != null
             ? {
                 parameters: {
                   // 【2026-09-05 P1 光柱 march 步长】?cloudsShaftStep=<米>（缺省 100；
@@ -755,6 +755,9 @@ async function main(): Promise<void> {
                     : {}),
                   // 云密度覆盖（云分布重设计 spec §6：默认 0.4，2026-09-05 拍板 0.3→0.4）；与 ?cloudsWeather= 同传时
                   // 显式优先——上方 weatherPreset 展开已让位（spec §6.1 显式标量优先于预设）
+                  // 【2026-10-26 探针】天气 UV 映射：?cloudsUv=cube 切参考库 cube-sphere
+                  ...(getString('cloudsUv') === 'cube' ? { globeUvCube: 1 } : {}),
+                  ...(getString('cloudsUv') === 'equirect' ? { globeUvCube: 0 } : {}),
                   ...(getNumber('cloudsCoverage') != null
                     ? { coverage: getNumber('cloudsCoverage')! }
                     : {}),

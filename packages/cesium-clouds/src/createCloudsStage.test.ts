@@ -148,6 +148,7 @@ vi.mock('./CloudsResolvePass', () => ({
       setTemporalAlpha: vi.fn((v: number) => { inst.lastMotionAlpha = v }),
       setBayerDirectThrough: vi.fn((v: number) => { inst.lastDirectThrough = v }),
       lastMotionAlpha: undefined as number | undefined,
+      lastDirectThrough: undefined as number | undefined,
       destroy: vi.fn()
     }
     resolvePassProbe.instances.push(inst)

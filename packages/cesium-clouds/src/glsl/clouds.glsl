@@ -5,6 +5,8 @@ uniform float u_unfreezeMipThreshold;
 // 声明放这里（clouds.glsl）而非 clouds.frag：本文件在 clouds.frag 的 #include 处就要用到它。
 // shadow 端不引用 → uniform 不活跃 → uniformMap 缺绑不崩（同 u_unfreezeMipThreshold 先例）。
 uniform float u_detailLodFloor;
+// 【2026-10-26 探针】天气场 UV 映射：0=经纬（缺省）/1=cube-sphere（参考库）
+uniform float u_globeUvCube;
 // 【2026-10-25】噪声纹理边长（与 weatherTextures.ts SHAPE_SIZE / SHAPE_DETAIL_SIZE 同步）。
 // 用于按「每个采样点的实际步长」算显式 LOD：march 步长 50-1000m 远大于 texel 尺度
 //（shape ≈26m/texel，detail ≈5.2m/texel）→ 沿视线必然欠采样；隐式 LOD 在循环内不可靠，
@@ -42,6 +44,29 @@ vec2 getSphericalUv(const vec3 position) {
 // 实现见 git 历史（takram 上游 TODO "Tile and fix seams" 的遗留）。weather 采样域统一
 // 走下方 getGlobeUv 经纬等距圆柱域。
 
+// 【2026-10-26 探针】cube-sphere face uv（参考库映射）与经纬域的运行时切换。
+// 用于验证「高空掠射条纹是否由经纬映射的各向异性导致」——量化对比后再决定是否改烘焙链路。
+vec2 getCubeSphereUv(const vec3 position) {
+  vec3 n = normalize(position);
+  vec3 f = abs(n);
+  vec3 c = n / max(f.x, max(f.y, f.z));
+  vec2 m;
+  if (all(greaterThan(f.yy, f.xz))) {
+    m = c.y > 0.0 ? vec2(-n.x, n.z) : n.xz;
+  } else if (all(greaterThan(f.xx, f.yz))) {
+    m = c.x > 0.0 ? n.yz : vec2(-n.y, n.z);
+  } else {
+    m = c.z > 0.0 ? n.xy : vec2(n.x, -n.y);
+  }
+  vec2 m2 = m * m;
+  float q = dot(m2.xy, vec2(-2.0, 2.0)) - 3.0;
+  float q2 = q * q;
+  vec2 uv;
+  uv.x = sqrt(max(0.0, 1.5 + m2.x - m2.y - 0.5 * sqrt(max(0.0, -24.0 * m2.x + q2)))) * (m.x > 0.0 ? 1.0 : -1.0);
+  uv.y = sqrt(6.0 / max(1e-9, 3.0 - uv.x * uv.x)) * m.y;
+  return uv * 0.5 + 0.5;
+}
+
 vec2 getGlobeUv(const vec3 position) {
   // 经纬等距圆柱域（face 缝根治 2026-09-03，方案 A 用户拍板）：weather atlas 采样域从
   // cube-sphere face uv（takram 上游同位 TODO "Tile and fix seams" 未修，旧实现见 git）
@@ -58,7 +83,8 @@ vec2 getGlobeUv(const vec3 position) {
   vec3 n = normalize(position);
   float lon = atan(n.y, n.x);
   float lat = asin(clamp(n.z, -1.0, 1.0));
-  return vec2(lon * 0.15915494309189535 + 0.5, 0.5 + lat * 0.3183098861837907); // 1/2π, 1/π
+  vec2 uvEquirect = vec2(lon * 0.15915494309189535 + 0.5, 0.5 + lat * 0.3183098861837907);
+  return mix(uvEquirect, getCubeSphereUv(position), u_globeUvCube); // 1/2π, 1/π
 }
 
 float getMipLevel(const vec2 uv) {

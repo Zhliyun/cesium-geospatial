@@ -102,6 +102,9 @@ export interface CloudsParameters {
   /** 【2026-10-25】shapeDetail 显式 LOD 下限（0=隐式；缺省 1.5 压拖动走样）。
    *  demo `?cloudsDetailLod=`。 */
   detailLodFloor?: number
+  /** 【2026-10-26 探针】天气 UV 映射：0=经纬（缺省）/1=cube-sphere（参考库）。
+   *  demo `?cloudsUv=cube`。 */
+  globeUvCube?: number
   /**
    * 【2026-10-09 颗粒带优化】weather 采样 mip 偏置（密度场低通预滤波，0=关缺省零回归）。
    * 上游对照实锤云缘颗粒带为固有观感但我们的更强——密度场高频是光照放大的输入，
