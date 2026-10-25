@@ -229,6 +229,9 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    *  true = 参考库语义（永远轮换）。demo `?cloudsMotionPhase=1`。
    */
   motionPhaseRotate?: boolean
+  /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
+   *  缺省 false = 只在首次加载收敛一次。demo `?cloudsWarmup=1`。 */
+  warmupOnEveryStop?: boolean
   /**
    * 【2026-10-08 白点治理】resolve 输出端孤点中值滤波强度（0=关缺省零回归；1=全替换）。
    * 配合 frameUnfreeze 使用（时序平均消 ~95%，滤波清残余稳态孤点）。demo `?cloudsDespeckle=1`。
@@ -877,6 +880,8 @@ function buildCloudsStageImpl(
     let prevCameraPos: Cartesian3 | undefined
     // 【2026-10-25】静止后已推进的相位帧数（达到 MARCH_WARMUP_FRAMES 即冻结）
     let stillFrames = 0
+    // 【2026-10-25】首次收敛是否已完成（只做一次，避免每次停下都抖一秒）
+    let warmedUp = false
     // 运动自适应 α（T2，2026-09-02）：上帧 look 方向（旋转分量）+ 当前 α 状态（lerp 平滑）
     let prevDirWC: Cartesian3 | undefined
     let motionAlphaCurrent: number | undefined
@@ -916,16 +921,22 @@ function buildCloudsStageImpl(
         } else if (stillFrames < MARCH_WARMUP_FRAMES) {
           stillFrames++
         }
-        // 【2026-10-25 拖动抖动治本】相位推进只在「静止收敛期」发生：
-        // 相机运动时重投影本身有误差（云缘 alpha/速度跳变处尤甚），再叠加每帧不同的
-        // STBN 相位，历史平均逐帧被拉向不同噪声实现 → 用户看到的「拖动/旋转时抖动」。
-        // 参考库是持续动画场景，这个代价被画面自身的运动掩盖，我们的静态/操控场景不会。
-        // ?cloudsMotionPhase=1 可开回参考库语义（运动中也不断轮换）。
-        // prevCameraPos == null（首帧）也走收敛推进，避免首帧相位卡死
+        // 【2026-10-25 拖动/停稳抖动治本（两段）】
+        // ① 运动时冻结相位：运动中重投影本就有误差，再叠每帧不同 STBN 相位 → 历史平均
+        //    逐帧偏移 = 拖动/旋转抖动。
+        // ② 收敛窗口**只做一次**（首次加载）：此前是「每次停下都重跑 32 帧」，30fps 下
+        //    ≈1 秒，用户看到「停下来抖一秒」。改为首次收敛完成后不再重跑——停下立即冻结，
+        //    历史里保留的仍是那次收敛得到的多相位平均，颗粒不会回来。
+        // ?cloudsMotionPhase=1 开回参考库语义（运动中也轮换）；?cloudsWarmup=1 恢复每次停下重收敛。
+        if (!still) {
+          if (options.warmupOnEveryStop === true) stillFrames = 0
+        } else if (!warmedUp) {
+          stillFrames++
+          if (stillFrames >= MARCH_WARMUP_FRAMES) warmedUp = true
+        }
         const advancePhase =
-          prevCameraPos == null || still
-            ? stillFrames < MARCH_WARMUP_FRAMES
-            : options.motionPhaseRotate === true
+          options.motionPhaseRotate === true ||
+          (still && !warmedUp && stillFrames < MARCH_WARMUP_FRAMES)
         if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
         }

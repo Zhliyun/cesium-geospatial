@@ -674,6 +674,8 @@ async function main(): Promise<void> {
           ...(getString('cloudsHaze') === '0' ? { haze: false } : {}),
           // 【2026-10-25】运动时是否继续轮换相位（缺省冻结=治拖动抖动）
           ...(getString('cloudsMotionPhase') === '1' ? { motionPhaseRotate: true } : {}),
+          // 【2026-10-25】每次停下重跑收敛窗口（旧行为，会有 ~1s 过渡抖动）
+          ...(getString('cloudsWarmup') === '1' ? { warmupOnEveryStop: true } : {}),
           ...(getString('cloudsAccurate') === '0' ? { accurateSunSkyLight: false } : {}),
           // M3 BSM 云自阴影诊断基线：?cloudsShadow=0 跳过 ShadowPass（主 march fallback
           // 全 0 dummy → Beer=1 无自阴影；开/关对比云体积感用）
