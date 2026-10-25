@@ -82,13 +82,14 @@ export const cloudsQualityPresets: Record<CloudsQualityPreset, ResolvedCloudsQua
     main: { ...HIGH_MAIN },
     params: { shadowCascadeCount: 3 },
     shadow: { cascadeCount: 3, mapSize: 512, march: { ...HIGH_MARCH } },
-    // 【2026-10-25 定稿 N=1（全分 march + TAA）】低分路径（N>1 的 upscale resolve）存在
-    // 未根治的「视角运动时噪点垂直漂移」：用户实测 `?cloudsUpscale=1` 下完全消失，
-    // 逐块光流也证实 N=4 的高频层随运动产生垂直位移。而当前构建下 N=1 与 N=4 的静止
-    // 颗粒已几乎相同（4.49 vs 4.40——STBN 每帧轮换、按步长 LOD、纯累积三项修完之后），
-    // 故缺省回到全分。代价：主 march 像素 ×16（早期实测 N=1≈19ms / N=4≈8.7ms）。
-    // 想试低分：?cloudsUpscale=4。低分漂移根治后应再评估是否切回。
-    upscaleDivisor: 1,
+    // 【2026-10-24 定稿】high（demo 缺省）= 1/4 分辨率 march，与参考库一致。
+    // 同帧实测（2026-01-15T12Z 欧洲云甲俯视，1920x1080，静止）：
+    //   N=2 颗粒 20.43 / 77fps     N=4 颗粒 9.41 / 114fps   → 颗粒 −54% 且快 48%
+    // 说明：上一轮「N=4 不可接受」的目验是在 despeckle 缺省为 1 的构建上做的——
+    // 那时 N>1 的 despeckle 窗口在低分域相当于屏幕 12px 模糊，观感被判死刑。
+    // 现在 despeckle 缺省为 0，N=4 是清晰度与噪声同时更好的档位。
+    // 回退：?cloudsUpscale=2。
+    upscaleDivisor: 4,
     groundShadowSamples: 16
   },
   // ultra：仅 minStepSize 50→10 + mapSize 512→1024
@@ -171,7 +172,7 @@ export function applyQualityPreset(quality: CloudsQualityPreset, options: Clouds
 
   // upscaleDivisor：用户显式 > 档位 > 缺省 1（2026-09-02 用户定稿全分 TAA 档为默认；
   // T1 合并时缺省 4=three 原文零回归，ultra 档显式 2 沿用）
-  const upscaleDivisor: 1 | 2 | 4 = options.upscaleDivisor ?? preset.upscaleDivisor ?? 1
+  const upscaleDivisor: 1 | 2 | 4 = options.upscaleDivisor ?? preset.upscaleDivisor ?? 4
 
   return { main, params, shadow: { cascadeCount: n, mapSize: preset.shadow.mapSize }, groundShadowSamples: preset.groundShadowSamples, upscaleDivisor }
 }
