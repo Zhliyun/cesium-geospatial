@@ -53,6 +53,13 @@ uniform float u_clipEnabled;
 // 实测静止时重投影矩阵因 ECEF float32 精度仍有亚像素残差，逐帧把 history 采样点抖动
 // ±0.x px → 云区逐像素时间标准差 5.6（参考库 1.34）；死区 0.5px 后 1.35。0=关（零回归）。
 uniform float u_velocityThresholdPx;
+// 【2026-10-26 远云抖动】EMA 权重的距离衰减系数（0=关）。远处云视差小、重投影近乎精确，
+// 可用长窗平均压相位噪声；近处保短窗避免拖影。配合 u_temporalBlend（运动中值）使用。
+uniform float u_blendDepthFalloff;
+// 【2026-10-26 远地平线抖动】远云专用 EMA：近处保参考库纯裁剪（无拖影），远处（视差小、
+// 重投影近乎精确）改用 EMA 长窗平均。u_temporalBlendFar=0 时关闭（零回归）。
+uniform float u_temporalBlendFar;
+uniform vec2 u_farRange;
 
 in vec2 vUv;
 
@@ -227,7 +234,15 @@ void temporalUpscale(
   // 回退：`?cloudsUpscale=1` 走下面的 TAA 分支（那里保留 α 混合，与参考库 TAA 分支一致）。
   // 【2026-10-26】u_temporalBlend>0 时改为 EMA（α=1/16 即 16 相位滑动平均）：纯裁剪在
   // march 逐相位摆动大时不会平均（历史被 AABB 拉向当前或被冻结），实测 8× 于参考库。
-  outputColor = mix(clippedColor, currentColor, u_temporalBlend);
+  // 【2026-10-26】远近分治：近处 α=u_temporalBlend（缺省 0=纯裁剪，无拖影）；
+  // 远处 α=u_temporalBlendFar（长窗平均压远地平线相位噪声）。远段不做 AABB 裁剪
+  // （裁剪会把历史拉回当前帧邻域，平均失效）。
+  float farT = u_temporalBlendFar > 0.0
+    ? smoothstep(u_farRange.x, u_farRange.y, max(0.0, depthVelocity.r))
+    : 0.0;
+  vec4 accumColor = mix(clippedColor, historyColor, farT);
+  float blendAlpha = mix(u_temporalBlend, u_temporalBlendFar, farT);
+  outputColor = mix(accumColor, currentColor, blendAlpha);
   // 【outputColorSanityGuard】NaN 兜底：任何上游残留 NaN（含 mix 的 IEEE 传播）直出 current。
   if (any(isnan(outputColor.rgb))) {
     outputColor = currentColor;

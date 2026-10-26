@@ -713,6 +713,8 @@ async function main(): Promise<void> {
             ? { convergeBlend: getNumber('cloudsConvergeBlend')! } : {}),
           ...(getNumber('cloudsMotionBlend') != null
             ? { motionBlend: getNumber('cloudsMotionBlend')! } : {}),
+          ...(getNumber('cloudsFarBlend') != null
+            ? { farBlend: getNumber('cloudsFarBlend')! } : {}),
           // 【2026-10-26】速度死区（全分像素）——静止亚像素残差归零
           ...(getNumber('cloudsVelDeadzone') != null
             ? { velocityThresholdPx: getNumber('cloudsVelDeadzone')! } : {}),

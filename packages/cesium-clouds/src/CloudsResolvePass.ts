@@ -70,6 +70,10 @@ export interface CloudsResolvePassOptions {
   clipEnabled?: number
   /** 【2026-10-26】速度死区（全分像素；0=关）。demo `?cloudsVelDeadzone=0.5`。 */
   velocityThresholdPx?: number
+  /** 【2026-10-26】EMA 权重的距离衰减（0=关）。 */
+  blendDepthFalloff?: number
+  /** 【2026-10-26】远云专用 EMA 权重（0=关）。 */
+  temporalBlendFar?: number
   /** 【2026-10-26】AABB 最小半宽（0=零回归；用于让历史在 march 噪声摆动下存活） */
   clipMinHalf?: number
   /** 【2026-10-25 探针】0=关历史重投影（排查拖动静止垂直漂移是否来自 velocity）。缺省 1。 */
@@ -115,6 +119,10 @@ export interface CloudsResolvePass {
   setTemporalBlend(value: number): void
   /** 【2026-10-26】静止收敛：历史重投影开关（静止应为 0） */
   setReprojectionEnabled(value: number): void
+  /** 【2026-10-26】EMA 权重的距离衰减系数（运动时 >0，静止 0） */
+  setBlendDepthFalloff(value: number): void
+  /** 【2026-10-26】远云专用 EMA 权重（0=关） */
+  setTemporalBlendFar(value: number): void
   /** 释放：双内部 primitive（各含 FBO）+ 双 Texture。幂等。 */
   destroy(): void
 }
@@ -137,6 +145,9 @@ export function createCloudsResolvePass(
   let clipEnabled = options.clipEnabled ?? 1
   let temporalBlend = options.temporalBlend ?? 0
   let reprojectionEnabled = options.reprojectionEnabled ?? 1
+  const farRange = new Cartesian2(5e4, 1e5)
+  let blendDepthFalloff = options.blendDepthFalloff ?? 0
+  let temporalBlendFar = options.temporalBlendFar ?? 0
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
@@ -180,7 +191,10 @@ export function createCloudsResolvePass(
     u_clipMinHalf: () => clipMinHalf,
     u_temporalBlend: () => temporalBlend,
     u_clipEnabled: () => clipEnabled,
-    u_velocityThresholdPx: () => options.velocityThresholdPx ?? 0
+    u_velocityThresholdPx: () => options.velocityThresholdPx ?? 0,
+    u_blendDepthFalloff: () => blendDepthFalloff,
+    u_temporalBlendFar: () => temporalBlendFar,
+    u_farRange: () => farRange
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——
@@ -257,6 +271,12 @@ export function createCloudsResolvePass(
     },
     setReprojectionEnabled(value: number): void {
       reprojectionEnabled = value
+    },
+    setBlendDepthFalloff(value: number): void {
+      blendDepthFalloff = value
+    },
+    setTemporalBlendFar(value: number): void {
+      temporalBlendFar = value
     },
     setBayerDirectThrough(value: number): void {
       bayerDirectThrough = value

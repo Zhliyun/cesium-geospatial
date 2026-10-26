@@ -151,6 +151,8 @@ vi.mock('./CloudsResolvePass', () => ({
       setClipEnabled: vi.fn(),
       setTemporalBlend: vi.fn(),
       setReprojectionEnabled: vi.fn(),
+      setBlendDepthFalloff: vi.fn(),
+      setTemporalBlendFar: vi.fn(),
       setClipMinHalf: vi.fn(),
       lastMotionAlpha: undefined as number | undefined,
       lastDirectThrough: undefined as number | undefined,
