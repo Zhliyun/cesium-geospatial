@@ -266,3 +266,20 @@ EMA 窗越长拉回越弱（1/32 每帧拉 3%，1/256 只拉 0.4%）——把窗
    `?cloudsMotionJitter=` 调低，也不会再触发等高线，旋钮从此是安全的观感取舍。
 
 实测（6094m 俯视，`cloudsMotionJitter=0.15`）：光深步进 dither 恢复，画面无条带/等高线。
+
+## 十三、2026-10-27 补轮八：俯视云面噪点的「等距花纹」
+
+用户：俯视看云表面很多噪点，离云远近变化时噪点呈等高线花纹变化。
+
+**确认到的机制（已修）**：detail 层是**随机门控**——
+`mipLevel*0.5 + (jitter-0.5)*0.5 < 0.5` ⇔ `jitter < 1 - mipLevel`，即应用概率 = `1 − mipLevel`。
+在 mipLevel 0→1 的**等距过渡带**里，每个 march 采样点用抛硬币决定要不要 detail →
+带内满噪点，且这条带是「到相机等距线」，相机高度一变就在云面上平移 = 用户描述的等高线花纹。
+
+**修**：随机门控 → **平滑权重** `detailGate = saturate(1.0 − mipLevel)`（期望值相同、零随机性），
+detail 随距离连续淡出。u_jitterScale=1 时形状与参考库一致，只是不再有噪点带。
+
+**未闭环**：若该现象仍在，下一个嫌疑是 `mix(stepSize, maxStepSize, min(1.0, mipLevel))`
+在 mipLevel=1 处的**导数拐点**（步长从 mix 切到 maxStepSize）——同样是 mip=1 等值线，
+同样是随距离移动的环。判别：`?cloudsQuality=ultra` 若环纹消失=采样类；`?cloudsDetailLod=`
+改 detail LOD 下限看噪点是否变。

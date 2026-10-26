@@ -250,7 +250,14 @@ MediaSample sampleMedia(
   #endif // DEBUG_SHOW_SAMPLE_COUNT
 
   #ifdef SHAPE_DETAIL
-  if (mipLevel * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
+  // 【2026-10-27 俯视等高线噪点带】原式是**随机门控**：
+  //   mipLevel*0.5 + (jitter-0.5)*0.5 < 0.5  ⇔  jitter < 1 - mipLevel
+  // 即 detail 层的应用概率 = 1 − mipLevel。mip 在 0→1 之间过渡的那条**等距等高线带**里，
+  // 每个 march 采样点随机决定用不用 detail → 带内满是噪点；相机高度一变，这条带（=等距线）
+  // 就在云面上移动。这正是用户报的「俯视看云表面很多噪点、随距离呈等高线花纹变化」。
+  // 改为**平滑权重**（同等期望值、零随机性）：detail 随距离连续淡出，不再有噪点带。
+  float detailGate = saturate(1.0 - mipLevel);
+  if (detailGate > 0.001) {
     vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset + u_detailWindOffset;
     // 【2026-10-25 拖动「移动噪点」修复】detail 是三层里频率最高的一层（repeat 0.006 →
     // 1 纹理单位 ≈167m，128³ → ≈1.3m/texel）。march 步长 50-1000m ≫ texel → 沿视线
@@ -266,7 +273,7 @@ MediaSample sampleMedia(
       vec4(1.0 - detail),
       remapClamped(weather.heightFraction, vec4(0.2), vec4(0.4))
     );
-    modifier = mix(vec4(0.0), modifier, shapeDetailAmounts);
+    modifier = mix(vec4(0.0), modifier, shapeDetailAmounts * detailGate);
     density = remapClamped(density * 2.0, vec4(modifier * 0.5), vec4(1.0));
 
     #ifdef DEBUG_SHOW_SAMPLE_COUNT
