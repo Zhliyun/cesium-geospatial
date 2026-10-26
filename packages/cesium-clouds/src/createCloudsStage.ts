@@ -265,8 +265,9 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   converge?: boolean
   /** 【2026-10-26】静止 EMA 权重（缺省 1/32）。demo `?cloudsConvergeBlend=`。 */
   convergeBlend?: number
-  /** 【2026-10-26】运动 EMA 权重（缺省 1/16，重投影开启 + 不做裁剪；旋转/平移实测无拖影）。
-   *  demo `?cloudsMotionBlend=`。 */
+  /** 【2026-10-26】运动 EMA 权重（缺省 0.05 ≈ 20 帧窗；重投影开启 + 不做裁剪）。
+   *  实测旋转实时时间标准差：0（纯裁剪）9.16 / 0.125 9.22 / 0.05 **7.96** / 0.02 7.22（已发糊）。
+   *  `?cloudsMotionBlend=0` 回退纯裁剪（更锐但有颗粒闪烁）。 */
   motionBlend?: number
   /** 【2026-10-26】运动 EMA 权重的距离衰减（缺省 0=关）。 */
   motionBlendDepthFalloff?: number
@@ -1021,10 +1022,10 @@ function buildCloudsStageImpl(
           // 1.48→2.53）。重投影保证 EMA 不拖影，0.25 的 4 帧窗足以压掉相位噪声。
           // 运动 EMA=0 时退回参考库语义（AABB 裁剪 + 无 EMA）：裁剪会把历史约束在当前帧
           // 邻域内，从根上消除拖影；EMA>0 时不裁剪（裁剪会吃掉平均，见 2026-10-26 实测）。
-          const movingBlend = options.motionBlend ?? 0
+          const movingBlend = options.motionBlend ?? 0.05
           resolvePass?.setReprojectionEnabled(still ? 0 : 1)
           // 近处：blend=0 + 裁剪开 → 参考库纯裁剪（无拖影）；远处另有 farBlend 长窗。
-          resolvePass?.setClipEnabled(still ? 0 : 1)
+          resolvePass?.setClipEnabled(still ? 0 : (movingBlend > 0 ? 0 : 1))
           resolvePass?.setTemporalBlend(still ? (options.convergeBlend ?? 0.03125) : movingBlend)
           // 运动时远处云用长窗平均（视差小、重投影精确）；静止不启用（保持现收敛档）
           resolvePass?.setBlendDepthFalloff(
