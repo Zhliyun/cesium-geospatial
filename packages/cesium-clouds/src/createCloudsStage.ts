@@ -1191,8 +1191,8 @@ function buildCloudsStageImpl(
         if (options.geometryJitter === false) {
           params.temporalJitter.x = 0
           params.temporalJitter.y = 0
-        } else if (!frameStill && options.geometryJitter !== true && options.uniformFilter === false) {
-          // 运动时保留 35%：全幅会让云层相对地面整体晃 ±1.5px（用户反馈「整体晃」），
+        } else if (!frameStill && options.geometryJitter !== true) {
+          // 运动时保留 35%（不分档：统一档同样适用，用户反馈 100% 时「一动就抖」）：
           // 归零又会让远地平线的采样网格与像素锚定（用户反馈「噪点游移」）。
           // 0.35 → 位移 ≤0.5px（亚像素不可见），采样相位仍在变。
           const k = options.geometryJitterScale ?? 0.35
