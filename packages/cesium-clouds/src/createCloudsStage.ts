@@ -273,6 +273,9 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   motionBlendDepthFalloff?: number
   /** 【2026-10-26】远云（>30km 起）专用 EMA 权重（缺省 0.05；0=关）。 */
   farBlend?: number
+  /** 【2026-10-26 一致性】true（缺省）= 运动/静止用同一套时域参数（重投影开+不裁剪+EMA）；
+   *  false = 回退「静止关重投影/运动纯裁剪」两套。demo `?cloudsUniform=0`。 */
+  uniformFilter?: boolean
   /** 【2026-10-26】几何（射线）Bayer 抖动三态：undefined=仅静止（缺省）/ false=从不 / true=始终。
    *  demo `?cloudsGeomJitter=0|1`。 */
   geometryJitter?: boolean
@@ -1029,11 +1032,20 @@ function buildCloudsStageImpl(
           // 1.48→2.53）。重投影保证 EMA 不拖影，0.25 的 4 帧窗足以压掉相位噪声。
           // 运动 EMA=0 时退回参考库语义（AABB 裁剪 + 无 EMA）：裁剪会把历史约束在当前帧
           // 邻域内，从根上消除拖影；EMA>0 时不裁剪（裁剪会吃掉平均，见 2026-10-26 实测）。
+          // 【2026-10-26 一致性】用户要求「运动与静止观感一致」：不再按 still 切换两套
+          // 参数，全程同一套（重投影开 + 不裁剪 + EMA）。重投影偏置修好后才可行
+          //（48eb972：march 速度里的 −jitter 已在 resolve 侧扣掉）。
+          // ?cloudsUniform=0 回退到「静止/运动两套参数」的旧行为。
+          const uniformFilter = options.uniformFilter === true
           const movingBlend = options.motionBlend ?? 0
-          resolvePass?.setReprojectionEnabled(still ? 0 : 1)
+          resolvePass?.setReprojectionEnabled(still && !uniformFilter ? 0 : 1)
           // 近处：blend=0 + 裁剪开 → 参考库纯裁剪（无拖影）；远处另有 farBlend 长窗。
-          resolvePass?.setClipEnabled(still ? 0 : (movingBlend > 0 ? 0 : 1))
-          resolvePass?.setTemporalBlend(still ? (options.convergeBlend ?? 0.03125) : movingBlend)
+          resolvePass?.setClipEnabled(uniformFilter ? 0 : (still ? 0 : (movingBlend > 0 ? 0 : 1)))
+          resolvePass?.setTemporalBlend(
+            uniformFilter
+              ? (options.convergeBlend ?? 0.03125)
+              : (still ? (options.convergeBlend ?? 0.03125) : movingBlend)
+          )
           // 运动时远处云用长窗平均（视差小、重投影精确）；静止不启用（保持现收敛档）
           resolvePass?.setBlendDepthFalloff(
             still ? 0 : (options.motionBlendDepthFalloff ?? 0)
@@ -1174,7 +1186,7 @@ function buildCloudsStageImpl(
         if (options.geometryJitter === false) {
           params.temporalJitter.x = 0
           params.temporalJitter.y = 0
-        } else if (!frameStill && options.geometryJitter !== true) {
+        } else if (!frameStill && options.geometryJitter !== true && options.uniformFilter === false) {
           // 运动时保留 35%：全幅会让云层相对地面整体晃 ±1.5px（用户反馈「整体晃」），
           // 归零又会让远地平线的采样网格与像素锚定（用户反馈「噪点游移」）。
           // 0.35 → 位移 ≤0.5px（亚像素不可见），采样相位仍在变。
