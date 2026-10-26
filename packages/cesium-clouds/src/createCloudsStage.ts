@@ -940,6 +940,9 @@ function buildCloudsStageImpl(
     let prevCameraPos: Cartesian3 | undefined
     // 【2026-10-25】静止后已推进的相位帧数（达到 warmupFrames 即冻结）
     let stillFrames = 0
+    // 【2026-10-26】静止判定结果提到外层——computeTemporalJitter（另一个 if 块）要用它
+    // 决定是否注入几何抖动
+    let frameStill = false
     // 【2026-10-25】首次收敛是否已完成（只做一次，避免每次停下都抖一秒）
     let warmedUp = false
     // 【2026-10-25】收敛窗口帧数（?cloudsWarmupFrames=N；0=从不轮换）
@@ -972,6 +975,7 @@ function buildCloudsStageImpl(
           const cosAngle = Math.min(1, Math.max(-1, Cartesian3.dot(prevDirWC, camera.directionWC)))
           still = Math.acos(cosAngle) < 1e-4
         }
+        frameStill = still
         // 【2026-10-08 白点排查】marchFrame 与 frame 双计数拆分：
         // - frame：原语义（静止冻结）——shadow/BSM 端噪声相位（全端解冻实测 BSM 帧间
         //   去相关 → 主 march 光深跳动 → 暗斑闪烁，2026-10-08 判别实验）。
@@ -1022,7 +1026,7 @@ function buildCloudsStageImpl(
           // 1.48→2.53）。重投影保证 EMA 不拖影，0.25 的 4 帧窗足以压掉相位噪声。
           // 运动 EMA=0 时退回参考库语义（AABB 裁剪 + 无 EMA）：裁剪会把历史约束在当前帧
           // 邻域内，从根上消除拖影；EMA>0 时不裁剪（裁剪会吃掉平均，见 2026-10-26 实测）。
-          const movingBlend = options.motionBlend ?? 0.05
+          const movingBlend = options.motionBlend ?? 0
           resolvePass?.setReprojectionEnabled(still ? 0 : 1)
           // 近处：blend=0 + 裁剪开 → 参考库纯裁剪（无拖影）；远处另有 farBlend 长窗。
           resolvePass?.setClipEnabled(still ? 0 : (movingBlend > 0 ? 0 : 1))
@@ -1156,7 +1160,14 @@ function buildCloudsStageImpl(
           cloudsPass.marchHeight,
           params.temporalJitter
         )
-        if (options.geometryJitter === false) {
+        // 【2026-10-26 拖动抖动】几何抖动**只在静止时启用**：我们的 jitter 只作用于云射线，
+        // Cesium 渲染的地面不抖 → 运动时云层相对地面每帧晃 ±1.5px（肉眼=整体抖动，且是
+        // 低频相干位移，任何时域平均都压不掉，反而会因重投影残差产生拖影）。静止时 jitter
+        // 由 EMA 1/32 平均掉，保留它换取低分方块的抗锯齿。
+        // 三态：undefined=仅静止（缺省）/ false=从不 / true=始终
+        const wantJitter = options.geometryJitter === true
+          || (options.geometryJitter !== false && frameStill)
+        if (!wantJitter) {
           params.temporalJitter.x = 0
           params.temporalJitter.y = 0
         }

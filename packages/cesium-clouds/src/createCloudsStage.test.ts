@@ -801,33 +801,34 @@ describe('M4 T7 temporal 编排', () => {
     Cartesian3.add(basePos, new Cartesian3(20, 0, 0), camera.positionWC)
     // swap 每帧一次（D2：preRender 开头，等价 three render 后 swap）
     expect(inst.swapBuffers).toHaveBeenCalledTimes(2)
-    // jitter 非 0（Bayer offset≠格中心时）且相邻帧相位不同
-    const j1 = Cartesian2.clone(
-      (handle!.cloudsPass as any) && paramsOf(handle!)!.temporalJitter
-    )
+    // 【2026-10-26】运动时几何抖动恒 0（云射线抖动只作用于云，地面不抖 → 运动时云层
+    // 相对地面 ±1.5px 晃动 = 用户反馈的「滑动视角抖动」）
+    expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
     Cartesian3.add(basePos, new Cartesian3(30, 0, 0), camera.positionWC)
     firePreRender(scene)
-    const j2 = paramsOf(handle!)!.temporalJitter
-    expect(j2.x).not.toBeCloseTo(j1.x, 6)
+    expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
     handle!.destroy()
   })
 
   // 【2026-10-26 静止收敛档缺省开】相位永远轮换（参考库语义）：运动中 jitter 逐帧变化，
   // 历史才不会因「相位冻结 + 重投影」而拖出竖条纹（远端 68 实测：旧行为 45° 拖动后满屏
   // 竖条纹；静止/运动噪声也被 1/32 EMA 压到参考库同档）。
-  it('缺省（converge）：相机运动时相位仍轮换', () => {
+  it('缺省（converge）：相机运动时相位仍轮换，但几何抖动为 0', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
     const camera = scene.camera as { positionWC: Cartesian3 }
     const basePos = Cartesian3.clone(camera.positionWC)
     firePreRender(scene)
-    const j1 = Cartesian2.clone(paramsOf(handle!)!.temporalJitter)
+    const m1 = paramsOf(handle!)!.marchFrame
     Cartesian3.add(basePos, new Cartesian3(50, 0, 0), camera.positionWC)
     firePreRender(scene)
     Cartesian3.add(basePos, new Cartesian3(100, 0, 0), camera.positionWC)
     firePreRender(scene)
-    const j2 = paramsOf(handle!)!.temporalJitter
-    expect(j2.x).not.toBeCloseTo(j1.x, 6)
+    // 相位（STBN 层）逐帧轮换
+    expect(paramsOf(handle!)!.marchFrame).not.toBe(m1)
+    // 几何抖动（射线偏移）运动时为 0
+    expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
+    expect(paramsOf(handle!)!.temporalJitter.y).toBe(0)
     handle!.destroy()
   })
 
