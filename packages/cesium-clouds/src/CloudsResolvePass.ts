@@ -74,6 +74,8 @@ export interface CloudsResolvePassOptions {
   blendDepthFalloff?: number
   /** 【2026-10-26】远云专用 EMA 权重（0=关）。 */
   temporalBlendFar?: number
+  /** 【2026-10-26】历史采样点吸附整像素（缺省 1=开；0=关）。 */
+  historySnap?: number
   /** 【2026-10-26】上帧几何 jitter（低分 UV）读取器——resolve 里从 velocity 中扣除。 */
   prevJitterUV?: () => Cartesian2
   /** 【2026-10-26】AABB 最小半宽（0=零回归；用于让历史在 march 噪声摆动下存活） */
@@ -199,7 +201,8 @@ export function createCloudsResolvePass(
     u_blendDepthFalloff: () => blendDepthFalloff,
     u_temporalBlendFar: () => temporalBlendFar,
     u_farRange: () => farRange,
-    u_prevJitterUV: () => options.prevJitterUV?.() ?? ZERO2
+    u_prevJitterUV: () => options.prevJitterUV?.() ?? ZERO2,
+    u_historySnap: () => options.historySnap ?? 1
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——

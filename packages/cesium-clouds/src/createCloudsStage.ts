@@ -256,6 +256,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   reprojectionJitter?: boolean
   /** 【2026-10-26】resolve 速度死区（全分像素；0=关）。demo `?cloudsVelDeadzone=0.5`。 */
   velocityThresholdPx?: number
+  /** 【2026-10-26】历史采样点吸附整像素（缺省 1；0=关）。demo `?cloudsHistorySnap=0`。 */
+  historySnap?: number
   /**
    * 【2026-10-26 静止收敛档】相位持续轮换 + 静止时「关重投影 / 关 AABB 裁剪 / EMA 1/32」，
    * 运动中回到参考库语义（裁剪 + 重投影 + 无 EMA）。实测云区逐像素时间标准差
@@ -918,6 +920,7 @@ function buildCloudsStageImpl(
           clipMinHalf: options.clipMinHalf,
           temporalBlend: options.temporalBlend,
           clipEnabled: options.clipEnabled,
+          historySnap: options.historySnap,
           // 【2026-10-26】上帧几何 jitter 交给 resolve 从 velocity 里扣除（矩阵注入已废）
           prevJitterUV: () => prevJitter ?? ZERO_JITTER,
           velocityThresholdPx: options.velocityThresholdPx,

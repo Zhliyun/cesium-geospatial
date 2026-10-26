@@ -735,6 +735,8 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsMotionBlend') != null
             ? { motionBlend: getNumber('cloudsMotionBlend')! } : {}),
           ...(getString('cloudsUniform') === '0' ? { uniformFilter: false } : {}),
+          ...(getNumber('cloudsHistorySnap') != null
+            ? { historySnap: getNumber('cloudsHistorySnap')! } : {}),
           ...(getNumber('cloudsFarBlend') != null
             ? { farBlend: getNumber('cloudsFarBlend')! } : {}),
           ...(getNumber('cloudsGeomJitter') != null

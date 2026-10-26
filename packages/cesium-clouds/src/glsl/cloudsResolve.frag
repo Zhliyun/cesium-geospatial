@@ -65,6 +65,10 @@ uniform vec2 u_farRange;
 // （实测静止时 velocity ≈ −jitter，应为 0）。静止/拖动时 history 被采偏 ~1.5 低分 texel
 // = 拖影。正确补偿：histUV = vUv − velocity − j(t−1)。
 uniform vec2 u_prevJitterUV;
+// 【2026-10-26 架构改造】历史采样点吸附到整像素（0=关）。长窗 EMA 在运动时每帧做亚像素
+// 双线性重采样 → 沿运动方向累积重采样模糊 = 拖影。吸附到 texel 中心后 texture() 等价
+// texelFetch，不再累积模糊（代价：丢掉 ≤0.5px 的亚像素时域超采样收益）。
+uniform float u_historySnap;
 
 in vec2 vUv;
 
@@ -120,6 +124,12 @@ vec2 applyVelocityDeadzone(const vec2 velocity, const ivec2 coord) {
   }
   vec2 velPx = velocity * vec2(textureSize(colorBuffer, 0));
   return max(abs(velPx).x, abs(velPx).y) < u_velocityThresholdPx ? vec2(0.0) : velocity;
+}
+
+
+vec2 snapToTexel(const vec2 uv) {
+  vec2 size = vec2(textureSize(colorHistoryBuffer, 0));
+  return (floor(uv * size) + 0.5) / size;
 }
 
 vec4 getClosestFragment(const ivec2 coord) {
@@ -187,6 +197,7 @@ void temporalUpscale(
   vec4 depthVelocity = getClosestFragment(lowResCoord);
   vec2 velocity = applyVelocityDeadzone(depthVelocity.gb, lowResCoord);
   vec2 prevUv = mix(vUv, vUv - velocity - u_prevJitterUV, u_reprojectionEnabled);
+  if (u_historySnap > 0.5) { prevUv = snapToTexel(prevUv); }
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
@@ -280,6 +291,7 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   vec2 velocity = applyVelocityDeadzone(depthVelocity.gb, coord);
 
   vec2 prevUv = mix(vUv, vUv - velocity - u_prevJitterUV, u_reprojectionEnabled);
+  if (u_historySnap > 0.5) { prevUv = snapToTexel(prevUv); }
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
