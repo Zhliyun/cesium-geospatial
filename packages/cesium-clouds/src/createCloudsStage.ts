@@ -273,9 +273,12 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   motionBlendDepthFalloff?: number
   /** 【2026-10-26】远云（>30km 起）专用 EMA 权重（缺省 0.05；0=关）。 */
   farBlend?: number
-  /** 【2026-10-26 诊断】几何（射线）Bayer 抖动开关。缺省 true。false → temporalJitter 恒 0，
-   *  用于验证「射线抖动未在速度里抵消」是否拖影根因。demo `?cloudsGeomJitter=0`。 */
+  /** 【2026-10-26】几何（射线）Bayer 抖动三态：undefined=仅静止（缺省）/ false=从不 / true=始终。
+   *  demo `?cloudsGeomJitter=0|1`。 */
   geometryJitter?: boolean
+  /** 【2026-10-26】运动时的几何抖动缩放（缺省 0.35）。0=完全关（远地平线会出现与像素
+   *  锚定的噪点游移）；1=全幅（云层相对地面 ±1.5px 整体晃）。demo `?cloudsGeomJitterScale=`。 */
+  geometryJitterScale?: number
   /** 【2026-10-25 探针】0=关历史重投影（缺省 1）。demo `?cloudsReproj=0`。 */
   reprojectionEnabled?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
@@ -1170,6 +1173,13 @@ function buildCloudsStageImpl(
         if (!wantJitter) {
           params.temporalJitter.x = 0
           params.temporalJitter.y = 0
+        } else if (!frameStill) {
+          // 【2026-10-26】运动时保留 35% 抖动：全幅会让云层相对地面整体晃 ±1.5px（用户反馈
+          // 「整体晃」），归零又会让远地平线的采样网格与像素锚定（用户反馈「噪点垂直游移」）。
+          // 0.35 → 位移 ≤0.5px（亚像素不可见），采样相位仍在变。
+          const k = options.geometryJitterScale ?? 0.35
+          params.temporalJitter.x *= k
+          params.temporalJitter.y *= k
         }
         const viewMatrix = camera.viewMatrix
         const projectionMatrix = (camera.frustum as unknown as { projectionMatrix: Matrix4 })

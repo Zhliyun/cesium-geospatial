@@ -717,6 +717,8 @@ async function main(): Promise<void> {
             ? { farBlend: getNumber('cloudsFarBlend')! } : {}),
           ...(getNumber('cloudsGeomJitter') != null
             ? { geometryJitter: getNumber('cloudsGeomJitter')! !== 0 } : {}),
+          ...(getNumber('cloudsGeomJitterScale') != null
+            ? { geometryJitterScale: getNumber('cloudsGeomJitterScale')! } : {}),
           // 【2026-10-26】速度死区（全分像素）——静止亚像素残差归零
           ...(getNumber('cloudsVelDeadzone') != null
             ? { velocityThresholdPx: getNumber('cloudsVelDeadzone')! } : {}),
