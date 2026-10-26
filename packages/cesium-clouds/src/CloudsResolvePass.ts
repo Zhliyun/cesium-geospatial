@@ -157,7 +157,9 @@ export function createCloudsResolvePass(
   let clipEnabled = options.clipEnabled ?? 1
   let temporalBlend = options.temporalBlend ?? 0
   let reprojectionEnabled = options.reprojectionEnabled ?? 1
-  const farRange = new Cartesian2(5e4, 1e5)
+  // 【2026-10-27】远段长窗起点 50km→20km（6km 机位俯视时云海主体在 13–50km，原阈值够不到，
+  // 长窗形同虚设 → 那片云只能吃 4 帧运动窗 = 颗粒）。近于 6km 的云仍走运动短窗。
+  const farRange = new Cartesian2(2e4, 6e4)
   let blendDepthFalloff = options.blendDepthFalloff ?? 0
   let temporalBlendFar = options.temporalBlendFar ?? 0
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5

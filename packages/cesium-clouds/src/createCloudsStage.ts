@@ -1087,7 +1087,9 @@ function buildCloudsStageImpl(
           // 锯齿烤进画面），但平均窗拉长 8 倍，云面上的细碎游动残留随之降档。
           const blendStill = options.convergeBlend ?? 0.03125
           const blendHold = options.holdBlend ?? 0.00390625
-          const blendMove = uniformFilter ? (options.motionBlend ?? 0.25) : movingBlend
+          // 【2026-10-27】运动窗 4→10 帧（0.25→0.1）：用户实测「静止 1 秒变柔和、一动又颗粒」=
+          // 颗粒完全来自运动窗太短。拖影由 AABB 裁剪约束（同机位对拍 1.78 vs 1.79，无恶化）。
+          const blendMove = uniformFilter ? (options.motionBlend ?? 0.1) : movingBlend
           resolvePass?.setTemporalBlend(
             still ? (stillFrames < warmupFrames ? blendStill : blendHold) : blendMove
           )
