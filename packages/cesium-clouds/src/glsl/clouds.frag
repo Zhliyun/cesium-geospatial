@@ -618,6 +618,11 @@ vec4 marchClouds(
   float shortSegment = (maxRayDistance < stepSize * 8.0 ? 1.0 : 0.0) * u_jitterZeroing;
   float marchJitter = mix(jitter, 0.0, shortSegment) * u_jitterScale;
   float startJitter = mix(jitter, 0.0, shortSegment) * u_jitterScale;
+  // 【2026-10-27 等高线阴影】朝太阳光深 march 的**步数**是 `remap(mipLevel) - jitter` 取整，
+  // 靠 jitter 的 dither 把「步数跳变」摊成噪声。若把它也按 u_jitterScale 缩小，dither 失效
+  // → 步数在固定 mip 处硬跳变 → 云面出现随距离上下移动的「等高线阴影」。故这一路恒用
+  // 未缩放 jitter（u_jitterScale=1 时与 marchJitter 完全相同，零行为变化）。
+  float sunJitter = mix(jitter, 0.0, shortSegment);
   // 【2026-09-28 层内雾化（方案 A，用户拍板）】门控=相机在层带内（带外逐位不受影响——
   // 1450 层下 / 2500+ 层上 / 太空全部 inLayerCam=0 走原路径）。1692 蓝板/1536 白板两例
   // 排查实证：层内相机段被 minStepSize=50m 地板钉死步长 + 首样本 ext≥0.1/m 即
@@ -795,7 +800,7 @@ vec4 marchClouds(
             sunDirection,
             maxIterationCountToSun,
             mipLevel,
-            marchJitter,
+            sunJitter,
             cachedSunRayDistance
           );
 
@@ -808,7 +813,7 @@ vec4 marchClouds(
               cachedSunRayDistance,
               // Apply PCF only when the sun is close to the horizon.
               maxShadowFilterRadius * remapClamped(dot(sunDirection, surfaceNormal), 0.1, 0.0),
-              marchJitter
+              sunJitter
             );
           }
           lastSunODStep = i;

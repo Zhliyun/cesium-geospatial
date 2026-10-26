@@ -281,7 +281,11 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    *  resolve 用**上帧** jitter 补偿 velocity，已于 2026-10-27 修正为「当前帧反向平移 + 加回
    *  本帧 j(t)」，同构建实测 rotate 1.36 / 追平 0.28（两套档 2.25 / 0.43）。`?cloudsUniform=0` 回退。 */
   uniformFilter?: boolean
-  /** 【2026-10-27】运动时 march 步进抖动倍率（缺省 0.15；1=关闭该调制）。`?cloudsMotionJitter=`。 */
+  /**
+   * 【2026-10-27】运动时 march 步进抖动倍率（**缺省 1**=不调制）。
+   * 降低它会压运动颗粒（0→噪声 1/3），但会让步进采样同相位 → 云面「等高线」驻波环纹，
+   * 项目 2026-09-29 有记录。`?cloudsMotionJitter=0.3` 是观感取舍档。
+   */
   motionJitterScale?: number
   /** 【2026-10-27】静止稳态 EMA 权重（缺省 1/256）——收敛窗口结束后使用。`?cloudsHoldBlend=`。 */
   holdBlend?: number
@@ -1219,13 +1223,14 @@ function buildCloudsStageImpl(
           cloudsPass.marchHeight,
           params.temporalJitter
         )
-        // 【2026-10-27 运动颗粒】march 步进抖动（startJitter + 逐样本相位）在运动时下调：
-        // 逐帧噪声 ∝ 抖动幅度（6094m 俯视实测 1.0→2.83 / 0.5→2.71 / 0.2→1.91 / 0.1→1.43
-        // / 0→0.95）。静止保持满幅——静止有 1/256 长窗平均，且满幅抖动可避免层边界「硬入口
-        // 弧」（startJitter=0 时首样本恒落在层底，实测过该伪影）。?cloudsMotionJitter=1 关。
+        // 【2026-10-27 运动颗粒：已回退缺省】march 步进抖动是唯一的 3× 级颗粒杠杆
+        //（6094m 俯视实测 1.0→2.83 / 0.5→2.71 / 0.2→1.91 / 0.1→1.43 / 0→0.95），但降幅会
+        // 让步进采样重新「同相位」——本项目 2026-09-29 已记录该失效模式：jitter 归零 →
+        // march 步进驻波 → 云面出现等高线状二维环纹（随距离上下移动）。用户 2026-10-27
+        // 复现该现象后，缺省恢复满幅；?cloudsMotionJitter=0.3 之类作为观感取舍旋钮保留。
         params.jitterScale = frameStill
           ? jitterBase
-          : jitterBase * (options.motionJitterScale ?? 0.15)
+          : jitterBase * (options.motionJitterScale ?? 1)
         // 【2026-10-26 拖动抖动】几何抖动**只在静止时启用**：我们的 jitter 只作用于云射线，
         // Cesium 渲染的地面不抖 → 运动时云层相对地面每帧晃 ±1.5px（肉眼=整体抖动，且是
         // 低频相干位移，任何时域平均都压不掉，反而会因重投影残差产生拖影）。静止时 jitter
