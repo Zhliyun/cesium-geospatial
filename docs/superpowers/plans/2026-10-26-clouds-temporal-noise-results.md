@@ -340,3 +340,25 @@ detail 随距离连续淡出。u_jitterScale=1 时形状与参考库一致，只
 出现明显拖影，云区高频 0.856→1.04。纯裁剪必须先解决第 3、5 条，否则历史被未滤波单帧污染。已回退。
 
 下一步（按依赖顺序）：先 5（historySnap=0）→ 3（关/提阈 disocclusion 直出）→ 再试 1+4；每步单独量化。
+
+## 十七、2026-10-27 补轮十二：march 专家找到的真 bug（层外步长地板泄漏）✅ 已修
+
+**根因**（`clouds.frag` 原 686 行）：
+```glsl
+stepBudgetLen = mix(maxRayDistance, ..., inLayerCam*hasDenseLayer);
+stepSize = max(stepSize, stepBudgetLen / 32.0);   // ← 没有 inLayerCam 门控
+```
+层内相机的「段长/32 预算」对**层外机位同样生效**，而层外 `stepBudgetLen = maxRayDistance`（整段）。
+6094m 俯视 → 视线到层底 ~15.9km → **步长地板 ≈497m**；参考库同机位云内步长仅 ~80m（粗 5–6 倍）。
+云内 2–3 个样本就触发 `minTransmittance` 早退，而 `rayDistance = stepSize*startJitter*2` 的 STBN
+dither 在 ±500m 物理尺度上摆动 → 逐帧方差 ∝ 步长 —— 正是「一动就颗粒、停下靠时域磨平」。
+
+**另修**：云内步进 mip 加速（`u_hitStepMipBoost`）同样只给层内相机（参考库云内恒 `+= stepSize`）。
+
+**实测（6094m 俯视，同一机位）**
+- 逐帧噪声（α=0.25 短窗静止法，直接量逐帧方差）：**2.83 → 1.42（−50%）**；
+- 静止（1/256）：0.083 → **0.039**；停后追平 0.083 → **0.073**；
+- 层内路径逐位不变（`inLayerCam*hasDenseLayer=1` 时与原式完全一致）。
+
+**专家给出的其余差异（未落地）**：层内步长重置沿用粗值、`sampleWeather` 的 puffMid 循环内隐式
+`texture()`（参考库无，可改 `textureLod(...,0.0)`）。
