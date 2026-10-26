@@ -70,24 +70,45 @@ function resolveIonToken(): string {
  * 接 ion 全球影像+地形。失败（无 token / 网络 / 资产无权）→ fallback 裸 globe，
  * console.warn 不阻断（atmosphere 后处理不依赖底图，仍可验收天空/大气）。
  */
+/**
+ * 【2026-10-26】带重试的 ion 装配。
+ *
+ * 根因：ion 初始化是一次性的，而本机网络走 fake-IP 代理（api.cesium.com → 198.18.x.x），
+ * **会间歇性连不上**（同一端点 curl 时而 000 超时、时而 200）。启动时撞上那一下失败
+ * 就直接回退裸 globe 且永不恢复 = 用户看到的「影像/地形不见了」。
+ *
+ * 处置：影像/地形各自最多重试 3 次（0.8s/1.6s 退避）。全部失败才回退，并打 warn。
+ */
 async function setupIonImageryTerrain(viewer: Viewer, token: string): Promise<void> {
   if (token.length === 0) {
     console.warn('[phase1] ion 不可用，用裸 globe')
     return
   }
+  const retry = async <T,>(label: string, fn: () => Promise<T>, attempts = 3): Promise<T | undefined> => {
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        return await fn()
+      } catch (err) {
+        console.warn(`[phase1] ${label} 第 ${i}/${attempts} 次失败`, err)
+        if (i < attempts) await new Promise((r) => setTimeout(r, 800 * i))
+      }
+    }
+    return undefined
+  }
   // 影像
-  try {
-    const imagery = await createWorldImageryAsync()
+  const imagery = await retry('ion 影像加载', () => createWorldImageryAsync())
+  if (imagery != null) {
     viewer.imageryLayers.removeAll()
     viewer.imageryLayers.addImageryProvider(imagery)
-  } catch (err) {
-    console.warn('[phase1] ion 影像加载失败，fallback 裸 globe', err)
+  } else {
+    console.warn('[phase1] ion 影像加载失败（已重试 3 次），fallback 裸 globe')
   }
   // 地形
-  try {
-    viewer.terrainProvider = await createWorldTerrainAsync()
-  } catch (err) {
-    console.warn('[phase1] ion 地形加载失败，fallback 椭球地形', err)
+  const terrain = await retry('ion 地形加载', () => createWorldTerrainAsync())
+  if (terrain != null) {
+    viewer.terrainProvider = terrain
+  } else {
+    console.warn('[phase1] ion 地形加载失败（已重试 3 次），fallback 椭球地形')
   }
 }
 
