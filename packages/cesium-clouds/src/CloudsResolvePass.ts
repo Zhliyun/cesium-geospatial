@@ -76,8 +76,14 @@ export interface CloudsResolvePassOptions {
   temporalBlendFar?: number
   /** 【2026-10-26】历史采样点吸附整像素（缺省 1=开；0=关）。 */
   historySnap?: number
-  /** 【2026-10-26】上帧几何 jitter（低分 UV）读取器——resolve 里从 velocity 中扣除。 */
-  prevJitterUV?: () => Cartesian2
+  /**
+   * 【2026-10-27】**本帧**几何 jitter（归一化 UV）读取器。resolve 两处消费：
+   * ① 当前帧低分采样反向平移（把整帧平移过的低分图重采样回像素栅格）；
+   * ② velocity += j(t)（march 的 velocity 含 −j(t) 偏置）。
+   */
+  jitterUV?: () => Cartesian2
+  /** 【2026-10-27 A/B】1=去抖动重采样（缺省）；0=旧行为（点采样 + 不补偿 velocity 偏置）。 */
+  dejitter?: number
   /** 【2026-10-26】AABB 最小半宽（0=零回归；用于让历史在 march 噪声摆动下存活） */
   clipMinHalf?: number
   /** 【2026-10-25 探针】0=关历史重投影（排查拖动静止垂直漂移是否来自 velocity）。缺省 1。 */
@@ -201,7 +207,8 @@ export function createCloudsResolvePass(
     u_blendDepthFalloff: () => blendDepthFalloff,
     u_temporalBlendFar: () => temporalBlendFar,
     u_farRange: () => farRange,
-    u_prevJitterUV: () => options.prevJitterUV?.() ?? ZERO2,
+    u_jitterUV: () => options.jitterUV?.() ?? ZERO2,
+    u_dejitter: () => options.dejitter ?? 1,
     u_historySnap: () => options.historySnap ?? 1
   }
 

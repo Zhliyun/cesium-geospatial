@@ -735,6 +735,8 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsMotionBlend') != null
             ? { motionBlend: getNumber('cloudsMotionBlend')! } : {}),
           ...(getString('cloudsUniform') === '0' ? { uniformFilter: false } : {}),
+          // 【2026-10-27】去抖动重采样 A/B：cloudsDejitter=0 回到「点采样 + 不补偿」旧行为
+          ...(getNumber('cloudsDejitter') != null ? { dejitter: getNumber('cloudsDejitter')! } : {}),
           ...(getNumber('cloudsHistorySnap') != null
             ? { historySnap: getNumber('cloudsHistorySnap')! } : {}),
           ...(getNumber('cloudsFarBlend') != null

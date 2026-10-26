@@ -276,9 +276,13 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   /** 【2026-10-26】远云（>30km 起）专用 EMA 权重（缺省 0.05；0=关）。 */
   farBlend?: number
   /** 【2026-10-26 一致性】缺省 false = 运动/静止两套参数（静止关重投影 / 运动纯裁剪），
-   *  无拖影。true = 统一档（全程重投影 + 不裁剪 + EMA 1/32）——观感一致但长时间拖动会拖影，
-   *  用户 2026-10-26 复测否决，仅作实验开关 `?cloudsUniform=1`。 */
+   *  无拖影。true（**【2026-10-27 起缺省】**）= 统一档（全程重投影 + 不裁剪 + EMA 1/32）——
+   *  观感一致（运动/静止同一套参数）。2026-10-26 该档曾被否决（静止抖+拖动残影），根因是
+   *  resolve 用**上帧** jitter 补偿 velocity，已于 2026-10-27 修正为「当前帧反向平移 + 加回
+   *  本帧 j(t)」，同构建实测 rotate 1.36 / 追平 0.28（两套档 2.25 / 0.43）。`?cloudsUniform=0` 回退。 */
   uniformFilter?: boolean
+  /** 【2026-10-27 A/B】1=去抖动重采样（缺省）；0=旧行为。demo `?cloudsDejitter=0`。 */
+  dejitter?: number
   /** 【2026-10-26】几何（射线）Bayer 抖动三态：undefined=仅静止（缺省）/ false=从不 / true=始终。
    *  demo `?cloudsGeomJitter=0|1`。 */
   geometryJitter?: boolean
@@ -921,8 +925,10 @@ function buildCloudsStageImpl(
           temporalBlend: options.temporalBlend,
           clipEnabled: options.clipEnabled,
           historySnap: options.historySnap,
-          // 【2026-10-26】上帧几何 jitter 交给 resolve 从 velocity 里扣除（矩阵注入已废）
-          prevJitterUV: () => prevJitter ?? ZERO_JITTER,
+          // 【2026-10-27】本帧几何 jitter（活引用，resolve 渲染时读到的就是本帧值）：
+          // 当前帧反向平移 + velocity 偏置补偿，两处都靠它。
+          jitterUV: () => params.temporalJitter,
+          dejitter: options.dejitter,
           velocityThresholdPx: options.velocityThresholdPx,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
@@ -942,10 +948,6 @@ function buildCloudsStageImpl(
     // createCloudsStage 的零直捕 listener 调用；prevCamera/matricesFrozen 是 per-impl 状态
     //（换 impl 自然归零——freeze 语义从新 impl 重新起算）。
     let prevCamera: TemporalCameraSnapshot | undefined
-    const ZERO_JITTER = new Cartesian2(0, 0)
-    // 【2026-10-23 移植自 79e79ff v44】上帧 temporalJitter（重投影矩阵补偿用；见
-    // temporalMath.buildReprojectionMatrices 注释）
-    let prevJitter: Cartesian2 | undefined
     // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
     let prevCameraPos: Cartesian3 | undefined
     // 【2026-10-25】静止后已推进的相位帧数（达到 warmupFrames 即冻结）
@@ -1040,11 +1042,20 @@ function buildCloudsStageImpl(
           // 参数，全程同一套（重投影开 + 不裁剪 + EMA）。重投影偏置修好后才可行
           //（48eb972：march 速度里的 −jitter 已在 resolve 侧扣掉）。
           // ?cloudsUniform=0 回退到「静止/运动两套参数」的旧行为。
-          const uniformFilter = options.uniformFilter === true
+          // 【2026-10-27 定稿】缺省统一档：全程「重投影 + 关裁剪 + EMA 1/32」。历史上这档
+          // 在静止时抖、拖动时残影，根因是 velocity 里的 −j(t) 用**上帧** jitter 去补
+          //（prevUv = p + j(t) − j(t−1) 每帧游走）。现在 resolve 端改成「当前帧反向平移
+          // + velocity 加回 j(t)」（u_jitterUV），history 与 current 都落在像素栅格上。
+          // 同构建实测（地平线带，旋转 30°/s）：统一档 rotate 1.36 / 追平 0.28，
+          // 两套档 2.25 / 0.43；?cloudsUniform=0 可回退。
+          const uniformFilter = options.uniformFilter !== false
           const movingBlend = options.motionBlend ?? 0
           resolvePass?.setReprojectionEnabled(still && !uniformFilter ? 0 : 1)
           // 近处：blend=0 + 裁剪开 → 参考库纯裁剪（无拖影）；远处另有 farBlend 长窗。
-          resolvePass?.setClipEnabled(uniformFilter ? 0 : (still ? 0 : (movingBlend > 0 ? 0 : 1)))
+          // 显式 ?cloudsClip= 优先（A/B 需要：uniform 档下裁剪是否该留，见 2026-10-27 实测）
+          resolvePass?.setClipEnabled(
+            options.clipEnabled ?? (uniformFilter ? 0 : (still ? 0 : (movingBlend > 0 ? 0 : 1)))
+          )
           resolvePass?.setTemporalBlend(
             uniformFilter
               ? (options.convergeBlend ?? 0.03125)
@@ -1192,11 +1203,12 @@ function buildCloudsStageImpl(
           params.temporalJitter.x = 0
           params.temporalJitter.y = 0
         } else if (!frameStill && options.geometryJitter !== true) {
-          // 运动缺省 0.35：0=屏幕锚定噪点垂直游移、1=整体晃，35% 是两者折中
-          //（0.5px 亚像素位移，用户 2026-10-26 反馈「有改善仍有轻微抖动」）。
-          // 归零又会让远地平线的采样网格与像素锚定（用户反馈「噪点游移」）。
-          // 0.35 → 位移 ≤0.5px（亚像素不可见），采样相位仍在变。
-          const k = options.geometryJitterScale ?? 0.35
+          // 【2026-10-27 定论：运动不再降幅】历史上这里按 0.35 缩放，是因为「我们的 jitter
+          // 只作用于云射线、不作用于像素栅格」→ 运动时云相对地面每帧整体平移（越接近 1
+          // 越晃，越接近 0 越露出屏幕锚定噪点）。现在 resolve 端做了去抖动重采样
+          //（cloudsResolve.frag u_jitterUV 三处消费），当前帧与 history 都落在像素栅格上，
+          // jitter 不再产生任何跨帧位移——可以满幅。缺省 1；?cloudsGeomJitterScale= 留 A/B。
+          const k = options.geometryJitterScale ?? 1
           params.temporalJitter.x *= k
           params.temporalJitter.y *= k
         }
@@ -1213,12 +1225,8 @@ function buildCloudsStageImpl(
             reprojectionMatrix: params.reprojectionMatrix,
             viewReprojectionMatrix: params.viewReprojectionMatrix
           },
-          undefined // 【2026-10-26】改由 resolve 侧 u_prevJitterUV 补偿（矩阵注入实测无效）
+          undefined // 【2026-10-27】矩阵注入仍禁用：补偿统一在 resolve 侧（u_jitterUV）做，避免双重计数
         )
-        // 【2026-10-23 移植】保存本帧 jitter 供下帧重投影补偿（clone——params.temporalJitter
-        // 每帧覆写）
-        if (prevJitter == null) prevJitter = Cartesian2.clone(params.temporalJitter, new Cartesian2())
-        else Cartesian2.clone(params.temporalJitter, prevJitter)
         // 帧末存本帧快照（clone——Cesium camera 矩阵是 live 引用，必须拷贝）
         prevCamera = {
           viewMatrix: Matrix4.clone(viewMatrix, new Matrix4()),

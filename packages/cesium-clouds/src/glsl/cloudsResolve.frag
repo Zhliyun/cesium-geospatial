@@ -60,11 +60,32 @@ uniform float u_blendDepthFalloff;
 // 重投影近乎精确）改用 EMA 长窗平均。u_temporalBlendFar=0 时关闭（零回归）。
 uniform float u_temporalBlendFar;
 uniform vec2 u_farRange;
-// 【2026-10-26 拖影根因】上帧几何 jitter（低分 UV）。本实现的 jitter 只作用于「射线重建」
-// （windowCoord 偏移），不作用于像素栅格——于是 march 写出的 velocity 里恒含 −j(t) 项
-// （实测静止时 velocity ≈ −jitter，应为 0）。静止/拖动时 history 被采偏 ~1.5 低分 texel
-// = 拖影。正确补偿：histUV = vUv − velocity − j(t−1)。
-uniform vec2 u_prevJitterUV;
+// 【2026-10-27 拖影/晃动根因·最终定论】本帧几何 jitter（归一化 UV）。
+// 本实现的 jitter 只作用于「射线重建」（windowCoord 偏移），不作用于像素栅格——于是：
+//   ① 低分 texel q 的值实际采自 UV = (q+0.5)/lowRes + j(t)（整帧统一偏移，非逐像素）；
+//   ② march 写出的 velocity 里恒含 −j(t)（实测静止 velocity = (−1.5/1280, −1.5/720) = −j)。
+// 两条后果正是用户报的「整体晃」与「静止抖」：
+//   - 不补偿：history 采在 p + j(t)，当前帧画在 p + j(t) → 云相对地形每帧整体平移 ±1.5px；
+//   - 扣上帧 j(t−1)：history 采在 p + j(t) − j(t−1) → 静止时采样点仍逐帧游走（抖+拖影）。
+// 正解（两者都要）：
+//   ① 当前帧低分采样反向平移 −j(t)，把「抖动过的低分图」重采样回像素栅格（本文件 texture 处）；
+//   ② 重投影前把 velocity 里的 −j(t) 加回去：prevUv = vUv − (velocity + j(t))。
+// 这样 history/current 都落在像素栅格上，jitter 只承担「16 相位亚像素超采样」本职，
+// 不再产生任何跨帧位移。
+// 【2026-10-27 量纲定论】u_jitterUV = temporalJitter（(offset−0.5)/lowResW，全分归一化 UV）。
+// march 的 windowCoord 偏移已按低分 FBO 尺寸换算（clouds.frag jitterPx），所以射线在屏幕上的
+// 归一化位移**恰好等于** u_jitterUV（N=4 时 ±1.5 全分像素，与 three 一致）。
+uniform vec2 u_jitterUV;
+// 【2026-10-27 A/B 开关】1=去抖动重采样（缺省）；0=旧行为（texelFetch 点采样 + 不做
+// velocity 偏置补偿）。仅用于同构建前后对照，排查时保留。
+uniform float u_dejitter;
+
+// 本帧几何 jitter 在归一化 UV 下的真实位移 = u_jitterUV 本身（march 侧已按低分 FBO 换算）。
+// ⚠️ 不要在这里写单行 `/** ... */` 块注释：Cesium removeComments 对无换行的块注释会
+// match(/\n/g) 得 null 再取 .length → TypeError（表现为体积云整个创建失败）。
+vec2 jitterShiftUv() {
+  return u_jitterUV;
+}
 // 【2026-10-26 架构改造】历史采样点吸附到整像素（0=关）。长窗 EMA 在运动时每帧做亚像素
 // 双线性重采样 → 沿运动方向累积重采样模糊 = 拖影。吸附到 texel 中心后 texture() 等价
 // texelFetch，不再累积模糊（代价：丢掉 ≤0.5px 的亚像素时域超采样收益）。
@@ -176,11 +197,13 @@ void temporalUpscale(
   out vec4 outputColor,
   out float outputShadowLength
 ) {
-  // 【2026-10-25 回归参考库】currentColor 回到点采样 texelFetch(colorBuffer, lowResCoord)。
-  // 2026-10-23 曾改双线性，动机是「rejection 直出 current 时相邻块跳变」；该 rejection 已按
-  // 参考库关闭（temporalDisocclusion 缺省 1.01）且相位冻结时直通也关掉，跳变前提不复存在。
-  // 参考库 upscale 分支就是点采样——本项是 N>1 路径与上游的最后一处已知偏差。
-  vec4 currentColor = texelFetch(colorBuffer, lowResCoord, 0);
+  // 【2026-10-27 去抖动重采样·取代 2026-10-25 的点采样】低分 texel 的真实采样位置是
+  // (q+0.5)/lowRes + j(t)（见 u_jitterUV 注释）。用 uv − j(t) 做双线性查找 = 把「整帧
+  // 平移过的低分图」重采样回像素栅格：云不再相对地形整体晃，且每帧贡献都落在同一栅格上
+  //（EMA 才能长窗累积）。代价=双线性带来的 ~0.5 低分 texel 软化，比 4×4 方块+整体晃划算。
+  vec4 currentColor = u_dejitter > 0.5
+    ? texture(colorBuffer, vUv - jitterShiftUv())
+    : texelFetch(colorBuffer, lowResCoord, 0);
   #ifdef SHADOW_LENGTH
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, lowResCoord, 0).rgb, 1.0);
   #endif // SHADOW_LENGTH
@@ -195,8 +218,11 @@ void temporalUpscale(
   }
 
   vec4 depthVelocity = getClosestFragment(lowResCoord);
-  vec2 velocity = applyVelocityDeadzone(depthVelocity.gb, lowResCoord);
-  vec2 prevUv = mix(vUv, vUv - velocity - u_prevJitterUV, u_reprojectionEnabled);
+  // 【2026-10-27】march 的 velocity 含 −j(t)（射线偏移），加回 j(t) 得像素栅格真实速度
+  //（静止时精确为 0）。死区必须在补偿**之后**判：补偿前 jitter 本身就是 ~1.5px 的假速度。
+  vec2 velocity = applyVelocityDeadzone(
+    depthVelocity.gb + jitterShiftUv() * u_dejitter, lowResCoord);
+  vec2 prevUv = mix(vUv, vUv - velocity, u_reprojectionEnabled);
   if (u_historySnap > 0.5) { prevUv = snapToTexel(prevUv); }
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
@@ -282,15 +308,19 @@ void temporalUpscale(
 }
 
 void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float outputShadowLength) {
-  vec4 currentColor = texelFetch(colorBuffer, coord, 0);
+  // 【2026-10-27】同 temporalUpscale：反向平移 j(t) 把当前帧放回像素栅格。
+  vec4 currentColor = u_dejitter > 0.5
+    ? texture(colorBuffer, vUv - jitterShiftUv())
+    : texelFetch(colorBuffer, coord, 0);
   #ifdef SHADOW_LENGTH
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, coord, 0).rgb, 1.0);
   #endif // SHADOW_LENGTH
 
   vec4 depthVelocity = getClosestFragment(coord);
-  vec2 velocity = applyVelocityDeadzone(depthVelocity.gb, coord);
+  vec2 velocity = applyVelocityDeadzone(
+    depthVelocity.gb + jitterShiftUv() * u_dejitter, coord);
 
-  vec2 prevUv = mix(vUv, vUv - velocity - u_prevJitterUV, u_reprojectionEnabled);
+  vec2 prevUv = mix(vUv, vUv - velocity, u_reprojectionEnabled);
   if (u_historySnap > 0.5) { prevUv = snapToTexel(prevUv); }
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;

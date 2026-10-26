@@ -45,6 +45,13 @@ uniform float cameraNear;
 uniform float cameraFar;
 uniform float cameraHeight;
 uniform vec2 temporalJitter;
+// 【2026-10-27 量纲修正】jitter 在窗口域的偏移基数 = **低分 FBO 尺寸**（= marchWidth/Height），
+// 不是 resolution（= 低分×divisor）。temporalJitter 的单位是「全分归一化 UV」
+//（(offset−0.5)/lowResW，与 three-geospatial 同一个数），乘 lowResW 才回到 FBO 像素。
+// 此前乘 resolution → 位移被放大约 divisor 倍：N=4 实测静止 velocity=(0.0047, 0.0028)
+// = ±1.5 个**低分** texel = ±6 个全分像素（three 是 ±1.5 全分像素）——这正是「整体晃」
+// 「垂直噪点移动」「运动噪点增多」三个现象的共同根因。
+uniform vec2 jitterPx;
 uniform vec2 targetUvScale;
 uniform float mipLevelScale;
 

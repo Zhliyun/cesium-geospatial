@@ -539,6 +539,7 @@ export function createCloudsPass(
     return resolutionScratch
   }
 
+  const jitterPxScratch = new Cartesian2(marchWidth, marchHeight)
   // M4 T6：temporal 时 targetUvScale = lowRes*divisor/drawingBuffer（低分 UV → 全分 depth 纹理
   // 子区域；ceil 后 *divisor 可能 > 全分故 <1——three CloudsMaterial.setSize 同款修正）、
   // mipLevelScale = 1/divisor（低分 march 采样 weather 提对应 mip 级）。
@@ -563,6 +564,8 @@ export function createCloudsPass(
     // 相机/场景（每帧闭包；cameraHeight/resolution/targetUvScale/mipLevelScale 为 clouds.frag 专有）
     cameraHeight,
     resolution,
+    // 【2026-10-27】jitter 的窗口域偏移基数（低分 FBO 尺寸）——见 clouds.frag 同名 uniform 注。
+    jitterPx: () => jitterPxScratch,
     targetUvScale: () => (temporalUpscale ? targetUvScaleTemporal : params.targetUvScale),
     mipLevelScale: () => (temporalUpscale ? 1 / upscaleDivisor : params.mipLevelScale),
 

@@ -284,7 +284,10 @@ void cloudsBridge_reconstructVaryings() {
   // velocity 恒定非 0 → history 错位采样 → 静止时 AABB clip 拉锯 = 云整体抖动）。
   // 换算式：全分窗口 = gl_FragCoord / targetUvScale（targetUvScale = lowRes*4/全分，非
   // temporal 时 (1,1) 恒等——M2/M3 行为不变）。jitter 项已是全分像素单位，不随换算缩放。
-  vec2 windowCoord = gl_FragCoord.xy / targetUvScale + temporalJitter * resolution;
+  // 【2026-10-27 量纲修正】偏移基数 = 低分 FBO 尺寸（jitterPx），不是 resolution
+  //（= 低分×divisor）。用 resolution 会把射线位移放大 divisor 倍（N=4 实测 = ±6 全分像素，
+  // 参考库 ±1.5）→「整体晃 / 垂直噪点移动 / 运动噪点增多」的共同根因。
+  vec2 windowCoord = gl_FragCoord.xy / targetUvScale + temporalJitter * jitterPx;
   vec4 eyeNear = czm_windowToEyeCoordinates(vec4(windowCoord, 0.0, 1.0));
   vec4 eyeFar = czm_windowToEyeCoordinates(vec4(windowCoord, 1.0, 1.0));
   if (abs(eyeNear.w) > 1e-10) eyeNear /= eyeNear.w;

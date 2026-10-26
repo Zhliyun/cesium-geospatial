@@ -245,7 +245,10 @@ describe('M4 T6 jitter surgery', () => {
   it('ray 重建消费 temporalJitter + 低分域换算（gl_FragCoord / targetUvScale + jitter，一处 windowCoord 近/远共用）', () => {
     const src = buildCloudsMainFragmentShader({})
     // 2026-08-17 抖动修复：低分 march 的 gl_FragCoord 必须除以 targetUvScale 换算到全分窗口域
-    expect(src).toContain('vec2 windowCoord = gl_FragCoord.xy / targetUvScale + temporalJitter * resolution;')
+    // 【2026-10-27 量纲修正】偏移基数必须是低分 FBO 尺寸 jitterPx（= marchWidth/Height），
+    // 不是 resolution（= 低分×divisor）——后者把射线位移放大 divisor 倍（N=4 = ±6 全分像素）。
+    expect(src).toContain('vec2 windowCoord = gl_FragCoord.xy / targetUvScale + temporalJitter * jitterPx;')
+    expect(src).toContain('uniform vec2 jitterPx;')
     expect(src).toContain('czm_windowToEyeCoordinates(vec4(windowCoord, 0.0, 1.0))')
     expect(src).toContain('czm_windowToEyeCoordinates(vec4(windowCoord, 1.0, 1.0))')
   })

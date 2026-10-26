@@ -66,3 +66,67 @@
 - 若属 march：远地平线掠射段的 `maxRayDistance ← 场景深度` 同样是屏幕锚定输入，
   可用与 haze 同款「远段退让」处理（云射线终止距离在 >30km 时用解析几何而非深度）；
 - 若属 resolve：远段改用更长的 EMA 或对远段单独做空间低通。
+
+---
+
+## 六、2026-10-27 补轮：三个并存问题的共同根因（已根治）
+
+### 根因（一句话）
+
+`clouds.frag` 的射线重建用 `temporalJitter * resolution` 做窗口偏移，而 `czm_viewport` 是
+**低分 FBO（320×180）**、`resolution` 是 **低分×4（1280）** → 射线位移被放大 4 倍：
+N=4 时 ±1.5 **低分** texel = **±6 个全分像素**（three-geospatial 是 ±1.5 全分像素）。
+
+同帧实测（`probe-ratio.mjs`，直接读 temporalJitter 与 depthVelocity）：
+
+| 阶段 | velocity / temporalJitter |
+|---|---|
+| 修复前 | 恒 **4.00×** |
+| 修复后（改用 `jitterPx = 低分 FBO 尺寸`） | **1.00×**（逐帧误差 <1e-5） |
+
+这一条同时解释三个现象：
+- **整体晃**：云射线整帧平移 ±6px，而地形（Cesium 自己渲染）不抖；
+- **垂直噪点移动**：同一位移的 y 分量；
+- **运动噪点增多**：±6px 的相位跨度让 16 相位平均退化成 3 低分 texel 的模糊，
+  重投影误差也同比放大。
+
+### 两处配套修复
+
+1. **去抖动重采样**（`cloudsResolve.frag`）：低分 texel q 的真实采样位置是
+   `(q+0.5)/lowRes + j(t)`，所以当前帧改用 `texture(colorBuffer, vUv − j(t))`，
+   把整帧平移过的低分图重采样回**像素栅格**；`velocity` 在重投影前加回 `j(t)`
+   （静止时精确为 0）。history 与 current 因此落在同一栅格上，EMA 才能长窗累积。
+2. **统一档翻缺省**：`?cloudsUniform` 缺省改为统一（全程重投影 + 关裁剪 + EMA 1/32）。
+   2026-10-26 该档被否决的「静止抖 + 拖动残影」正是「用上帧 j(t−1) 补偿」造成的
+   （静止时 history 采样点 `p + j(t) − j(t−1)` 每帧游走）。
+
+### 同构建 A/B（地平线带 256×48，1280×720，静止 20 帧 / 旋转 30°/s 20 帧 / 停后追平 12 帧）
+
+| 配置 | 静止 std | 旋转 std | 停后追平 |
+|---|---|---|---|
+| 2026-10-26 缺省（jitter 4×、两套档） | 0.777 | 6.953 | 0.896 |
+| 4× jitter + 去抖动 + 两套档 | 0.772 | 3.196 | 1.855 |
+| **新缺省（jitter 1× + 去抖动 + 统一档）** | **0.462** | **1.363** | **0.282** |
+| 新缺省 + `cloudsDejitter=0` | 2.280 | 3.196 | 1.855 |
+| 新缺省 + `cloudsUniform=0`（两套档） | 0.462 | 2.252 | 0.426 |
+| 新缺省 + `cloudsGeomJitter=0`（无抖动地板） | 0.211 | 1.402 | 0.140 |
+| 统一档 + `cloudsClip=1`（AABB 裁剪） | 2.241 | 5.133 | 2.002 |
+
+结论：去抖动重采样是主力（去掉它静止 0.46→2.28、追平 0.28→1.86）；统一档在运动与追平上
+都优于两套档；**统一档下 AABB 裁剪必须关**（裁剪会把历史拉回当前帧噪声邻域 → 静止 2.24）。
+
+### 新旋钮 / 逃生门
+
+- `?cloudsDejitter=0` 回去抖动前的点采样（A/B 用）
+- `?cloudsUniform=0` 回两套参数旧行为
+- `?cloudsGeomJitter=0` / `?cloudsGeomJitterScale=`（现在缺省不再按 0.35 降幅，满幅 1.0）
+
+### 坑（务必记住）
+
+- **Cesium `removeComments()` 对「无换行的 `/** ... */` 块注释」会抛
+  `TypeError: Cannot read properties of null (reading 'length')`**（`match(/\n/g)` 返回 null
+  再取 `.length`），表现为**体积云整个创建失败**并被 demo 的 catch 报成「weather 纹理加载失败」。
+  GLSL 里一律用 `//`。
+- `windowCoord` 的实际位置在 **`CloudsMaterial.ts` 的 bridge 字符串**里，不在 `clouds.frag`
+  （`clouds.frag` 只有 `uniform` 声明）——改射线重建别只改 `.frag`。
+- 量纲自检工具：`tmp/probe-ratio.mjs`（同帧读 temporalJitter 与 depthVelocity，直接给倍率）。
