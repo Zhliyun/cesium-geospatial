@@ -273,9 +273,9 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   motionBlendDepthFalloff?: number
   /** 【2026-10-26】远云（>30km 起）专用 EMA 权重（缺省 0.05；0=关）。 */
   farBlend?: number
-  /** 【2026-10-26 一致性】缺省 true = 运动/静止用同一套时域参数（重投影开 + 不裁剪 +
-   *  EMA 1/32 + 几何抖动全幅）——用户 2026-10-26 目视确认「无拖影且观感一致」。
-   *  false = 回退「静止关重投影 / 运动纯裁剪」两套。demo `?cloudsUniform=0`。 */
+  /** 【2026-10-26 一致性】缺省 false = 运动/静止两套参数（静止关重投影 / 运动纯裁剪），
+   *  无拖影。true = 统一档（全程重投影 + 不裁剪 + EMA 1/32）——观感一致但长时间拖动会拖影，
+   *  用户 2026-10-26 复测否决，仅作实验开关 `?cloudsUniform=1`。 */
   uniformFilter?: boolean
   /** 【2026-10-26】几何（射线）Bayer 抖动三态：undefined=仅静止（缺省）/ false=从不 / true=始终。
    *  demo `?cloudsGeomJitter=0|1`。 */
@@ -1037,7 +1037,7 @@ function buildCloudsStageImpl(
           // 参数，全程同一套（重投影开 + 不裁剪 + EMA）。重投影偏置修好后才可行
           //（48eb972：march 速度里的 −jitter 已在 resolve 侧扣掉）。
           // ?cloudsUniform=0 回退到「静止/运动两套参数」的旧行为。
-          const uniformFilter = options.uniformFilter !== false
+          const uniformFilter = options.uniformFilter === true
           const movingBlend = options.motionBlend ?? 0
           resolvePass?.setReprojectionEnabled(still && !uniformFilter ? 0 : 1)
           // 近处：blend=0 + 裁剪开 → 参考库纯裁剪（无拖影）；远处另有 farBlend 长窗。
