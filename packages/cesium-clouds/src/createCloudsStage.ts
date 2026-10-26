@@ -1167,15 +1167,16 @@ function buildCloudsStageImpl(
         // Cesium 渲染的地面不抖 → 运动时云层相对地面每帧晃 ±1.5px（肉眼=整体抖动，且是
         // 低频相干位移，任何时域平均都压不掉，反而会因重投影残差产生拖影）。静止时 jitter
         // 由 EMA 1/32 平均掉，保留它换取低分方块的抗锯齿。
-        // 三态：undefined=仅静止（缺省）/ false=从不 / true=始终
-        const wantJitter = options.geometryJitter === true
-          || (options.geometryJitter !== false && frameStill)
-        if (!wantJitter) {
+        // 三态：undefined=仅静止全幅 / false=从不 / true=始终全幅
+        // 运动时的幅值另由 geometryJitterScale 缩放（缺省 0.35）。
+        // 【2026-10-26 修正】旧写法把「运动 + undefined」直接归零，导致 geometryJitterScale
+        // 在缺省路径上永远走不到（三个对照 URL 表现完全一致 = 实测证据）。
+        if (options.geometryJitter === false) {
           params.temporalJitter.x = 0
           params.temporalJitter.y = 0
-        } else if (!frameStill) {
-          // 【2026-10-26】运动时保留 35% 抖动：全幅会让云层相对地面整体晃 ±1.5px（用户反馈
-          // 「整体晃」），归零又会让远地平线的采样网格与像素锚定（用户反馈「噪点垂直游移」）。
+        } else if (!frameStill && options.geometryJitter !== true) {
+          // 运动时保留 35%：全幅会让云层相对地面整体晃 ±1.5px（用户反馈「整体晃」），
+          // 归零又会让远地平线的采样网格与像素锚定（用户反馈「噪点游移」）。
           // 0.35 → 位移 ≤0.5px（亚像素不可见），采样相位仍在变。
           const k = options.geometryJitterScale ?? 0.35
           params.temporalJitter.x *= k
