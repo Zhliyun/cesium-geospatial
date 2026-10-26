@@ -287,7 +287,10 @@ void temporalUpscale(
   // 112km 机位视线到云 ≥270km ≫ u_farRange.y(60km) → 全屏 farT=1 → 既绕过 AABB 裁剪、
   // 又把 α 换成 20 帧长窗（farBlend=0.05），两条防拖影机制同时失效 → 严重拖影。
   // 修：farT 再乘一个「屏幕速度小」的门控——每秒几十像素的位移不允许走长窗。
-  float velPx = length(velocity * vec2(textureSize(colorBuffer, 0)));
+  // 【2026-10-27 单位修正】textureSize(colorBuffer) 是**低分**尺寸（N=4 时 1/4）——直接乘
+  // 得到的 velPx 是低分像素，原来 4–12 的阈值实际等于 16–48 个全分像素，旋转（~9 全分px/帧）
+  // 时门控恒 1 = 从未生效。乘 UPSCALE_DIVISOR 换回全分像素。
+  float velPx = length(velocity * vec2(textureSize(colorBuffer, 0))) * float(UPSCALE_DIVISOR);
   float farSpeedGate = 1.0 - smoothstep(4.0, 12.0, velPx);
   float farT = u_temporalBlendFar > 0.0
     ? smoothstep(u_farRange.x, u_farRange.y, max(0.0, depthVelocity.r)) * farSpeedGate
