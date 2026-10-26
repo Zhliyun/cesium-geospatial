@@ -281,6 +281,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    *  resolve 用**上帧** jitter 补偿 velocity，已于 2026-10-27 修正为「当前帧反向平移 + 加回
    *  本帧 j(t)」，同构建实测 rotate 1.36 / 追平 0.28（两套档 2.25 / 0.43）。`?cloudsUniform=0` 回退。 */
   uniformFilter?: boolean
+  /** 【2026-10-27】静止稳态 EMA 权重（缺省 1/256）——收敛窗口结束后使用。`?cloudsHoldBlend=`。 */
+  holdBlend?: number
   /** 【2026-10-27 A/B】1=去抖动重采样（缺省）；0=旧行为。demo `?cloudsDejitter=0`。 */
   dejitter?: number
   /** 【2026-10-26】几何（射线）Bayer 抖动三态：undefined=仅静止（缺省）/ false=从不 / true=始终。
@@ -1024,8 +1026,9 @@ function buildCloudsStageImpl(
         //（每帧轮换→梳状纹被平均掉，但帧间闪烁最大）；N 越大闪烁越小、梳状纹平均越慢。
         const stride = Math.max(1, Math.round(options.phaseStride ?? 1))
         const phaseTick = stride === 1 || params.marchFrame % stride === 0
-        // 【2026-10-26 静止收敛档】converge=true 时相位永远轮换（参考库语义），
-        // 静止的噪声由 resolve 的 EMA 平均掉。
+        // 【2026-10-27 静止粒子】相位必须持续轮换：冻结相位会把**单相位锯齿**烤进画面
+        // （4827m 俯视云海实测：冻结后时间 std=0 但画面满屏细点，比轮换难看十倍）。
+        // 静止的残留噪声只能靠加长 EMA 窗压（见 blendStill）。
         const advancePhase =
           (options.motionPhaseRotate === true ||
             options.converge !== false ||
@@ -1065,9 +1068,15 @@ function buildCloudsStageImpl(
           // 【2026-10-27 拖影定稿】运动缺省 α=0.25（≈4 帧窗）：拖影 = 长窗在运动中的历史残留，
           // 32 帧窗下任何重投影误差都会留半秒残影。jitter 量纲修好后运动噪声本就很低
           //（地平线带 rotate 1.36，参考库同口径 1.33），短窗不会把颗粒带回来。
+          // 【2026-10-27 静止粒子】静止状态分两段：停下后先用 1/32 快收敛 warmupFrames 帧
+          //（避免「停下来糊两秒」），之后切 1/256 长窗稳态——相位仍在轮换（冻结会把单相位
+          // 锯齿烤进画面），但平均窗拉长 8 倍，云面上的细碎游动残留随之降档。
           const blendStill = options.convergeBlend ?? 0.03125
+          const blendHold = options.holdBlend ?? 0.00390625
           const blendMove = uniformFilter ? (options.motionBlend ?? 0.25) : movingBlend
-          resolvePass?.setTemporalBlend(still ? blendStill : blendMove)
+          resolvePass?.setTemporalBlend(
+            still ? (stillFrames < warmupFrames ? blendStill : blendHold) : blendMove
+          )
           // 运动时远处云用长窗平均（视差小、重投影精确）；静止不启用（保持现收敛档）
           resolvePass?.setBlendDepthFalloff(
             still ? 0 : (options.motionBlendDepthFalloff ?? 0)
