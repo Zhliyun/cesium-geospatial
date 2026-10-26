@@ -1076,7 +1076,14 @@ vec4 approximateHaze(
   vec3 inscatter = sunIrradiance * phaseFunction(cosTheta) * shadowTransmittance;
   inscatter += skyIrradiance * RECIPROCAL_PI4 * skyLightScale * transmittance;
   inscatter *= hazeScatteringCoefficient / (hazeAbsorptionCoefficient + hazeScatteringCoefficient);
-  return vec4(inscatter, transmittance);
+  // 【2026-10-26 远地平线「垂直位移噪点」根治】haze 是近场空气透视效应。远地平线处
+  // maxRayDistance ← 场景深度（对数深度在 20-40km 的量化台阶），而 transmittance 对它的
+  // 敏感度在掠射角爆炸 → haze 的 **alpha** 变成屏幕锚定的高频图案：平移时图案不随世界移动
+  // （kymograph 实证：开 haze = 竖条纹＝锚定屏幕；关 haze = 斜条纹＝随世界移动）。
+  // 处置：>30km 按 smoothstep 淡出整条 haze（含量），大气透视交回 atmosphere stage 的
+  // aerial perspective——它用解析几何而非逐像素深度，天然稳定。
+  float hazeFade = 1.0 - smoothstep(3.0e4, 8.0e4, maxRayDistance);
+  return vec4(inscatter, transmittance) * hazeFade;
 }
 
 #endif // HAZE
