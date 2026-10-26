@@ -801,12 +801,13 @@ describe('M4 T7 temporal 编排', () => {
     Cartesian3.add(basePos, new Cartesian3(20, 0, 0), camera.positionWC)
     // swap 每帧一次（D2：preRender 开头，等价 three render 后 swap）
     expect(inst.swapBuffers).toHaveBeenCalledTimes(2)
-    // 【2026-10-26】运动时几何抖动恒 0（云射线抖动只作用于云，地面不抖 → 运动时云层
-    // 相对地面 ±1.5px 晃动 = 用户反馈的「滑动视角抖动」）
-    expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
+    // 【2026-10-26】运动时几何抖动缩放到 35%（全幅会让云层相对地面整体晃 ±1.5px；
+    // 归零又会让远地平线采样网格与像素锚定 → 噪点游移）。这里断言「非零且小于全幅」。
+    expect(Math.abs(paramsOf(handle!)!.temporalJitter.x)).toBeLessThan(1e-3)
+    expect(Math.abs(paramsOf(handle!)!.temporalJitter.x)).toBeGreaterThan(0)
     Cartesian3.add(basePos, new Cartesian3(30, 0, 0), camera.positionWC)
     firePreRender(scene)
-    expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
+    expect(Math.abs(paramsOf(handle!)!.temporalJitter.y)).toBeLessThan(2e-3)
     handle!.destroy()
   })
 
@@ -826,9 +827,9 @@ describe('M4 T7 temporal 编排', () => {
     firePreRender(scene)
     // 相位（STBN 层）逐帧轮换
     expect(paramsOf(handle!)!.marchFrame).not.toBe(m1)
-    // 几何抖动（射线偏移）运动时为 0
-    expect(paramsOf(handle!)!.temporalJitter.x).toBe(0)
-    expect(paramsOf(handle!)!.temporalJitter.y).toBe(0)
+    // 几何抖动（射线偏移）运动时缩放到 35%（非零、亚像素量级）
+    expect(Math.abs(paramsOf(handle!)!.temporalJitter.x)).toBeLessThan(1e-3)
+    expect(Math.abs(paramsOf(handle!)!.temporalJitter.y)).toBeLessThan(2e-3)
     handle!.destroy()
   })
 
