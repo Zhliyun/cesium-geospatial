@@ -281,6 +281,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    *  resolve 用**上帧** jitter 补偿 velocity，已于 2026-10-27 修正为「当前帧反向平移 + 加回
    *  本帧 j(t)」，同构建实测 rotate 1.36 / 追平 0.28（两套档 2.25 / 0.43）。`?cloudsUniform=0` 回退。 */
   uniformFilter?: boolean
+  /** 【2026-10-27】运动时 march 步进抖动倍率（缺省 0.15；1=关闭该调制）。`?cloudsMotionJitter=`。 */
+  motionJitterScale?: number
   /** 【2026-10-27】静止稳态 EMA 权重（缺省 1/256）——收敛窗口结束后使用。`?cloudsHoldBlend=`。 */
   holdBlend?: number
   /** 【2026-10-27 A/B】1=去抖动重采样（缺省）；0=旧行为。demo `?cloudsDejitter=0`。 */
@@ -950,6 +952,9 @@ function buildCloudsStageImpl(
     // createCloudsStage 的零直捕 listener 调用；prevCamera/matricesFrozen 是 per-impl 状态
     //（换 impl 自然归零——freeze 语义从新 impl 重新起算）。
     let prevCamera: TemporalCameraSnapshot | undefined
+    // 【2026-10-27】march 步进抖动基数（demo ?cloudsJitterScale= 设入 params.jitterScale），
+    // preRender 按静止/运动在其上做调制。
+    const jitterBase = params.jitterScale ?? 1
     // 静止冻结判定（2026-09-02）：上帧相机位置（temporal 时更新；首帧 undefined=必动→frame++）
     let prevCameraPos: Cartesian3 | undefined
     // 【2026-10-25】静止后已推进的相位帧数（达到 warmupFrames 即冻结）
@@ -1214,6 +1219,13 @@ function buildCloudsStageImpl(
           cloudsPass.marchHeight,
           params.temporalJitter
         )
+        // 【2026-10-27 运动颗粒】march 步进抖动（startJitter + 逐样本相位）在运动时下调：
+        // 逐帧噪声 ∝ 抖动幅度（6094m 俯视实测 1.0→2.83 / 0.5→2.71 / 0.2→1.91 / 0.1→1.43
+        // / 0→0.95）。静止保持满幅——静止有 1/256 长窗平均，且满幅抖动可避免层边界「硬入口
+        // 弧」（startJitter=0 时首样本恒落在层底，实测过该伪影）。?cloudsMotionJitter=1 关。
+        params.jitterScale = frameStill
+          ? jitterBase
+          : jitterBase * (options.motionJitterScale ?? 0.15)
         // 【2026-10-26 拖动抖动】几何抖动**只在静止时启用**：我们的 jitter 只作用于云射线，
         // Cesium 渲染的地面不抖 → 运动时云层相对地面每帧晃 ±1.5px（肉眼=整体抖动，且是
         // 低频相干位移，任何时域平均都压不掉，反而会因重投影残差产生拖影）。静止时 jitter

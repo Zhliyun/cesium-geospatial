@@ -735,6 +735,8 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsMotionBlend') != null
             ? { motionBlend: getNumber('cloudsMotionBlend')! } : {}),
           ...(getString('cloudsUniform') === '0' ? { uniformFilter: false } : {}),
+          // 【2026-10-27】运动时 march 步进抖动倍率（缺省 0.15；1=关）
+          ...(getNumber('cloudsMotionJitter') != null ? { motionJitterScale: getNumber('cloudsMotionJitter')! } : {}),
           // 【2026-10-27】静止稳态 EMA 权重（缺省 1/256；收敛窗口结束后的窗口长度）
           ...(getNumber('cloudsHoldBlend') != null ? { holdBlend: getNumber('cloudsHoldBlend')! } : {}),
           // 【2026-10-27】去抖动重采样 A/B：cloudsDejitter=0 回到「点采样 + 不补偿」旧行为
