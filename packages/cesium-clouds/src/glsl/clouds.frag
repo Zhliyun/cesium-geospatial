@@ -95,6 +95,9 @@ uniform float u_twilightSkyBoost;
 uniform float u_inLayerFog;
 // 【2026-10-24 观感对齐】短段/层内薄段的 jitter 归零开关（0=关=参考库语义；1=旧确定性处置）
 uniform float u_jitterZeroing;
+// 【2026-10-26 探针】全局抖动缩放（1=参考库语义；0=无抖动）。用于判定「掠射角下 ±2 步的
+// 起点抖动是否大到整段跨过云体」——实测该情形会让单像素 alpha 逐帧在 0↔1 之间翻。
+uniform float u_jitterScale;
 
 // 月光方向性照明（2026-08-30 方向 C）：夜间云的第四光照项。moonDirection 为观察者月方向
 // （ECEF，含视差修正）；moonIlluminatedFraction 为 Lambert 球积分月相因子（朔 0/弦 0.318/
@@ -603,8 +606,8 @@ vec4 marchClouds(
   // 参考库任何情况都用 jitter）。开（=1）退回 2026-09-03/09-28 的确定性化处置，
   // 用于黑块/层内闪屏复发的逃生门。
   float shortSegment = (maxRayDistance < stepSize * 8.0 ? 1.0 : 0.0) * u_jitterZeroing;
-  float marchJitter = mix(jitter, 0.0, shortSegment);
-  float startJitter = mix(jitter, 0.0, shortSegment);
+  float marchJitter = mix(jitter, 0.0, shortSegment) * u_jitterScale;
+  float startJitter = mix(jitter, 0.0, shortSegment) * u_jitterScale;
   // 【2026-09-28 层内雾化（方案 A，用户拍板）】门控=相机在层带内（带外逐位不受影响——
   // 1450 层下 / 2500+ 层上 / 太空全部 inLayerCam=0 走原路径）。1692 蓝板/1536 白板两例
   // 排查实证：层内相机段被 minStepSize=50m 地板钉死步长 + 首样本 ext≥0.1/m 即

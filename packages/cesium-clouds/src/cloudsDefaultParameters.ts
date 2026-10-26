@@ -99,6 +99,8 @@ export interface CloudsParameters {
   /** 【2026-10-24】短段/层内薄段 jitter 归零开关：0=关（参考库语义，缺省）/1=旧确定性处置
    * （治贴甲底黑块与层内闪屏）。demo `?cloudsJitterZero=1`。 */
   jitterZeroing?: number
+  /** 【2026-10-26 探针】全局抖动缩放（1=缺省；0=无抖动）。demo `?cloudsJitterScale=`。 */
+  jitterScale?: number
   /** 【2026-10-25】shapeDetail 显式 LOD 下限（0=隐式；缺省 1.5 压拖动走样）。
    *  demo `?cloudsDetailLod=`。 */
   detailLodFloor?: number
