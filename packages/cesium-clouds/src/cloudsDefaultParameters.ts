@@ -386,7 +386,7 @@ export function defaultCloudsParameters(): CloudsParameters {
     nightAmbientMoonRetreat: 0.25,
     // 运动帧光柱步幅上限（2026-09-21 P5）：4=满运动步幅 ×4（步数 ≈÷4，旋转 -6ms p50
     // 关断收益的大部分）；静止精确 1 零回归。?cloudsMotionShaft= 即调，1=关
-    shaftMotionBoost: 4,
+    shaftMotionBoost: 1,
     // 暮光天光补偿（2026-09-01 黄昏云过黑 A 案）：6=用户拍板物理档（实测云/天空显示比 80%，
     // 接近物理目标 85-90%；档位沿革 3 温和=51%/6 物理=80%，?cloudsTwilightBoost= URL 即调）
     twilightSkyBoost: 6.0,
