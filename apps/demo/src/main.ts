@@ -705,6 +705,18 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsBlend') != null ? { temporalBlend: getNumber('cloudsBlend')! } : {}),
           // 【2026-10-26 诊断】光柱 march 相位权重（0=确定性）
           ...(getNumber('cloudsShaftJitter') != null ? { shaftJitter: getNumber('cloudsShaftJitter')! } : {}),
+          // 【2026-10-26】关 AABB 裁剪（纯 EMA 验证）
+          ...(getNumber('cloudsClip') != null ? { clipEnabled: getNumber('cloudsClip')! } : {}),
+          // 【2026-10-26】静止收敛档（相位持续轮换 + 静止 EMA/关裁剪/关重投影）
+          ...(getString('cloudsConverge') === '0' ? { converge: false } : {}),
+          ...(getNumber('cloudsConvergeBlend') != null
+            ? { convergeBlend: getNumber('cloudsConvergeBlend')! } : {}),
+          // 【2026-10-26】速度死区（全分像素）——静止亚像素残差归零
+          ...(getNumber('cloudsVelDeadzone') != null
+            ? { velocityThresholdPx: getNumber('cloudsVelDeadzone')! } : {}),
+          // 【2026-10-26】关「上帧 jitter 补偿」（静止 velocity 归零）
+          ...(getNumber('cloudsReprojJitter') != null
+            ? { reprojectionJitter: getNumber('cloudsReprojJitter')! !== 0 } : {}),
           // 【2026-10-25 探针】关历史重投影（排查拖动垂直漂移来源）
           ...(getNumber('cloudsReproj') != null ? { reprojectionEnabled: getNumber('cloudsReproj')! } : {}),
           // 【2026-10-25】shapeDetail LOD 下限（0=隐式/参考库；缺省 1.5）

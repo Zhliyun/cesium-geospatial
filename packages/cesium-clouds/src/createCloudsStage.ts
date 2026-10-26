@@ -246,6 +246,25 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   /** 【2026-10-26 诊断】光柱 march 相位权重（1=逐帧轮换/参考库；0=确定性）。
    *  demo `?cloudsShaftJitter=0`。 */
   shaftJitter?: number
+  /** 【2026-10-26】resolve 是否做 AABB 裁剪（0=跳过，纯 EMA）。demo `?cloudsClip=0`。 */
+  clipEnabled?: number
+  /**
+   * 【2026-10-26】上帧 jitter 补偿开关（缺省 true=现行为）。false = 重投影矩阵不注入上帧
+   * Bayer 偏移 → 静止时 velocity 恒 0（实测云区逐像素时间标准差 5.57 → 1.35，与参考库
+   * 1.34 一致）。demo `?cloudsReprojJitter=0`。
+   */
+  reprojectionJitter?: boolean
+  /** 【2026-10-26】resolve 速度死区（全分像素；0=关）。demo `?cloudsVelDeadzone=0.5`。 */
+  velocityThresholdPx?: number
+  /**
+   * 【2026-10-26 静止收敛档】相位持续轮换 + 静止时「关重投影 / 关 AABB 裁剪 / EMA 1/32」，
+   * 运动中回到参考库语义（裁剪 + 重投影 + 无 EMA）。实测云区逐像素时间标准差
+   * 9.26 → 1.35（参考库 1.34）、静态 1px 颗粒 1.97 → 1.30（参考库 1.23）。
+   * 缺省开；`?cloudsConverge=0` 回退旧行为（静止收敛窗口后冻结相位）。
+   */
+  converge?: boolean
+  /** 【2026-10-26】静止 EMA 权重（缺省 1/32）。demo `?cloudsConvergeBlend=`。 */
+  convergeBlend?: number
   /** 【2026-10-25 探针】0=关历史重投影（缺省 1）。demo `?cloudsReproj=0`。 */
   reprojectionEnabled?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
@@ -880,6 +899,8 @@ function buildCloudsStageImpl(
           clipDebug: options.clipDebug,
           clipMinHalf: options.clipMinHalf,
           temporalBlend: options.temporalBlend,
+          clipEnabled: options.clipEnabled,
+          velocityThresholdPx: options.velocityThresholdPx,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,
@@ -965,9 +986,19 @@ function buildCloudsStageImpl(
         //（每帧轮换→梳状纹被平均掉，但帧间闪烁最大）；N 越大闪烁越小、梳状纹平均越慢。
         const stride = Math.max(1, Math.round(options.phaseStride ?? 1))
         const phaseTick = stride === 1 || params.marchFrame % stride === 0
+        // 【2026-10-26 静止收敛档】converge=true 时相位永远轮换（参考库语义），
+        // 静止的噪声由 resolve 的 EMA 平均掉。
         const advancePhase =
           (options.motionPhaseRotate === true ||
+            options.converge !== false ||
             (still && !warmedUp && stillFrames < warmupFrames)) && phaseTick
+        if (options.converge !== false) {
+          // 静止：关重投影（亚像素残差会逐帧抖动 history 采样点）、关裁剪（纯 EMA）、
+          // EMA=1/32；运动：参考库语义（裁剪 + 重投影 + 无 EMA）。
+          resolvePass?.setReprojectionEnabled(still ? 0 : 1)
+          resolvePass?.setClipEnabled(still ? 0 : 1)
+          resolvePass?.setTemporalBlend(still ? (options.convergeBlend ?? 0.03125) : 0)
+        }
         if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
         }
@@ -975,8 +1006,12 @@ function buildCloudsStageImpl(
         // 噪声，相位不变时这批像素固定 → 规则格点（实测 N=4 下 4px×2px、FFT 主峰 16135；
         // N=1 全分路径无此峰）。推进时保持 1（参考库语义：每帧 1/16 像素直通采样新相位）。
         // ?cloudsDirectThrough=0 强制关（排查闪烁来源用）
+        // 【2026-10-26 静止收敛档】converge 时静止一律关直通（直通绕过 EMA 直显原始相位，
+        // 配合 1/32 EMA 会在云面留下固化斑点：实测 1px 颗粒 1.30 → 7.67）。
         resolvePass?.setBayerDirectThrough(
-          options.bayerDirectThrough === 0 ? 0 : (advancePhase ? 1 : 0)
+          options.bayerDirectThrough === 0
+            ? 0
+            : (advancePhase && !(options.converge !== false && still) ? 1 : 0)
         )
         if (!still) {
           // 运动：frame 递增；静止冻结（jitter/BSM 相位恒定，M4 语义不变）
@@ -1099,7 +1134,7 @@ function buildCloudsStageImpl(
             reprojectionMatrix: params.reprojectionMatrix,
             viewReprojectionMatrix: params.viewReprojectionMatrix
           },
-          prevJitter
+          options.reprojectionJitter === false ? undefined : prevJitter
         )
         // 【2026-10-23 移植】保存本帧 jitter 供下帧重投影补偿（clone——params.temporalJitter
         // 每帧覆写）

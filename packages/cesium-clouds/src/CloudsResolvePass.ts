@@ -66,6 +66,10 @@ export interface CloudsResolvePassOptions {
    * 1/16 = 16 相位滑动平均（每帧 6.25% 当前帧）。
    */
   temporalBlend?: number
+  /** 【2026-10-26】0=跳过 AABB 裁剪（纯 EMA）。缺省 1=参考库语义。 */
+  clipEnabled?: number
+  /** 【2026-10-26】速度死区（全分像素；0=关）。demo `?cloudsVelDeadzone=0.5`。 */
+  velocityThresholdPx?: number
   /** 【2026-10-26】AABB 最小半宽（0=零回归；用于让历史在 march 噪声摆动下存活） */
   clipMinHalf?: number
   /** 【2026-10-25 探针】0=关历史重投影（排查拖动静止垂直漂移是否来自 velocity）。缺省 1。 */
@@ -104,8 +108,13 @@ export interface CloudsResolvePass {
   setTemporalAlpha(value: number): void
   /** 【2026-10-25】Bayer 直通开关（0=关；相位冻结时必须关） */
   setBayerDirectThrough(value: number): void
-  /** 【2026-10-26】AABB 最小半宽（运行时热调） */
   setClipMinHalf(value: number): void
+  /** 【2026-10-26】静止收敛：AABB 裁剪开关（1=参考库语义） */
+  setClipEnabled(value: number): void
+  /** 【2026-10-26】静止收敛：EMA 权重（0=纯裁剪） */
+  setTemporalBlend(value: number): void
+  /** 【2026-10-26】静止收敛：历史重投影开关（静止应为 0） */
+  setReprojectionEnabled(value: number): void
   /** 释放：双内部 primitive（各含 FBO）+ 双 Texture。幂等。 */
   destroy(): void
 }
@@ -124,6 +133,10 @@ export function createCloudsResolvePass(
   let bayerDirectThrough = options.bayerDirectThrough ?? 1
   // 【2026-10-26】AABB 最小半宽（0=零回归）
   let clipMinHalf = options.clipMinHalf ?? 0
+  // 【2026-10-26】静止收敛三开关（preRender 按 still 逐帧改写）
+  let clipEnabled = options.clipEnabled ?? 1
+  let temporalBlend = options.temporalBlend ?? 0
+  let reprojectionEnabled = options.reprojectionEnabled ?? 1
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
@@ -161,11 +174,13 @@ export function createCloudsResolvePass(
     // 【2026-10-24】despeckle 缺省回到 0：曾设为 1（窗口 3×3 后零成本），但它是空间
     // 滤波，会让云面偏「磨砂」——用户目验否决。保留为 ?cloudsDespeckle=1 手动开启。
     u_spatialDespeckle: () => options.spatialDespeckle ?? 0,
-    u_reprojectionEnabled: () => options.reprojectionEnabled ?? 1,
+    u_reprojectionEnabled: () => reprojectionEnabled,
     u_bayerDirectThrough: () => bayerDirectThrough,
     u_clipDebug: () => options.clipDebug ?? 0,
     u_clipMinHalf: () => clipMinHalf,
-    u_temporalBlend: () => options.temporalBlend ?? 0
+    u_temporalBlend: () => temporalBlend,
+    u_clipEnabled: () => clipEnabled,
+    u_velocityThresholdPx: () => options.velocityThresholdPx ?? 0
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——
@@ -233,6 +248,15 @@ export function createCloudsResolvePass(
     },
     setClipMinHalf(value: number): void {
       clipMinHalf = value
+    },
+    setClipEnabled(value: number): void {
+      clipEnabled = value
+    },
+    setTemporalBlend(value: number): void {
+      temporalBlend = value
+    },
+    setReprojectionEnabled(value: number): void {
+      reprojectionEnabled = value
     },
     setBayerDirectThrough(value: number): void {
       bayerDirectThrough = value

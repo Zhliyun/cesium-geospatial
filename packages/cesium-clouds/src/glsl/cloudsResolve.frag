@@ -46,6 +46,13 @@ uniform float u_clipDebug;
 // ∈(0,1]=每帧把当前帧按此权重混入）。参考库纯裁剪在「march 逐相位摆动大」时退化为
 // 冻结/跟随（实测静止帧间差 4.5/255，参考库 0.58），加 EMA 才能真正做 16 相位平均。
 uniform float u_temporalBlend;
+// 【2026-10-26】1=参考库语义（AABB 裁剪后累积）；0=跳过裁剪（纯 EMA，历史不被拉回当前帧）。
+// 仅 u_temporalBlend>0 时有意义——用于验证「裁剪是否吃掉 16 相位平均」。
+uniform float u_clipEnabled;
+// 【2026-10-26 静止噪声根治】速度死区（全分像素）：|velocity| 低于此值时视为静止（prevUv=vUv）。
+// 实测静止时重投影矩阵因 ECEF float32 精度仍有亚像素残差，逐帧把 history 采样点抖动
+// ±0.x px → 云区逐像素时间标准差 5.6（参考库 1.34）；死区 0.5px 后 1.35。0=关（零回归）。
+uniform float u_velocityThresholdPx;
 
 in vec2 vUv;
 
@@ -91,6 +98,16 @@ vec4 sanitizeHistory(const vec4 sampled, const vec4 current) {
     return current;
   }
   return sampled;
+}
+
+
+// 【2026-10-26】速度死区：把亚像素残差归零（静止时 history 采样点不再逐帧抖动）。
+vec2 applyVelocityDeadzone(const vec2 velocity, const ivec2 coord) {
+  if (u_velocityThresholdPx <= 0.0) {
+    return velocity;
+  }
+  vec2 velPx = velocity * vec2(textureSize(colorBuffer, 0));
+  return max(abs(velPx).x, abs(velPx).y) < u_velocityThresholdPx ? vec2(0.0) : velocity;
 }
 
 vec4 getClosestFragment(const ivec2 coord) {
@@ -156,7 +173,7 @@ void temporalUpscale(
   }
 
   vec4 depthVelocity = getClosestFragment(lowResCoord);
-  vec2 velocity = depthVelocity.gb;
+  vec2 velocity = applyVelocityDeadzone(depthVelocity.gb, lowResCoord);
   vec2 prevUv = mix(vUv, vUv - velocity, u_reprojectionEnabled);
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
@@ -193,7 +210,9 @@ void temporalUpscale(
   // 此处原来传 vUv（0..1 归一化 UV）——邻域被固定在纹理左上角，AABB 与当前像素无关，
   // 历史几乎永远落在 AABB 外 → 每帧退回 current → 时域完全不累积（实测：静止帧间差
   // 2.4/255 且不随时间收敛；同像素 march alpha 每帧在 0↔0.97 翻转而输出跟着跳）。
-  vec4 clippedColor = varianceClipping(colorBuffer, lowResCoord, currentColor, historyColor, varianceGamma);
+  vec4 clippedColor = u_clipEnabled > 0.5
+    ? varianceClipping(colorBuffer, lowResCoord, currentColor, historyColor, varianceGamma)
+    : historyColor;
   if (u_clipDebug > 0.5) {
     float wasClipped = any(greaterThan(abs(clippedColor - historyColor), vec4(1e-5))) ? 1.0 : 0.0;
     outputColor = vec4(currentColor.rgb, wasClipped);
@@ -238,7 +257,7 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   #endif // SHADOW_LENGTH
 
   vec4 depthVelocity = getClosestFragment(coord);
-  vec2 velocity = depthVelocity.gb;
+  vec2 velocity = applyVelocityDeadzone(depthVelocity.gb, coord);
 
   vec2 prevUv = mix(vUv, vUv - velocity, u_reprojectionEnabled);
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {

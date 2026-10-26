@@ -147,6 +147,11 @@ vi.mock('./CloudsResolvePass', () => ({
       // T2 运动自适应 α（2026-09-02）：onPreRender 每帧调——记录调用序列供断言
       setTemporalAlpha: vi.fn((v: number) => { inst.lastMotionAlpha = v }),
       setBayerDirectThrough: vi.fn((v: number) => { inst.lastDirectThrough = v }),
+      // 【2026-10-26 静止收敛档】onPreRender 每帧改写三开关
+      setClipEnabled: vi.fn(),
+      setTemporalBlend: vi.fn(),
+      setReprojectionEnabled: vi.fn(),
+      setClipMinHalf: vi.fn(),
       lastMotionAlpha: undefined as number | undefined,
       lastDirectThrough: undefined as number | undefined,
       destroy: vi.fn()
@@ -805,9 +810,33 @@ describe('M4 T7 temporal 编排', () => {
     handle!.destroy()
   })
 
-  it('缺省：相机运动时冻结相位（治拖动/旋转抖动）', () => {
+  // 【2026-10-26 静止收敛档缺省开】相位永远轮换（参考库语义）：运动中 jitter 逐帧变化，
+  // 历史才不会因「相位冻结 + 重投影」而拖出竖条纹（远端 68 实测：旧行为 45° 拖动后满屏
+  // 竖条纹；静止/运动噪声也被 1/32 EMA 压到参考库同档）。
+  it('缺省（converge）：相机运动时相位仍轮换', () => {
     const scene = createMockScene()
     const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true, temporal: true })
+    const camera = scene.camera as { positionWC: Cartesian3 }
+    const basePos = Cartesian3.clone(camera.positionWC)
+    firePreRender(scene)
+    const j1 = Cartesian2.clone(paramsOf(handle!)!.temporalJitter)
+    Cartesian3.add(basePos, new Cartesian3(50, 0, 0), camera.positionWC)
+    firePreRender(scene)
+    Cartesian3.add(basePos, new Cartesian3(100, 0, 0), camera.positionWC)
+    firePreRender(scene)
+    const j2 = paramsOf(handle!)!.temporalJitter
+    expect(j2.x).not.toBeCloseTo(j1.x, 6)
+    handle!.destroy()
+  })
+
+  // converge:false = 2026-10-25 旧行为（运动冻结相位治拖动抖动）
+  it('converge:false：相机运动时冻结相位', () => {
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), {
+      clouds: true,
+      temporal: true,
+      converge: false
+    })
     const camera = scene.camera as { positionWC: Cartesian3 }
     const basePos = Cartesian3.clone(camera.positionWC)
     firePreRender(scene)
