@@ -59,6 +59,10 @@ export interface CloudsResolvePassOptions {
   spatialDespeckle?: number
   /** 【2026-10-25】Bayer 直通开关（缺省 1） */
   bayerDirectThrough?: number
+  /** 【2026-10-26 探针】1=alpha 输出「历史是否被裁」，配合 ?cloudsOverlayDebug=1 观察 */
+  clipDebug?: number
+  /** 【2026-10-26】AABB 最小半宽（0=零回归；用于让历史在 march 噪声摆动下存活） */
+  clipMinHalf?: number
   /** 【2026-10-25 探针】0=关历史重投影（排查拖动静止垂直漂移是否来自 velocity）。缺省 1。 */
   reprojectionEnabled?: number
   /**
@@ -95,6 +99,8 @@ export interface CloudsResolvePass {
   setTemporalAlpha(value: number): void
   /** 【2026-10-25】Bayer 直通开关（0=关；相位冻结时必须关） */
   setBayerDirectThrough(value: number): void
+  /** 【2026-10-26】AABB 最小半宽（运行时热调） */
+  setClipMinHalf(value: number): void
   /** 释放：双内部 primitive（各含 FBO）+ 双 Texture。幂等。 */
   destroy(): void
 }
@@ -111,6 +117,8 @@ export function createCloudsResolvePass(
   let temporalAlpha = options.temporalAlpha ?? 0.1
   // 【2026-10-25】Bayer 直通开关（缺省 1）；相位冻结时由上层每帧置 0（见 shader 注释）
   let bayerDirectThrough = options.bayerDirectThrough ?? 1
+  // 【2026-10-26】AABB 最小半宽（0=零回归）
+  let clipMinHalf = options.clipMinHalf ?? 0
   const temporalDisocclusion = options.temporalDisocclusion ?? 0.5
   const upscaleDivisor =
     options.upscaleDivisor === 4 || options.upscaleDivisor === 2 ? options.upscaleDivisor : 1
@@ -149,7 +157,9 @@ export function createCloudsResolvePass(
     // 滤波，会让云面偏「磨砂」——用户目验否决。保留为 ?cloudsDespeckle=1 手动开启。
     u_spatialDespeckle: () => options.spatialDespeckle ?? 0,
     u_reprojectionEnabled: () => options.reprojectionEnabled ?? 1,
-    u_bayerDirectThrough: () => bayerDirectThrough
+    u_bayerDirectThrough: () => bayerDirectThrough,
+    u_clipDebug: () => options.clipDebug ?? 0,
+    u_clipMinHalf: () => clipMinHalf
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——
@@ -214,6 +224,9 @@ export function createCloudsResolvePass(
     getResolvedBridge(): { _texture: unknown; _target: number } {
       const internal = resolveTex as unknown as { _texture: unknown; _target: number }
       return { _texture: internal._texture, _target: internal._target }
+    },
+    setClipMinHalf(value: number): void {
+      clipMinHalf = value
     },
     setBayerDirectThrough(value: number): void {
       bayerDirectThrough = value

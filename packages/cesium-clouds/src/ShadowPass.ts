@@ -289,6 +289,9 @@ export function createShadowPass(options: ShadowPassOptions): ShadowPass {
         historyBuffer: () => historyTex,
         texelSize: () => shadowTexelSize,
         varianceGamma: () => 1,
+        // 【2026-10-26】varianceClipping 新增 u_clipMinHalf——本端也 include 该文件，
+        // 必须绑定（否则生成端 Unknown uniform 崩帧，2026-09 先例）。BSM 端恒 0 = 零回归。
+        u_clipMinHalf: () => 0,
         temporalAlpha: () => 0.01,
         u_cascadeIndex: () => cascadeIndex
       }

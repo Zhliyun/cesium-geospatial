@@ -697,6 +697,10 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsPhaseStride') != null ? { phaseStride: getNumber('cloudsPhaseStride')! } : {}),
           // 【2026-10-26 探针】强制关 Bayer 直通
           ...(getNumber('cloudsDirectThrough') != null ? { bayerDirectThrough: getNumber('cloudsDirectThrough')! } : {}),
+          // 【2026-10-26 探针】resolve alpha 输出裁剪标志（配 cloudsOverlayDebug=1）
+          ...(getNumber('cloudsClipDebug') != null ? { clipDebug: getNumber('cloudsClipDebug')! } : {}),
+          // 【2026-10-26】AABB 最小半宽（0=零回归）
+          ...(getNumber('cloudsClipMinHalf') != null ? { clipMinHalf: getNumber('cloudsClipMinHalf')! } : {}),
           // 【2026-10-25 探针】关历史重投影（排查拖动垂直漂移来源）
           ...(getNumber('cloudsReproj') != null ? { reprojectionEnabled: getNumber('cloudsReproj')! } : {}),
           // 【2026-10-25】shapeDetail LOD 下限（0=隐式/参考库；缺省 1.5）

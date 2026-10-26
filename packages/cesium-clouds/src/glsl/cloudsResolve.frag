@@ -39,6 +39,9 @@ uniform float u_reprojectionEnabled;
 // 相位冻结后这批像素固定不变 → 规则格点（实测 N=4 下 4px×2px、FFT 主峰 16135，
 // N=1 全分路径无此峰）。参考库相位永远轮换，所以直通不会固化。
 uniform float u_bayerDirectThrough;
+// 【2026-10-26 探针】1 = 把「历史是否被 AABB 裁掉」写入 alpha（配合 ?cloudsOverlayDebug=1
+// 直显：白=被裁=该像素本帧没有累积，黑=历史保留）。
+uniform float u_clipDebug;
 
 in vec2 vUv;
 
@@ -187,6 +190,11 @@ void temporalUpscale(
   // 历史几乎永远落在 AABB 外 → 每帧退回 current → 时域完全不累积（实测：静止帧间差
   // 2.4/255 且不随时间收敛；同像素 march alpha 每帧在 0↔0.97 翻转而输出跟着跳）。
   vec4 clippedColor = varianceClipping(colorBuffer, lowResCoord, currentColor, historyColor, varianceGamma);
+  if (u_clipDebug > 0.5) {
+    float wasClipped = any(greaterThan(abs(clippedColor - historyColor), vec4(1e-5))) ? 1.0 : 0.0;
+    outputColor = vec4(currentColor.rgb, wasClipped);
+    return;
+  }
   // 【2026-10-25 观感对齐：回到参考库的纯累积】参考库的 upscale 分支（生产路径，恒 N=4）
   // 是 `outputColor = clippedColor`——历史经当前帧邻域 AABB 裁剪后直接写回，**不混入
   // 当前帧**。我们 2026-09-02 为治静止抖动加了 mix(clipped, current, α=0.1)：当时噪声

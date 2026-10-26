@@ -236,6 +236,10 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   phaseStride?: number
   /** 【2026-10-26 探针】强制关 Bayer 直通（0=关）。demo `?cloudsDirectThrough=0`。 */
   bayerDirectThrough?: number
+  /** 【2026-10-26 探针】1=resolve alpha 输出「历史是否被裁」。demo `?cloudsClipDebug=1`。 */
+  clipDebug?: number
+  /** 【2026-10-26】AABB 最小半宽（0=零回归）。demo `?cloudsClipMinHalf=`。 */
+  clipMinHalf?: number
   /** 【2026-10-25 探针】0=关历史重投影（缺省 1）。demo `?cloudsReproj=0`。 */
   reprojectionEnabled?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
@@ -865,6 +869,8 @@ function buildCloudsStageImpl(
           // 【2026-10-08 白点治理】输出端孤点中值滤波（demo ?cloudsDespeckle=1）
           spatialDespeckle: options.spatialDespeckle,
           reprojectionEnabled: options.reprojectionEnabled,
+          clipDebug: options.clipDebug,
+          clipMinHalf: options.clipMinHalf,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,

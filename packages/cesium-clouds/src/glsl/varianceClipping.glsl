@@ -15,6 +15,11 @@ const ivec2 varianceOffsets[8] = ivec2[8](
 const ivec2 varianceOffsets[4] = ivec2[4](ivec2(1, 0), ivec2(0, -1), ivec2(0, 1), ivec2(-1, 0));
 #endif // VARIANCE_9_SAMPLES
 
+// 【2026-10-26】AABB 最小半宽：march 逐帧噪声使 3×3 邻域方差剧烈摆动时，方差下限仍可能
+// 小于一帧噪声 → history 每帧被判出界（实测云体约 50% 像素被裁）→ 时域完全不累积。
+// 给 AABB 一个下限半宽（缺省 0=零回归；?cloudsClipMinHalf=N 开）。
+uniform float u_clipMinHalf;
+
 // Reference: https://github.com/playdeadgames/temporal
 vec4 clipAABB(const vec4 current, const vec4 history, const vec4 minColor, const vec4 maxColor) {
   vec3 pClip = 0.5 * (maxColor.rgb + minColor.rgb);
@@ -64,6 +69,9 @@ vec4 varianceClipping(
   vec4 varianceGamma = sqrt(max(moment2 / N - mean * mean, 0.0)) * gamma;
   vec4 minColor = mean - varianceGamma;
   vec4 maxColor = mean + varianceGamma;
+  // 【2026-10-26】最小半宽下限（u_clipMinHalf=0 时逐位零回归）
+  minColor = min(minColor, current - vec4(u_clipMinHalf));
+  maxColor = max(maxColor, current + vec4(u_clipMinHalf));
   return clipAABB(clamp(mean, minColor, maxColor), history, minColor, maxColor);
 }
 
