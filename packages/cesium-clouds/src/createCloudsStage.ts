@@ -1040,7 +1040,7 @@ function buildCloudsStageImpl(
           // 参数，全程同一套（重投影开 + 不裁剪 + EMA）。重投影偏置修好后才可行
           //（48eb972：march 速度里的 −jitter 已在 resolve 侧扣掉）。
           // ?cloudsUniform=0 回退到「静止/运动两套参数」的旧行为。
-          const uniformFilter = options.uniformFilter !== false
+          const uniformFilter = options.uniformFilter === true
           const movingBlend = options.motionBlend ?? 0
           resolvePass?.setReprojectionEnabled(still && !uniformFilter ? 0 : 1)
           // 近处：blend=0 + 裁剪开 → 参考库纯裁剪（无拖影）；远处另有 farBlend 长窗。
