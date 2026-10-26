@@ -362,3 +362,18 @@ dither 在 ±500m 物理尺度上摆动 → 逐帧方差 ∝ 步长 —— 正�
 
 **专家给出的其余差异（未落地）**：层内步长重置沿用粗值、`sampleWeather` 的 puffMid 循环内隐式
 `texture()`（参考库无，可改 `textureLod(...,0.0)`）。
+
+## 十八、2026-10-27 补轮十三：太空机位拖影（专家定位）+ getClosestFragment 死代码
+
+**根因（space-expert）**：远段判据只看**深度**——「远=视差小=可长窗」。该假设在**旋转**下不成立：
+旋转造成的屏幕位移与深度无关。112km 机位视线到云 ≥270km ≫ `farRange.y=60km` → **全屏 farT=1**
+→ 同时 ① 绕过 AABB 裁剪（`mix(clippedColor, historyColor, farT)`）、② α 被换成
+`u_temporalBlendFar=0.05`（20 帧 EMA，覆盖运动 α）。两条防拖影机制同时失效 → 严重拖影。
+
+**修**：`farT *= 1 - smoothstep(4, 12, |velocity|px)` ——屏幕速度大的像素不许走长窗。
+
+**顺带修真 bug**：`getClosestFragment` 的同深度守卫写成
+`neighbor.r <= c*2 && c*2 <= neighbor.r`（只有恰好等于 2c 才成立）→ **恒 false 的死代码**，
+退化为「永远只取中心块」。按本意改为 `neighbor.r >= c*0.5`。
+
+实测（112km 机位）：静止 0.089、停后追平 0.095。

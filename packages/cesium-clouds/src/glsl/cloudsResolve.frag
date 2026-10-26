@@ -182,7 +182,10 @@ vec4 getClosestFragment(const ivec2 coord) {
     // 深度悬殊（>2× 或 <0.5×）= 跨层 texel，velocity 不可借。同质条件并入 min 竞争
     //（unroll 展开后无循环上下文，不能用 continue——glslang 'continue statement
     // only allowed in loops'）。
-    if (neighbor.r <= centerDepth * 2.0 && centerDepth * 2.0 <= neighbor.r && neighbor.r < result.r) {
+    // 【2026-10-27 死代码修复】原条件 `neighbor.r <= c*2 && c*2 <= neighbor.r` 只有
+    // neighbor.r 恰好等于 c*2 时才成立 → 恒 false，退化成「永远只取中心块」。本意是
+    // 「深度在 [0.5c, 2c] 内才算同质邻居」，按本意修正。
+    if (neighbor.r <= centerDepth * 2.0 && neighbor.r >= centerDepth * 0.5 && neighbor.r < result.r) {
       result = neighbor;
     }
   }
@@ -279,8 +282,15 @@ void temporalUpscale(
   // 【2026-10-26】远近分治：近处 α=u_temporalBlend（缺省 0=纯裁剪，无拖影）；
   // 远处 α=u_temporalBlendFar（长窗平均压远地平线相位噪声）。远段不做 AABB 裁剪
   // （裁剪会把历史拉回当前帧邻域，平均失效）。
+  // 【2026-10-27 太空机位拖影·根治】原来的「远段」只用**深度**判定，隐含假设是
+  // 「远=视差小=可长窗」。这个假设在**旋转**下不成立：旋转造成的屏幕位移与深度无关，
+  // 112km 机位视线到云 ≥270km ≫ u_farRange.y(60km) → 全屏 farT=1 → 既绕过 AABB 裁剪、
+  // 又把 α 换成 20 帧长窗（farBlend=0.05），两条防拖影机制同时失效 → 严重拖影。
+  // 修：farT 再乘一个「屏幕速度小」的门控——每秒几十像素的位移不允许走长窗。
+  float velPx = length(velocity * vec2(textureSize(colorBuffer, 0)));
+  float farSpeedGate = 1.0 - smoothstep(4.0, 12.0, velPx);
   float farT = u_temporalBlendFar > 0.0
-    ? smoothstep(u_farRange.x, u_farRange.y, max(0.0, depthVelocity.r))
+    ? smoothstep(u_farRange.x, u_farRange.y, max(0.0, depthVelocity.r)) * farSpeedGate
     : 0.0;
   vec4 accumColor = mix(clippedColor, historyColor, farT);
   float blendAlpha = mix(u_temporalBlend, u_temporalBlendFar, farT);

@@ -152,7 +152,7 @@ describe('coverage=1 云甲内盐粒修复：getClosestFragment 深度同质性�
   it('同质守卫在场：邻居/中心深度比 >2 跳过，无同质邻居退自身', () => {
     const src = buildCloudsResolveFragmentShader(OPTS)
     expect(src).toContain('getClosestFragmentDepthHomogeneityGuard')
-    expect(src).toContain('neighbor.r <= centerDepth * 2.0 && centerDepth * 2.0 <= neighbor.r')
+    expect(src).toContain('neighbor.r <= centerDepth * 2.0 && neighbor.r >= centerDepth * 0.5')
   })
 
   it('glslang：同质守卫在场真编译（TAA 分支）', () => {
