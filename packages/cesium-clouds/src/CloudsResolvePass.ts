@@ -74,6 +74,8 @@ export interface CloudsResolvePassOptions {
   blendDepthFalloff?: number
   /** 【2026-10-26】远云专用 EMA 权重（0=关）。 */
   temporalBlendFar?: number
+  /** 【2026-10-26】上帧几何 jitter（低分 UV）读取器——resolve 里从 velocity 中扣除。 */
+  prevJitterUV?: () => Cartesian2
   /** 【2026-10-26】AABB 最小半宽（0=零回归；用于让历史在 march 噪声摆动下存活） */
   clipMinHalf?: number
   /** 【2026-10-25 探针】0=关历史重投影（排查拖动静止垂直漂移是否来自 velocity）。缺省 1。 */
@@ -130,6 +132,8 @@ export interface CloudsResolvePass {
 /**
  * 创建云 resolve Pass（双 Texture/双内部 primitive ping-pong + 稳定外壳）。
  */
+const ZERO2 = new Cartesian2(0, 0)
+
 export function createCloudsResolvePass(
   options: CloudsResolvePassOptions
 ): CloudsResolvePass {
@@ -194,7 +198,8 @@ export function createCloudsResolvePass(
     u_velocityThresholdPx: () => options.velocityThresholdPx ?? 0,
     u_blendDepthFalloff: () => blendDepthFalloff,
     u_temporalBlendFar: () => temporalBlendFar,
-    u_farRange: () => farRange
+    u_farRange: () => farRange,
+    u_prevJitterUV: () => options.prevJitterUV?.() ?? ZERO2
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——

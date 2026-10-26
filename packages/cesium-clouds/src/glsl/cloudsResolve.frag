@@ -60,6 +60,11 @@ uniform float u_blendDepthFalloff;
 // 重投影近乎精确）改用 EMA 长窗平均。u_temporalBlendFar=0 时关闭（零回归）。
 uniform float u_temporalBlendFar;
 uniform vec2 u_farRange;
+// 【2026-10-26 拖影根因】上帧几何 jitter（低分 UV）。本实现的 jitter 只作用于「射线重建」
+// （windowCoord 偏移），不作用于像素栅格——于是 march 写出的 velocity 里恒含 −j(t) 项
+// （实测静止时 velocity ≈ −jitter，应为 0）。静止/拖动时 history 被采偏 ~1.5 低分 texel
+// = 拖影。正确补偿：histUV = vUv − velocity − j(t−1)。
+uniform vec2 u_prevJitterUV;
 
 in vec2 vUv;
 
@@ -181,7 +186,7 @@ void temporalUpscale(
 
   vec4 depthVelocity = getClosestFragment(lowResCoord);
   vec2 velocity = applyVelocityDeadzone(depthVelocity.gb, lowResCoord);
-  vec2 prevUv = mix(vUv, vUv - velocity, u_reprojectionEnabled);
+  vec2 prevUv = mix(vUv, vUv - velocity - u_prevJitterUV, u_reprojectionEnabled);
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH
@@ -274,7 +279,7 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
   vec4 depthVelocity = getClosestFragment(coord);
   vec2 velocity = applyVelocityDeadzone(depthVelocity.gb, coord);
 
-  vec2 prevUv = mix(vUv, vUv - velocity, u_reprojectionEnabled);
+  vec2 prevUv = mix(vUv, vUv - velocity - u_prevJitterUV, u_reprojectionEnabled);
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
     outputColor = currentColor;
     #ifdef SHADOW_LENGTH

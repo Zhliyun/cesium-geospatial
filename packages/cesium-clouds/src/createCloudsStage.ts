@@ -272,6 +272,9 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   motionBlendDepthFalloff?: number
   /** 【2026-10-26】远云（>30km 起）专用 EMA 权重（缺省 0.05；0=关）。 */
   farBlend?: number
+  /** 【2026-10-26 诊断】几何（射线）Bayer 抖动开关。缺省 true。false → temporalJitter 恒 0，
+   *  用于验证「射线抖动未在速度里抵消」是否拖影根因。demo `?cloudsGeomJitter=0`。 */
+  geometryJitter?: boolean
   /** 【2026-10-25 探针】0=关历史重投影（缺省 1）。demo `?cloudsReproj=0`。 */
   reprojectionEnabled?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
@@ -907,6 +910,8 @@ function buildCloudsStageImpl(
           clipMinHalf: options.clipMinHalf,
           temporalBlend: options.temporalBlend,
           clipEnabled: options.clipEnabled,
+          // 【2026-10-26】上帧几何 jitter 交给 resolve 从 velocity 里扣除（矩阵注入已废）
+          prevJitterUV: () => prevJitter ?? ZERO_JITTER,
           velocityThresholdPx: options.velocityThresholdPx,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
@@ -926,6 +931,7 @@ function buildCloudsStageImpl(
     // createCloudsStage 的零直捕 listener 调用；prevCamera/matricesFrozen 是 per-impl 状态
     //（换 impl 自然归零——freeze 语义从新 impl 重新起算）。
     let prevCamera: TemporalCameraSnapshot | undefined
+    const ZERO_JITTER = new Cartesian2(0, 0)
     // 【2026-10-23 移植自 79e79ff v44】上帧 temporalJitter（重投影矩阵补偿用；见
     // temporalMath.buildReprojectionMatrices 注释）
     let prevJitter: Cartesian2 | undefined
@@ -1149,6 +1155,10 @@ function buildCloudsStageImpl(
           cloudsPass.marchHeight,
           params.temporalJitter
         )
+        if (options.geometryJitter === false) {
+          params.temporalJitter.x = 0
+          params.temporalJitter.y = 0
+        }
         const viewMatrix = camera.viewMatrix
         const projectionMatrix = (camera.frustum as unknown as { projectionMatrix: Matrix4 })
           .projectionMatrix
@@ -1162,7 +1172,7 @@ function buildCloudsStageImpl(
             reprojectionMatrix: params.reprojectionMatrix,
             viewReprojectionMatrix: params.viewReprojectionMatrix
           },
-          options.reprojectionJitter === false ? undefined : prevJitter
+          undefined // 【2026-10-26】改由 resolve 侧 u_prevJitterUV 补偿（矩阵注入实测无效）
         )
         // 【2026-10-23 移植】保存本帧 jitter 供下帧重投影补偿（clone——params.temporalJitter
         // 每帧覆写）
