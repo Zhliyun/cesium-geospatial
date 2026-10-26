@@ -283,3 +283,26 @@ detail 随距离连续淡出。u_jitterScale=1 时形状与参考库一致，只
 在 mipLevel=1 处的**导数拐点**（步长从 mix 切到 maxStepSize）——同样是 mip=1 等值线，
 同样是随距离移动的环。判别：`?cloudsQuality=ultra` 若环纹消失=采样类；`?cloudsDetailLod=`
 改 detail LOD 下限看噪点是否变。
+
+## 十四、2026-10-27 补轮九：与参考库对齐——shape/detail 回隐式 LOD（真正的根因）
+
+用户要求「照参考库看，参考库没这问题，是咱实现的 bug」。逐行 diff 参考库
+（`three-geospatial/packages/clouds/src/shaders/clouds.glsl`）后找到唯一真正的分叉：
+
+| | 参考库 | 我们（2026-10-09 起） |
+|---|---|---|
+| turbulence | `texture(...)` 隐式 | 同 |
+| **shape** | `texture(shapeTexture, pos)` **隐式** | `textureLod(..., log2(stepLength*repeat*128))` |
+| **detail** | `texture(shapeDetailTexture, pos)` **隐式** | `textureLod(..., max(detailLod, u_detailLodFloor))` |
+
+步长是「随距离分段」的量（`mix(stepSize,maxStepSize,mip)` + 空区指数放大 + 云内恢复），
+于是纹理 LOD 沿距离**量化成段**：段内采样率与屏幕足迹不匹配 = 欠采样走样噪点，段界 =
+一条等距「等高线」。相机高度一变，段与噪点整体平移 —— 就是用户报的现象。
+
+**修**：shape/detail 改回参考库的隐式 `texture()`（LOD 由屏幕足迹导数决定，永远匹配像素
+尺度）；连带 `u_detailLodFloor` 不再使用，已从 uniformMap 移除（绑定未使用的 uniform 会
+因编译器消除触发 Cesium `Unknown uniform` 崩帧）。detail 的随机门控同时改为平滑权重
+（见第十三节）。
+
+实测：6094m 俯视 云面细颗粒明显消失、形状更干净；静止 0.082 / 旋转 11.90 / 追平 0.082
+均无回归。`?cloudsDetailLod=` 随之失效。

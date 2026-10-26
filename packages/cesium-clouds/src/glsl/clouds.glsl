@@ -241,8 +241,13 @@ MediaSample sampleMedia(
   // 保留显式 textureLod（循环内隐式导数无定义）但去掉下限：近处 mipLevel≈0 → LOD 0，
   // 与参考库清晰度对齐；远处仍由 mipLevel*1.5 压制欠采样噪声。
   // 沿视线的采样足迹 = 步长 → 纹理单位 → texel 数；取 log2 即 LOD。
-  float shapeLod = log2(max(1.0, stepLength * abs(shapeRepeat.x) * SHAPE_TEX_SIZE));
-  float shape = textureLod(shapeTexture, shapePosition, shapeLod).r;
+  // 【2026-10-27 回归参考库：隐式 LOD】原实现用 `textureLod(..., log2(stepLength*repeat*128))`
+  // ——LOD 由 **march 步长**推，而步长是随距离分段的量（mix(stepSize,maxStepSize,mip) +
+  // 空区指数放大），于是纹理 LOD 沿距离**量化成段**：段内采样率与屏幕足迹不匹配 = 欠采样
+  // 走样噪点，段界 = 一条「等距等高线」。相机高度一变，这些段和噪点就整体平移——正是
+  // 用户看到的「俯视云面噪点呈等高线花纹变化」。参考库这三层一律用隐式 `texture()`（LOD
+  // 由屏幕足迹的导数决定，永远与像素尺度匹配），故参考库没有该现象。
+  float shape = texture(shapeTexture, shapePosition).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
   #ifdef DEBUG_SHOW_SAMPLE_COUNT
@@ -265,8 +270,9 @@ MediaSample sampleMedia(
     // 一片随画面平移的亮点（用户「拖动时噪声点垂直移动」）。按 mipLevel（随 rayDistance
     // 增长）给显式 LOD 下限，把近处步进内的 detail 采样压到可分辨尺度。
     // shape/turbulence 频率低 5-20 倍，保持隐式 LOD（与参考库一致）。
-    float detailLod = log2(max(1.0, stepLength * abs(shapeDetailRepeat.x) * DETAIL_TEX_SIZE));
-    float detail = textureLod(shapeDetailTexture, detailPosition, max(detailLod, u_detailLodFloor)).r;
+    // 同上：detail 也用隐式 LOD（参考库原样）。u_detailLodFloor 不再参与——
+    // 它当初是为了压 N=1 全分 march 的走样，与 LOD 量化是同一类副作用。
+    float detail = texture(shapeDetailTexture, detailPosition).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(
       vec4(pow(detail, 6.0)),
