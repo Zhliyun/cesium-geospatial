@@ -231,6 +231,11 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   motionPhaseRotate?: boolean
   /** 【2026-10-25】首次收敛窗口帧数（缺省 6，≈0.1s；0=从不轮换，单相位）。 */
   warmupFrames?: number
+  /** 【2026-10-26】相位推进降频：每 N 帧推进一次（1=参考库每帧；越大闪烁越小、梳状纹平均越慢）。
+   *  demo `?cloudsPhaseStride=N`。 */
+  phaseStride?: number
+  /** 【2026-10-26 探针】强制关 Bayer 直通（0=关）。demo `?cloudsDirectThrough=0`。 */
+  bayerDirectThrough?: number
   /** 【2026-10-25 探针】0=关历史重投影（缺省 1）。demo `?cloudsReproj=0`。 */
   reprojectionEnabled?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
@@ -941,16 +946,23 @@ function buildCloudsStageImpl(
           stillFrames++
           if (stillFrames >= warmupFrames) warmedUp = true
         }
+        // 【2026-10-26 降频轮换】phaseStride=N：每 N 帧才推进一次相位。N=1=参考库语义
+        //（每帧轮换→梳状纹被平均掉，但帧间闪烁最大）；N 越大闪烁越小、梳状纹平均越慢。
+        const stride = Math.max(1, Math.round(options.phaseStride ?? 1))
+        const phaseTick = stride === 1 || params.marchFrame % stride === 0
         const advancePhase =
-          options.motionPhaseRotate === true ||
-          (still && !warmedUp && stillFrames < warmupFrames)
+          (options.motionPhaseRotate === true ||
+            (still && !warmedUp && stillFrames < warmupFrames)) && phaseTick
         if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
         }
         // 【2026-10-25】相位不推进（冻结）时必须关 Bayer 直通：直通像素绕过累积直显原始
         // 噪声，相位不变时这批像素固定 → 规则格点（实测 N=4 下 4px×2px、FFT 主峰 16135；
         // N=1 全分路径无此峰）。推进时保持 1（参考库语义：每帧 1/16 像素直通采样新相位）。
-        resolvePass?.setBayerDirectThrough(advancePhase ? 1 : 0)
+        // ?cloudsDirectThrough=0 强制关（排查闪烁来源用）
+        resolvePass?.setBayerDirectThrough(
+          options.bayerDirectThrough === 0 ? 0 : (advancePhase ? 1 : 0)
+        )
         if (!still) {
           // 运动：frame 递增；静止冻结（jitter/BSM 相位恒定，M4 语义不变）
           params.frame++
