@@ -1071,8 +1071,9 @@ function buildCloudsStageImpl(
             ? 0
             : (advancePhase ? 1 : 0)
         )
-        if (!still) {
-          // 运动：frame 递增；静止冻结（jitter/BSM 相位恒定，M4 语义不变）
+        // 【2026-10-26 一动就抖】统一档下 BSM 相位也恒轮换（旧：仅运动时递增 → 一拖动
+        // 阴影噪声就换一套 = 运动专属的抖动）。静止冻结的旧语义保留在 cloudsUniform=0。
+        if (!still || options.uniformFilter === true) {
           params.frame++
         }
         // prevCameraPos 在下方 temporal 分支 prevCamera 快照处一并更新（同一 if 内）
