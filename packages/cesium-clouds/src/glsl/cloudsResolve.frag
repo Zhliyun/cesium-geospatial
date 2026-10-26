@@ -143,7 +143,9 @@ vec2 applyVelocityDeadzone(const vec2 velocity, const ivec2 coord) {
   if (u_velocityThresholdPx <= 0.0) {
     return velocity;
   }
-  vec2 velPx = velocity * vec2(textureSize(colorBuffer, 0));
+  // 【2026-10-27 单位修正】同 farSpeedGate：colorBuffer 是低分纹理，须乘 UPSCALE_DIVISOR
+  // 才回到文档承诺的「全分像素」语义（缺省 0=关，故行为不变，仅修语义）。
+  vec2 velPx = velocity * vec2(textureSize(colorBuffer, 0)) * float(UPSCALE_DIVISOR);
   return max(abs(velPx).x, abs(velPx).y) < u_velocityThresholdPx ? vec2(0.0) : velocity;
 }
 

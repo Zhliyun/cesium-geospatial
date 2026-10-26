@@ -287,6 +287,8 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
    * 项目 2026-09-29 有记录。`?cloudsMotionJitter=0.3` 是观感取舍档。
    */
   motionJitterScale?: number
+  /** 【2026-10-27】进入运动头几帧的「洗历史」α（缺省 0.5）。`?cloudsMotionFlush=`。 */
+  motionFlushBlend?: number
   /** 【2026-10-27】静止稳态 EMA 权重（缺省 1/256）——收敛窗口结束后使用。`?cloudsHoldBlend=`。 */
   holdBlend?: number
   /** 【2026-10-27 A/B】1=去抖动重采样（缺省）；0=旧行为。demo `?cloudsDejitter=0`。 */
@@ -966,6 +968,8 @@ function buildCloudsStageImpl(
     // 【2026-10-26】静止判定结果提到外层——computeTemporalJitter（另一个 if 块）要用它
     // 决定是否注入几何抖动
     let frameStill = false
+    // 【2026-10-27】连续运动帧数（用于起步洗历史）
+    let movingFrames = 0
     // 【2026-10-25】首次收敛是否已完成（只做一次，避免每次停下都抖一秒）
     let warmedUp = false
     // 【2026-10-25】收敛窗口帧数（?cloudsWarmupFrames=N；0=从不轮换）
@@ -1001,6 +1005,7 @@ function buildCloudsStageImpl(
           still = Math.acos(cosAngle) < 1e-4
         }
         frameStill = still
+        movingFrames = still ? 0 : movingFrames + 1
         // 【2026-10-08 白点排查】marchFrame 与 frame 双计数拆分：
         // - frame：原语义（静止冻结）——shadow/BSM 端噪声相位（全端解冻实测 BSM 帧间
         //   去相关 → 主 march 光深跳动 → 暗斑闪烁，2026-10-08 判别实验）。
@@ -1089,7 +1094,15 @@ function buildCloudsStageImpl(
           const blendHold = options.holdBlend ?? 0.00390625
           // 【2026-10-27】运动窗 4→10 帧（0.25→0.1）：用户实测「静止 1 秒变柔和、一动又颗粒」=
           // 颗粒完全来自运动窗太短。拖影由 AABB 裁剪约束（同机位对拍 1.78 vs 1.79，无恶化）。
-          const blendMove = uniformFilter ? (options.motionBlend ?? 0.1) : movingBlend
+          // 【2026-10-27 起步拖尾】静止是 1/256 的「长寿历史」，一进入运动若仍按 α=0.1 衰减，
+          // 旧历史要 ~30 帧才冲掉 → 刚开始转动的前半秒有明显拖影（exp-accum 的第 2 条）。
+          // 处置：运动头 MOVING_FLUSH_FRAMES 帧用大 α 快速洗掉陈旧历史，之后回落到正常 α。
+          const MOVING_FLUSH_FRAMES = 6
+          const blendMoveBase = uniformFilter ? (options.motionBlend ?? 0.1) : movingBlend
+          const blendMove =
+            !still && movingFrames < MOVING_FLUSH_FRAMES
+              ? Math.max(blendMoveBase, options.motionFlushBlend ?? 0.5)
+              : blendMoveBase
           resolvePass?.setTemporalBlend(
             still ? (stillFrames < warmupFrames ? blendStill : blendHold) : blendMove
           )
