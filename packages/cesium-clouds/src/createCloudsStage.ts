@@ -983,6 +983,8 @@ function buildCloudsStageImpl(
         // 旧判定把它当静止 → converge 档的「静止关重投影」被套到旋转帧上，history 不做
         // 重投影 → 转动视角时画面拖影/抖动（用户真机反馈）。判定=位移 <0.01m 且
         // look 方向变化 <1e-4 rad（≈0.006°，人眼无感的量级）。
+        // 【2026-10-27 实测】阈值不能再收紧：0.002m / 1e-5 rad 会让静止永远判定失败
+        // （相机 matrix 有 mm 级/float 级抖动），实测静止 std 从 0.088 恶化到 7.0。
         let still =
           prevCameraPos != null && Cartesian3.distance(camera.positionWC, prevCameraPos) < 0.01
         if (still && prevDirWC != null) {
@@ -1053,7 +1055,10 @@ function buildCloudsStageImpl(
           // 两套档 2.25 / 0.43；?cloudsUniform=0 可回退。
           const uniformFilter = options.uniformFilter !== false
           const movingBlend = options.motionBlend ?? 0
-          resolvePass?.setReprojectionEnabled(still && !uniformFilter ? 0 : 1)
+          // 【2026-10-27 静止方向漂移】静止时一律关重投影：没有相机运动就没有需要重投影的
+          // 内容，prevUv 直接取像素自身 → 任何 velocity 偏置（jitter 残差/浮点误差/显卡差异）
+          // 都不可能把历史采样点挪开，从结构上消灭「静止时云整体向上移动的残影」。
+          resolvePass?.setReprojectionEnabled(still ? 0 : 1)
           // 近处：blend=0 + 裁剪开 → 参考库纯裁剪（无拖影）；远处另有 farBlend 长窗。
           // 显式 ?cloudsClip= 优先（A/B 需要：uniform 档下裁剪是否该留，见 2026-10-27 实测）
           // 【2026-10-27 拖影】运动时打开 AABB 裁剪：32 帧 EMA 的历史若无边界，重投影误差
