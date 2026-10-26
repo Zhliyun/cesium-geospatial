@@ -1053,20 +1053,28 @@ function buildCloudsStageImpl(
           resolvePass?.setReprojectionEnabled(still && !uniformFilter ? 0 : 1)
           // 近处：blend=0 + 裁剪开 → 参考库纯裁剪（无拖影）；远处另有 farBlend 长窗。
           // 显式 ?cloudsClip= 优先（A/B 需要：uniform 档下裁剪是否该留，见 2026-10-27 实测）
+          // 【2026-10-27 拖影】运动时打开 AABB 裁剪：32 帧 EMA 的历史若无边界，重投影误差
+          // 会沿拖动方向留半秒残影（用户反馈「只剩拖影」）。裁剪把历史夹在当前帧邻域内 =
+          // 有界无残影，同时保留平均（静止仍关裁剪，避免 2026-10-26 的静止拉锯）。
           resolvePass?.setClipEnabled(
-            options.clipEnabled ?? (uniformFilter ? 0 : (still ? 0 : (movingBlend > 0 ? 0 : 1)))
+            options.clipEnabled ??
+              (still ? 0 : (uniformFilter ? 1 : (movingBlend > 0 ? 0 : 1)))
           )
-          resolvePass?.setTemporalBlend(
-            uniformFilter
-              ? (options.convergeBlend ?? 0.03125)
-              : (still ? (options.convergeBlend ?? 0.03125) : movingBlend)
-          )
+          // 【2026-10-27 拖影】统一档也允许「运动短窗」：拖影 = 32 帧 EMA 在运动中的历史残留，
+          // 窗口越短残留越短。缺省仍与静止同值（1/32，零行为变化），`?cloudsMotionBlend=` 可调。
+          // 【2026-10-27 拖影定稿】运动缺省 α=0.25（≈4 帧窗）：拖影 = 长窗在运动中的历史残留，
+          // 32 帧窗下任何重投影误差都会留半秒残影。jitter 量纲修好后运动噪声本就很低
+          //（地平线带 rotate 1.36，参考库同口径 1.33），短窗不会把颗粒带回来。
+          const blendStill = options.convergeBlend ?? 0.03125
+          const blendMove = uniformFilter ? (options.motionBlend ?? 0.25) : movingBlend
+          resolvePass?.setTemporalBlend(still ? blendStill : blendMove)
           // 运动时远处云用长窗平均（视差小、重投影精确）；静止不启用（保持现收敛档）
           resolvePass?.setBlendDepthFalloff(
             still ? 0 : (options.motionBlendDepthFalloff ?? 0)
           )
-          // 远地平线长窗（仅运动时；静止已由 convergeBlend 全局平均）
-          resolvePass?.setTemporalBlendFar(still ? 0 : (options.farBlend ?? 0.05))
+          // 远地平线长窗（仅运动时）。【2026-10-27 拖影】远段 20 帧窗是全场最长的拖影尾巴
+          //（>50km smoothstep 到 α=0.05），运动缺省关闭；需要压远段噪声时用 ?cloudsFarBlend=
+          resolvePass?.setTemporalBlendFar(still ? 0 : (options.farBlend ?? 0))
         }
         if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
