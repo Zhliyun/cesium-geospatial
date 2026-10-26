@@ -265,6 +265,9 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   converge?: boolean
   /** 【2026-10-26】静止 EMA 权重（缺省 1/32）。demo `?cloudsConvergeBlend=`。 */
   convergeBlend?: number
+  /** 【2026-10-26】运动 EMA 权重（缺省 1/16，重投影开启 + 不做裁剪；旋转/平移实测无拖影）。
+   *  demo `?cloudsMotionBlend=`。 */
+  motionBlend?: number
   /** 【2026-10-25 探针】0=关历史重投影（缺省 1）。demo `?cloudsReproj=0`。 */
   reprojectionEnabled?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
@@ -948,8 +951,16 @@ function buildCloudsStageImpl(
       // 收益主要在运动中）。判定：positionWC 与上帧差 < 0.01m（远小于 1px 的世界投影）。
       resolvePass?.swapBuffers()
       if (temporal || shadowTemporal) {
-        const still =
+        // 【2026-10-26 旋转抖动修复】静止判定必须含**朝向**：纯旋转时 positionWC 完全不动，
+        // 旧判定把它当静止 → converge 档的「静止关重投影」被套到旋转帧上，history 不做
+        // 重投影 → 转动视角时画面拖影/抖动（用户真机反馈）。判定=位移 <0.01m 且
+        // look 方向变化 <1e-4 rad（≈0.006°，人眼无感的量级）。
+        let still =
           prevCameraPos != null && Cartesian3.distance(camera.positionWC, prevCameraPos) < 0.01
+        if (still && prevDirWC != null) {
+          const cosAngle = Math.min(1, Math.max(-1, Cartesian3.dot(prevDirWC, camera.directionWC)))
+          still = Math.acos(cosAngle) < 1e-4
+        }
         // 【2026-10-08 白点排查】marchFrame 与 frame 双计数拆分：
         // - frame：原语义（静止冻结）——shadow/BSM 端噪声相位（全端解冻实测 BSM 帧间
         //   去相关 → 主 march 光深跳动 → 暗斑闪烁，2026-10-08 判别实验）。
@@ -995,9 +1006,14 @@ function buildCloudsStageImpl(
         if (options.converge !== false) {
           // 静止：关重投影（亚像素残差会逐帧抖动 history 采样点）、关裁剪（纯 EMA）、
           // EMA=1/32；运动：参考库语义（裁剪 + 重投影 + 无 EMA）。
+          // 【2026-10-26 旋转抖动】运动也用 EMA（重投影开启、不做裁剪）：旋转时若退回
+          // 「纯裁剪 + 直通」，每帧都是新噪声 → 逐帧颗粒闪烁（远端实测旋转中 1px 颗粒
+          // 1.48→2.53）。重投影保证 EMA 不拖影，0.25 的 4 帧窗足以压掉相位噪声。
           resolvePass?.setReprojectionEnabled(still ? 0 : 1)
-          resolvePass?.setClipEnabled(still ? 0 : 1)
-          resolvePass?.setTemporalBlend(still ? (options.convergeBlend ?? 0.03125) : 0)
+          resolvePass?.setClipEnabled(0)
+          resolvePass?.setTemporalBlend(
+            still ? (options.convergeBlend ?? 0.03125) : (options.motionBlend ?? 0.0625)
+          )
         }
         if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
@@ -1009,9 +1025,9 @@ function buildCloudsStageImpl(
         // 【2026-10-26 静止收敛档】converge 时静止一律关直通（直通绕过 EMA 直显原始相位，
         // 配合 1/32 EMA 会在云面留下固化斑点：实测 1px 颗粒 1.30 → 7.67）。
         resolvePass?.setBayerDirectThrough(
-          options.bayerDirectThrough === 0
+          options.bayerDirectThrough === 0 || options.converge !== false
             ? 0
-            : (advancePhase && !(options.converge !== false && still) ? 1 : 0)
+            : (advancePhase ? 1 : 0)
         )
         if (!still) {
           // 运动：frame 递增；静止冻结（jitter/BSM 相位恒定，M4 语义不变）
