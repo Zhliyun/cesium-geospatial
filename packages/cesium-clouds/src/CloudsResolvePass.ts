@@ -205,7 +205,9 @@ export function createCloudsResolvePass(
     u_clipMinHalf: () => clipMinHalf,
     u_temporalBlend: () => temporalBlend,
     u_clipEnabled: () => clipEnabled,
-    u_velocityThresholdPx: () => options.velocityThresholdPx ?? 0,
+    // 【2026-10-27】缺省 0.35 全分像素：重投影恒开后用它压静止的亚像素残差
+    //（实测 ~0.013px），既防「静止爬行」又不影响任何可见运动。
+    u_velocityThresholdPx: () => options.velocityThresholdPx ?? 0.35,
     u_blendDepthFalloff: () => blendDepthFalloff,
     u_temporalBlendFar: () => temporalBlendFar,
     u_farRange: () => farRange,
