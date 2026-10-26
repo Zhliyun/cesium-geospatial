@@ -1192,10 +1192,11 @@ function buildCloudsStageImpl(
           params.temporalJitter.x = 0
           params.temporalJitter.y = 0
         } else if (!frameStill && options.geometryJitter !== true) {
-          // 运动时保留 35%（不分档：统一档同样适用，用户反馈 100% 时「一动就抖」）：
+          // 运动缺省 0.35：0=屏幕锚定噪点垂直游移、1=整体晃，35% 是两者折中
+          //（0.5px 亚像素位移，用户 2026-10-26 反馈「有改善仍有轻微抖动」）。
           // 归零又会让远地平线的采样网格与像素锚定（用户反馈「噪点游移」）。
           // 0.35 → 位移 ≤0.5px（亚像素不可见），采样相位仍在变。
-          const k = options.geometryJitterScale ?? 0
+          const k = options.geometryJitterScale ?? 0.35
           params.temporalJitter.x *= k
           params.temporalJitter.y *= k
         }
