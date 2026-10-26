@@ -42,6 +42,10 @@ uniform float u_bayerDirectThrough;
 // 【2026-10-26 探针】1 = 把「历史是否被 AABB 裁掉」写入 alpha（配合 ?cloudsOverlayDebug=1
 // 直显：白=被裁=该像素本帧没有累积，黑=历史保留）。
 uniform float u_clipDebug;
+// 【2026-10-26 时域收敛修复】upscale 分支的显式 EMA 权重（0=参考库原语义：纯裁剪累积；
+// ∈(0,1]=每帧把当前帧按此权重混入）。参考库纯裁剪在「march 逐相位摆动大」时退化为
+// 冻结/跟随（实测静止帧间差 4.5/255，参考库 0.58），加 EMA 才能真正做 16 相位平均。
+uniform float u_temporalBlend;
 
 in vec2 vUv;
 
@@ -202,7 +206,9 @@ void temporalUpscale(
   // 这 10% 直通就让每帧的新噪声原样透出 = 用户反馈的「整体快速抖动」。
   // 恢复参考库语义：纯累积，噪声由 16 相位的历史平均消掉。
   // 回退：`?cloudsUpscale=1` 走下面的 TAA 分支（那里保留 α 混合，与参考库 TAA 分支一致）。
-  outputColor = clippedColor;
+  // 【2026-10-26】u_temporalBlend>0 时改为 EMA（α=1/16 即 16 相位滑动平均）：纯裁剪在
+  // march 逐相位摆动大时不会平均（历史被 AABB 拉向当前或被冻结），实测 8× 于参考库。
+  outputColor = mix(clippedColor, currentColor, u_temporalBlend);
   // 【outputColorSanityGuard】NaN 兜底：任何上游残留 NaN（含 mix 的 IEEE 传播）直出 current。
   if (any(isnan(outputColor.rgb))) {
     outputColor = currentColor;
@@ -221,7 +227,7 @@ void temporalUpscale(
     historyShadowLength,
     varianceGamma
   );
-  outputShadowLength = clippedShadowLength.r;
+  outputShadowLength = mix(clippedShadowLength.r, currentShadowLength.r, u_temporalBlend);
   #endif // SHADOW_LENGTH
 }
 

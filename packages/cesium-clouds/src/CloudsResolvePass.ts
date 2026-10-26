@@ -61,6 +61,11 @@ export interface CloudsResolvePassOptions {
   bayerDirectThrough?: number
   /** 【2026-10-26 探针】1=alpha 输出「历史是否被裁」，配合 ?cloudsOverlayDebug=1 观察 */
   clipDebug?: number
+  /**
+   * 【2026-10-26 时域收敛】upscale 分支 EMA 权重（0 = 参考库纯裁剪累积语义）。
+   * 1/16 = 16 相位滑动平均（每帧 6.25% 当前帧）。
+   */
+  temporalBlend?: number
   /** 【2026-10-26】AABB 最小半宽（0=零回归；用于让历史在 march 噪声摆动下存活） */
   clipMinHalf?: number
   /** 【2026-10-25 探针】0=关历史重投影（排查拖动静止垂直漂移是否来自 velocity）。缺省 1。 */
@@ -159,7 +164,8 @@ export function createCloudsResolvePass(
     u_reprojectionEnabled: () => options.reprojectionEnabled ?? 1,
     u_bayerDirectThrough: () => bayerDirectThrough,
     u_clipDebug: () => options.clipDebug ?? 0,
-    u_clipMinHalf: () => clipMinHalf
+    u_clipMinHalf: () => clipMinHalf,
+    u_temporalBlend: () => options.temporalBlend ?? 0
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——

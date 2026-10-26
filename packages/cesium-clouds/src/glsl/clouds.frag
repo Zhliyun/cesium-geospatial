@@ -150,6 +150,9 @@ uniform float u_shadowFallbackStepScale;
 // （关断 -6ms p50），25-68ms 帧时在 60Hz vsync 下呈现段不均=周期性卡顿体感；运动中
 // temporal rejection 高、光柱形态本在抖，粗化低感。hitClouds/兜底两调用同乘。
 uniform float u_shaftMotionScale;
+// 【2026-10-26 诊断】光柱 march 的 STBN 相位权重（1=参考库语义逐帧轮换；0=确定性）。
+// 用于定位「静止帧间差 4.5/255 vs 参考库 0.58」是否来自 shadowLength 的相位抖动。
+uniform float u_shaftJitter;
 #endif // SHADOW_LENGTH
 
 in vec2 vUv;
@@ -1342,7 +1345,7 @@ void main() {
           shadowRayNearFar.x * rayDirection + cameraPosition,
           rayDirection,
           shadowRayNearFar,
-          stbn,
+          stbn * u_shaftJitter,
           // 【2026-09-21 P5】运动帧粗化（u_shaftMotionScale 静止=1 逐位）
           minShadowLengthStepSize * u_shaftMotionScale
         );
@@ -1383,7 +1386,7 @@ void main() {
         shadowRayNearFar.x * rayDirection + cameraPosition,
         rayDirection,
         shadowRayNearFar,
-        stbn,
+        stbn * u_shaftJitter,
         minShadowLengthStepSize * u_shadowFallbackStepScale * u_shaftMotionScale
       );
     }

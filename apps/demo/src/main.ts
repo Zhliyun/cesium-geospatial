@@ -701,6 +701,10 @@ async function main(): Promise<void> {
           ...(getNumber('cloudsClipDebug') != null ? { clipDebug: getNumber('cloudsClipDebug')! } : {}),
           // 【2026-10-26】AABB 最小半宽（0=零回归）
           ...(getNumber('cloudsClipMinHalf') != null ? { clipMinHalf: getNumber('cloudsClipMinHalf')! } : {}),
+          // 【2026-10-26】resolve EMA 权重（0=参考库纯裁剪；0.0625=16 相位平均）
+          ...(getNumber('cloudsBlend') != null ? { temporalBlend: getNumber('cloudsBlend')! } : {}),
+          // 【2026-10-26 诊断】光柱 march 相位权重（0=确定性）
+          ...(getNumber('cloudsShaftJitter') != null ? { shaftJitter: getNumber('cloudsShaftJitter')! } : {}),
           // 【2026-10-25 探针】关历史重投影（排查拖动垂直漂移来源）
           ...(getNumber('cloudsReproj') != null ? { reprojectionEnabled: getNumber('cloudsReproj')! } : {}),
           // 【2026-10-25】shapeDetail LOD 下限（0=隐式/参考库；缺省 1.5）

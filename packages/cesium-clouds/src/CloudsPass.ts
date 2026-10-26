@@ -145,6 +145,8 @@ export interface CloudsFrameState {
    * 调用步幅同乘 u_shaftMotionScale（standalone CloudsPass 未设时 fallback=1）。
    */
   shaftMotionScale?: number
+  /** 【2026-10-26 诊断】光柱 march 相位权重（1=逐帧轮换/参考库；0=确定性）。 */
+  shaftJitter?: number
   altitudeCorrection: Cartesian3
   /**
    * M3 BSM 状态（T5 createCloudsStage preRender 填：CascadedShadowMaps.update + ShadowPass.render）。
@@ -592,6 +594,8 @@ export function createCloudsPass(
     u_shadowFallbackStepScale: () => state.shadowFallbackStepScale ?? 2,
     // 【2026-09-21 P5】运动帧光柱步幅乘数（preRender 按运动标量算，静止=1 零回归）
     u_shaftMotionScale: () => state.shaftMotionScale ?? 1,
+    // 【2026-10-26 诊断】光柱 march 相位权重（缺省 1=参考库语义；?cloudsShaftJitter=0 确定性）
+    u_shaftJitter: () => state.shaftJitter ?? 1,
 
     // BSM（M3：state.shadow 由 createCloudsStage preRender 填；未就绪 fallback 全 0 dummy → Beer=1）
     shadowBuffer: () => state.shadow?.bsm ?? dummyShadowBuffer,

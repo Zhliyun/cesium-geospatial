@@ -240,6 +240,12 @@ export interface CloudsStageOptions extends Omit<CloudsPassOptions, 'parameters'
   clipDebug?: number
   /** 【2026-10-26】AABB 最小半宽（0=零回归）。demo `?cloudsClipMinHalf=`。 */
   clipMinHalf?: number
+  /** 【2026-10-26】resolve upscale 分支 EMA 权重（0=参考库纯裁剪；1/16=16 相位平均）。
+   *  demo `?cloudsBlend=0.0625`。 */
+  temporalBlend?: number
+  /** 【2026-10-26 诊断】光柱 march 相位权重（1=逐帧轮换/参考库；0=确定性）。
+   *  demo `?cloudsShaftJitter=0`。 */
+  shaftJitter?: number
   /** 【2026-10-25 探针】0=关历史重投影（缺省 1）。demo `?cloudsReproj=0`。 */
   reprojectionEnabled?: number
   /** 【2026-10-25】每次停下都重跑收敛窗口（旧行为，会有约 1 秒过渡抖动）。
@@ -637,6 +643,8 @@ function buildCloudsStageImpl(
     shadowFallbackStepScale: SHADOW_FALLBACK_SCALE_MIN,
     // P5 运动帧光柱步幅乘数（preRender 每帧更新；缺省 1=静止零回归）
     shaftMotionScale: 1,
+    // 【2026-10-26 诊断】光柱 march 相位权重（缺省 1=参考库逐帧轮换）
+    shaftJitter: options.shaftJitter ?? 1,
     altitudeCorrection: new Cartesian3(),
     atlasTexture: undefined,
     windOffset: new Cartesian2(),
@@ -871,6 +879,7 @@ function buildCloudsStageImpl(
           reprojectionEnabled: options.reprojectionEnabled,
           clipDebug: options.clipDebug,
           clipMinHalf: options.clipMinHalf,
+          temporalBlend: options.temporalBlend,
           varianceGamma: params.temporalVarianceGamma,
           temporalAlpha: params.temporalAlpha,
           temporalDisocclusion: params.temporalDisocclusion,
