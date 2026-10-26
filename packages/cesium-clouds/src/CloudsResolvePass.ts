@@ -211,7 +211,10 @@ export function createCloudsResolvePass(
     u_farRange: () => farRange,
     u_jitterUV: () => options.jitterUV?.() ?? ZERO2,
     u_dejitter: () => options.dejitter ?? 1,
-    u_historySnap: () => options.historySnap ?? 1
+    // 【2026-10-27 对齐参考库】historySnap 缺省 1→0：参考库 history 是 `texture()` 双线性；
+    // 我们每帧把 prevUv 吸附到全分 texel（±0.5px 量化），旋转时分数部分逐帧变化，在掠射带
+    // 被放大成云纹上下游走。需要对比时可 `?cloudsHistorySnap=1`。
+    u_historySnap: () => options.historySnap ?? 0
   }
 
   // N=1（全分 march）：temporalUpscale=false → TAA 分支（temporalAntialiasing）——

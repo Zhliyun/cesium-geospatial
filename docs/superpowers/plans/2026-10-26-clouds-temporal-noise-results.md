@@ -377,3 +377,22 @@ dither 在 ±500m 物理尺度上摆动 → 逐帧方差 ∝ 步长 —— 正�
 退化为「永远只取中心块」。按本意改为 `neighbor.r >= c*0.5`。
 
 实测（112km 机位）：静止 0.089、停后追平 0.095。
+
+## 十九、2026-10-27 补轮十四：3430m 掠射带「垂直拖影」（专家定位）
+
+**结论（vertical-expert）**：不存在坐标轴串扰——jitter 补偿与参考库等价（three 把本帧 jitter 注入
+prevP 得 `prevUv=q−j`；我们 march velocity 已含 −j、resolve 再加回 j，两式同值），两处
+`outputDepthVelocity` 写入与参考库逐字相同。「竖直」是**掠射带把径向（≈屏幕竖直）的亚像素残差
+放大**：近地平线侧看时竖偏 1px ≈ 沿视线数公里深度差，水平 1px 只是正常视差。
+
+**修（两条）**：
+1. 远段也必须先裁剪：原来 `farT=1` 时 `accumColor=historyColor`（**无界原始历史**）——长窗 +
+   无界历史 = 任何径向残差被拉成长影。改为 `accumColor = clippedColor`，远段只保留「更长的
+   平均窗」，不再保留「无界历史」。
+2. `historySnap` 缺省 1→**0**（参考库 history 是 `texture()` 双线性）：每帧把 prevUv 吸附到
+   全分 texel（±0.5px）在掠射带会被放大成云纹上下游走。
+
+**已知未落地（专家列出的次要项）**：AABB 邻域仍用低分 `texelFetchOffset`（参考库用 vUv 双线性）、
+disocclusion 只看 `|Δa|`。
+
+实测（3430m 机位）：静止 0.035、停后追平 0.068。

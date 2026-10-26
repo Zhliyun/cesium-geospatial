@@ -292,7 +292,10 @@ void temporalUpscale(
   float farT = u_temporalBlendFar > 0.0
     ? smoothstep(u_farRange.x, u_farRange.y, max(0.0, depthVelocity.r)) * farSpeedGate
     : 0.0;
-  vec4 accumColor = mix(clippedColor, historyColor, farT);
+  // 【2026-10-27 远段也必须先裁剪】原来 farT=1 时 accumColor=historyColor（原始历史）——
+  // 长窗 + 无界历史 = 任何径向亚像素残差都被拉成长影（掠射带把**竖直**方向的残差放大：
+  // 近地平线竖偏 1px ≈ 沿视线数公里深度差）。远段只需要「更长的平均窗」，不需要「无界历史」。
+  vec4 accumColor = clippedColor;
   float blendAlpha = mix(u_temporalBlend, u_temporalBlendFar, farT);
   outputColor = mix(accumColor, currentColor, blendAlpha);
   // 【outputColorSanityGuard】NaN 兜底：任何上游残留 NaN（含 mix 的 IEEE 传播）直出 current。
