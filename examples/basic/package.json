@@ -1,0 +1,27 @@
+{
+  "name": "cesium-geospatial-basic-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "node ../../bin/cli.mjs copy-assets --out public/cesium-geospatial-assets",
+    "dev": "vite",
+    "prebuild": "node ../../bin/cli.mjs copy-assets --out public/cesium-geospatial-assets",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cesium": "1.143.0",
+    "cesium-geospatial": "file:../.."
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vite": "^6.0.0",
+    "vite-plugin-static-copy": "^2.2.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@cesium/engine": "26.1.0",
+      "@cesium/widgets": "16.1.0"
+    }
+  }
+}
