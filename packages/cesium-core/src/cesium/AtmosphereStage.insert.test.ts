@@ -1,4 +1,4 @@
-// insertStageBeforeLensFlare 全语义测试（v2.1 spec §5.1/§8.1）。
+// insertStageBeforeLensFlare 全语义测试（v2.1 spec §5.1/§8.1 + 2026-10-27 产品化 §7.7 多槽）。
 // 独立文件原因：本文件 vi.mock createLensFlareStage（rebuild 参数断言需可区分实例），
 // 而主测试文件断言真实 composite 结构（inputPreviousStageTexture 等）——mock 化会破坏。
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -59,20 +59,24 @@ import { createAtmosphereStage } from './AtmosphereStage'
 // —— mock 基建（对齐主测试文件 mockSceneWithAddSpy，另有状态 remove + contains + 时间线）——
 function makeScene() {
   const timeline: string[] = []
-  const inCollection = new Set<unknown>()
+  // 有序集合（多槽顺序断言用）；remove 成功即 destroy——真实 Cesium PostProcessStageCollection.remove
+  // 语义如此，多槽「只销毁目标」的断言才有意义。
+  const inCollection: Array<{ name?: string; destroy?: () => void }> = []
   const addSpy = vi.fn((s: { name?: string }) => {
     timeline.push(`add:${String(s?.name ?? 'unnamed')}`)
-    inCollection.add(s)
+    inCollection.push(s)
   })
-  const removeSpy = vi.fn((s: { name?: string }) => {
+  const removeSpy = vi.fn((s: { name?: string; destroy?: () => void }) => {
     timeline.push(`remove:${String(s?.name ?? 'unnamed')}`)
-    if (inCollection.has(s)) {
-      inCollection.delete(s)
+    const i = inCollection.indexOf(s)
+    if (i >= 0) {
+      inCollection.splice(i, 1)
+      s.destroy?.()
       return true
     }
     return false
   })
-  const containsSpy = vi.fn((s: unknown) => inCollection.has(s))
+  const containsSpy = vi.fn((s: unknown) => inCollection.includes(s as never))
   const scene = {
     context: {
       halfFloatingPointTexture: true,
@@ -88,7 +92,15 @@ function makeScene() {
     postRender: { addEventListener: () => () => {} },
     postProcessStages: { add: addSpy, remove: removeSpy, contains: containsSpy }
   } as unknown as import('cesium').Scene
-  return { scene, timeline: () => [...timeline], addSpy, removeSpy, containsSpy }
+  return {
+    scene,
+    timeline: () => [...timeline],
+    // 集合当前有序内容（链顺序断言：atmosphere → 插入项（按插入顺序）→ lensflare → tonemap）
+    order: () => inCollection.map((s) => String(s.name ?? 'unnamed')),
+    addSpy,
+    removeSpy,
+    containsSpy
+  }
 }
 
 const stubLuts = {
@@ -236,17 +248,25 @@ describe('insertStageBeforeLensFlare（v2.1 全语义）', () => {
     handle.destroy()
   })
 
-  it('§8.1.10 isDestroyed 防御分支：外部摘旧后再 insert(B) 替换成功不抛', () => {
+  // 【2026-10-27 多槽改写】原「insert(B) 替换 A」语义已废弃（§7.7）：外部摘除并销毁的旧项
+  // 在 rebuild 时被剔除且不复活，新项照常追加。
+  it('§8.1.10 isDestroyed 防御分支：外部摘旧并销毁后 insert(B) 追加成功且不复活 A', () => {
     const m = makeScene()
     const handle = createAtmosphereStage(m.scene, stubLuts, {})
     const a = makeInsertStage('clouds_overlay')
     handle.insertStageBeforeLensFlare(a)
-    m.removeSpy(a) // 模拟 clouds handle.destroy 摘除（a 已销毁语义由测试 destroy() 模拟——此处仅摘集合）
-    ;(a as unknown as { destroy: () => void }).destroy() // 外部 destroy（真实链路 remove 即 destroy）
+    m.removeSpy(a) // 模拟 clouds handle.destroy 摘除（mock remove 即 destroy，真实 Cesium 语义）
     const b = makeInsertStage('clouds_overlay_new')
-    expect(() => handle.insertStageBeforeLensFlare(b)).not.toThrow() // 走 isDestroyed 跳过分支
+    expect(() => handle.insertStageBeforeLensFlare(b)).not.toThrow() // 走 isDestroyed 剔除分支
     const t = m.timeline().slice(-5)
-    expect(t).toContain('add:clouds_overlay_new')
+    expect(t).toEqual([
+      'remove:lensflare',
+      'remove:tonemap',
+      'add:clouds_overlay_new',
+      'add:lensflare',
+      'add:tonemap'
+    ])
+    expect(m.containsSpy(a)).toBe(false) // 已销毁旧槽不复活
     handle.destroy()
   })
 
@@ -261,7 +281,8 @@ describe('insertStageBeforeLensFlare（v2.1 全语义）', () => {
     handle.destroy()
   })
 
-  it('§8.1.11 原子回滚：add(插入物) 抛错 → 链恢复 + insertedStage 不变 + rethrow 原始异常', () => {
+  // 【2026-10-27 多槽改写】回滚只撤失败的新项；已插入的 A 原位保留（不摘、不销毁、不重 add）。
+  it('§8.1.11 原子回滚（多槽）：add(新插入物) 抛错 → 新项被撤 + A 原位保留 + rethrow 原始异常', () => {
     const m = makeScene()
     const handle = createAtmosphereStage(m.scene, stubLuts, {})
     const a = makeInsertStage('clouds_overlay')
@@ -281,7 +302,11 @@ describe('insertStageBeforeLensFlare（v2.1 全语义）', () => {
     expect(t.filter((x) => x === 'remove:clouds_overlay_b').length).toBeGreaterThan(0)
     const tail = t.slice(-2)
     expect(tail).toEqual(['add:lensflare', 'add:tonemap'])
-    // insertedStage 记忆不变：同实例 a 再 insert → no-op（零集合操作）
+    // A 原位保留：仍在集合中、未被销毁、位置在 lf 之前
+    expect(m.containsSpy(a)).toBe(true)
+    expect(a.isDestroyed()).toBe(false)
+    expect(m.order()).toEqual(['atmosphere', 'clouds_overlay', 'lensflare', 'tonemap'])
+    // 插入记忆不变：同实例 a 再 insert → no-op（零集合操作）
     const lenNow = m.timeline().length
     handle.insertStageBeforeLensFlare(a)
     expect(m.timeline().length).toBe(lenNow)
@@ -319,5 +344,93 @@ describe('insertStageBeforeLensFlare（v2.1 全语义）', () => {
       if (origAdd) m.addSpy.mockImplementation(origAdd)
     }
     handle.destroy()
+  })
+
+  // ── 2026-10-27 产品化 §7.7：多槽有序追加 + removeInsertedStage + 归属规则 ──
+
+  it('连续插入两个 stage 都保留，顺序与插入顺序一致', () => {
+    const m = makeScene()
+    const handle = createAtmosphereStage(m.scene, stubLuts, {})
+    const a = makeInsertStage('plugin_a')
+    const b = makeInsertStage('plugin_b')
+    handle.insertStageBeforeLensFlare(a)
+    handle.insertStageBeforeLensFlare(b)
+    // 链：atmosphere → a → b → lensflare → tonemap（第二次插入不移动 a）
+    expect(m.order()).toEqual(['atmosphere', 'plugin_a', 'plugin_b', 'lensflare', 'tonemap'])
+    expect(a.isDestroyed()).toBe(false)
+    expect(b.isDestroyed()).toBe(false)
+    // 第二次插入只追加 b（不重 add a）
+    expect(m.timeline().filter((x) => x === 'add:plugin_a')).toHaveLength(1)
+    handle.destroy()
+  })
+
+  it('removeInsertedStage 只销毁目标，另一个仍在链中', () => {
+    const m = makeScene()
+    const handle = createAtmosphereStage(m.scene, stubLuts, {})
+    const a = makeInsertStage('plugin_a')
+    const b = makeInsertStage('plugin_b')
+    handle.insertStageBeforeLensFlare(a)
+    handle.insertStageBeforeLensFlare(b)
+    handle.removeInsertedStage(b)
+    expect(b.isDestroyed()).toBe(true) // 移除即销毁（Cesium remove 语义）
+    expect(a.isDestroyed()).toBe(false)
+    expect(m.order()).toEqual(['atmosphere', 'plugin_a', 'lensflare', 'tonemap'])
+    // A 仍可用：再次插入是幂等 no-op，且不重复 add
+    const lenNow = m.timeline().length
+    handle.insertStageBeforeLensFlare(a)
+    expect(m.timeline().length).toBe(lenNow)
+    handle.destroy()
+  })
+
+  it('移除未插入的 stage 为 no-op（warn，集合与 stage 均不变）', () => {
+    const m = makeScene()
+    const handle = createAtmosphereStage(m.scene, stubLuts, {})
+    const stranger = makeInsertStage('not_inserted')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const lenBefore = m.timeline().length
+    expect(() => handle.removeInsertedStage(stranger)).not.toThrow()
+    expect(m.timeline().length).toBe(lenBefore)
+    expect(stranger.isDestroyed()).toBe(false)
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+    handle.destroy()
+  })
+
+  it('受保护的 stage 不能被 removeInsertedStage 移除', () => {
+    const m = makeScene()
+    const handle = createAtmosphereStage(m.scene, stubLuts, {})
+    const own = makeInsertStage('clouds_overlay')
+    handle.insertStageBeforeLensFlare(own, { protectedStage: true })
+    expect(() => handle.removeInsertedStage(own)).toThrow(/受保护/)
+    // 拒绝时零变更：仍在链中且未销毁
+    expect(own.isDestroyed()).toBe(false)
+    expect(m.order()).toEqual(['atmosphere', 'clouds_overlay', 'lensflare', 'tonemap'])
+    handle.destroy()
+  })
+
+  it('protectedStage 标志可在同实例重复插入时就地更新', () => {
+    const m = makeScene()
+    const handle = createAtmosphereStage(m.scene, stubLuts, {})
+    const stage = makeInsertStage('plugin_a')
+    handle.insertStageBeforeLensFlare(stage)
+    const lenAfterFirst = m.timeline().length
+    handle.insertStageBeforeLensFlare(stage, { protectedStage: true }) // 幂等 + 更新标志
+    expect(m.timeline().length).toBe(lenAfterFirst) // 无集合操作
+    expect(m.order()).toEqual(['atmosphere', 'plugin_a', 'lensflare', 'tonemap']) // 不重复
+    expect(() => handle.removeInsertedStage(stage)).toThrow(/受保护/)
+    handle.destroy()
+  })
+
+  it('handle.destroy() 一并移除并销毁全部插入 stage（含受保护项）', () => {
+    const m = makeScene()
+    const handle = createAtmosphereStage(m.scene, stubLuts, {})
+    const own = makeInsertStage('clouds_overlay')
+    const other = makeInsertStage('plugin_b')
+    handle.insertStageBeforeLensFlare(own, { protectedStage: true })
+    handle.insertStageBeforeLensFlare(other)
+    handle.destroy()
+    expect(own.isDestroyed()).toBe(true)
+    expect(other.isDestroyed()).toBe(true)
+    expect(m.order()).toEqual([]) // 全部摘除
   })
 })

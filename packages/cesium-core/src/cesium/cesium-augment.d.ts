@@ -15,6 +15,10 @@ declare module 'cesium' {
       sampler?: Sampler
       flipY?: boolean
     })
+    // 生命周期（dummyTextures 销毁路径用）：Cesium 对象 destroy 后方法被替换为 throwOnDestroyed，
+    // 销毁前须 isDestroyed() 守卫（公开 .d.ts 未声明）。
+    isDestroyed(): boolean
+    destroy(): void
   }
 
   // Texture 构造支持两种变体：
@@ -37,6 +41,7 @@ declare module 'cesium' {
     })
     width: number
     height: number
+    isDestroyed(): boolean
     destroy(): void
   }
 

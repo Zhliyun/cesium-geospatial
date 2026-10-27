@@ -27,8 +27,6 @@ import {
   PixelFormat,
   Texture,
   Texture3D,
-  Sampler,
-  TextureWrap,
   DeveloperError,
   type Context,
   type Scene,
@@ -70,6 +68,12 @@ import {
   type HistoryState
 } from './depthTemporal/historyBlit'
 import { computeTemporalAlpha, computeMaxDelta } from './depthTemporal/temporalAlpha'
+import {
+  createCloudsShadowDummy,
+  createGroundShadowDummy,
+  createMoonSurfaceDummy,
+  type DummyTextureHandle
+} from './dummyTextures'
 import { DEPTH_THRESHOLD_DEFAULT, HIGH_ALPHA, LOW_ALPHA } from './depthTemporal/depthTemporalConstants'
 
 /** M6 地面云影桥数据（spec §5）：clouds handle.getGroundShadowBridgeData() 产物，demo 编排层组装。
@@ -555,14 +559,31 @@ export interface AtmosphereStageHandle {
   readonly tonemapStage: PostProcessStage
   readonly postHdrDatatype: PixelDatatype
   /**
-   * 把外部 stage 插入 atmosphere 与 lensFlare 之间（云 overlay 线性域合成用，v2.1 spec §5.1）。
-   * 语义：入口拒已销毁/已 add 的 stage（抛错）；同实例未销毁幂等 no-op；不同实例替换；
-   * 尽力回滚（失败撤插入物 + 重建 lf/tm，回滚自身失败保原始异常）；destroy 后 no-op+warn；
-   * lensFlare 不存在时只重排 tonemap；rebuild 的 lf 继承旧 enabled。
-   * 摘除由 stage 拥有者自行 removeAndDestroy——摘除后链自动闭合（lf 紧贴 atmosphere）。
+   * 把外部 stage 追加到 atmosphere 与 lensFlare 之间（云 overlay 线性域合成用）。
+   *
+   * **多槽语义（产品化设计 2026-10-27 §7.7，破坏性变更）**：每次插入只追加、不销毁已有插入项，
+   * 链顺序 = 插入顺序（都紧贴 atmosphere 之后、lensflare 之前）。同一实例重复插入幂等（不重复 add），
+   * 但允许就地更新 `protectedStage` 标志。
+   *
+   * 入口拒已销毁/已 add 的 stage（抛错）；尽力回滚（失败只撤新项 + 重建 lf/tm，回滚自身失败保
+   * 原始异常）；destroy 后 no-op+warn；lensFlare 不存在时只重排 tonemap；rebuild 的 lf 继承旧 enabled。
+   * 外部已摘除并销毁的旧槽在下次重排时剔除、不复活。
+   *
+   * `opts.protectedStage` 标记 install 自有项（云 overlay）：`removeInsertedStage` 拒绝移除它们。
+   * `handle.destroy()` 会一并移除并销毁**全部**插入项（含受保护项）——所有权在安装期间转移给库。
+   *
    * 限制：setMode（dead code）在插入后行为未定义（其已有顺序 TODO）。
    */
-  insertStageBeforeLensFlare(stage: PostProcessStage | PostProcessStageComposite): void
+  insertStageBeforeLensFlare(
+    stage: PostProcessStage | PostProcessStageComposite,
+    opts?: { protectedStage?: boolean }
+  ): void
+  /**
+   * 从插入链移除**并销毁**目标 stage（与 Cesium `PostProcessStageCollection.remove` 语义一致）。
+   * 受保护项（`protectedStage: true`）抛 DeveloperError；未由本 handle 插入的 stage → no-op + warn；
+   * destroy 后 no-op + warn。
+   */
+  removeInsertedStage(stage: PostProcessStage | PostProcessStageComposite): void
   setMode(newOptions: AtmosphereStageOptions): void
   /** 注入 depthTemporal postRender blit 的计时 hook（Phase 0 profiling，demo ?profile=1 用）。 */
   setBlitTimerHook(hook: ((fn: () => void) => void) | undefined): void
@@ -609,6 +630,26 @@ export function createAtmosphereStage(
     ? PixelDatatype.UNSIGNED_BYTE
     : resolvePostHdrDatatype(scene)
 
+  // 三张惰性 dummy 的句柄（§8.5 资源归属）：构造归 dummyTextures.ts，这里只记账。
+  // 首次 uniform 闭包求值才创建（真 GL 环境每帧求值；node 测试不触发，避免 maximumTextureSize=0）。
+  // 销毁点：handle.destroy() 与 setMode 重建（旧闭包随旧 stage 一起失效）。
+  let cloudsShadowDummy: DummyTextureHandle<Texture> | undefined
+  let groundShadowDummy: DummyTextureHandle<Texture3D> | undefined
+  let moonSurfaceDummy: DummyTextureHandle<Texture> | undefined
+  /** 释放全部 dummy 并清空句柄（destroy 与 setMode 重建共用；幂等）。 */
+  function disposeDummyTextures(): void {
+    cloudsShadowDummy?.destroy()
+    groundShadowDummy?.destroy()
+    moonSurfaceDummy?.destroy()
+    cloudsShadowDummy = undefined
+    groundShadowDummy = undefined
+    moonSurfaceDummy = undefined
+  }
+  /** GL context（惰性取值：只在 dummy 闭包首次求值时用；node 测试不走到）。 */
+  function getSceneContext(): Context {
+    return (scene as unknown as { context: Context }).context
+  }
+
   // atmosphere stage：aerialPerspective fragment（Task 2 末端线性输出 finalColor·exposure）。
   // pixelDatatype=HalfFloat 带兜底让中间 RT 承载线性 >1 段，供链尾 tonemap ACES 压缩。
   function buildAtmosphereStage(): PostProcessStage {
@@ -627,54 +668,29 @@ export function createAtmosphereStage(
       }),
       uniforms: (() => {
         const u = buildAtmosphereUniforms(luts, resolved, state)
-        // dummy 1×1 黑（shadowLength=0）——桥未就绪帧的回退。惰性构造：真 GL 环境的 uniform
-        // 闭包每帧调（首次构造 dummy），node 测试不调闭包（maximumTextureSize=0 会炸）
-        let cloudsShadowDummy: Texture | undefined
+        // dummy 1×1 黑（shadowLength=0）——桥未就绪帧的回退。惰性构造+句柄记账（dummyTextures.ts）：
+        // 真 GL 环境的 uniform 闭包每帧求值（首次构造），node 测试不调闭包（maximumTextureSize=0 会炸）。
         appendCloudsShadowLengthUniform(u, options.cloudsShadowLengthBridge, () => {
-          cloudsShadowDummy ??= new Texture({
-            context: (scene as unknown as { context: Context }).context,
-            source: { width: 1, height: 1, arrayBufferView: new Uint8Array([0, 0, 0, 255]) },
-            pixelFormat: PixelFormat.RGBA,
-            pixelDatatype: PixelDatatype.UNSIGNED_BYTE
-          })
-          return cloudsShadowDummy as unknown as { _texture: unknown; _target: number }
+          cloudsShadowDummy ??= createCloudsShadowDummy(getSceneContext())
+          return cloudsShadowDummy.texture as unknown as { _texture: unknown; _target: number }
         })
         // M6 地面云影（spec §5/§8.1）：惰性 dummy 走 append helper（桥 undefined/首帧 bsm 缺 → 无影零回归）。
         // dummy 语义：intervals (0,0) 区间测试恒假 → 级联 -1；cascadeCount=0 → 循环不执行。
-        let groundShadowDummyTex: Texture3D | undefined
         appendGroundShadowUniforms(
           u,
           options.cloudsShadowBridge,
           resolved.groundShadowStrength,
           () => {
-            groundShadowDummyTex ??= new Texture3D({
-              context: (scene as unknown as { context: Context }).context,
-              source: {
-                width: 1,
-                height: 1,
-                depth: 1,
-                arrayBufferView: new Uint8Array(4) // 全 0
-              },
-              pixelFormat: PixelFormat.RGBA,
-              pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-              flipY: false
-            })
-            return groundShadowDummyTex
+            groundShadowDummy ??= createGroundShadowDummy(getSceneContext())
+            return groundShadowDummy.texture
           }
         )
         // 月面纹理白 dummy（albedo=1）：moonSurfaceTexture 未传时的零回归路径（均匀月面=数值等价
         // 无纹理版）。惰性构造同上（node 测试不调闭包）。
         if (options.moonSurfaceTexture == null) {
-          let moonSurfaceDummy: Texture | undefined
           u.u_moonSurface = () => {
-            moonSurfaceDummy ??= new Texture({
-              context: (scene as unknown as { context: Context }).context,
-              source: { width: 1, height: 1, arrayBufferView: new Uint8Array([255, 255, 255, 255]) },
-              pixelFormat: PixelFormat.RGBA,
-              pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-              sampler: new Sampler({ wrapS: TextureWrap.CLAMP_TO_EDGE, wrapT: TextureWrap.CLAMP_TO_EDGE })
-            })
-            return moonSurfaceDummy
+            moonSurfaceDummy ??= createMoonSurfaceDummy(getSceneContext())
+            return moonSurfaceDummy.texture
           }
         }
         return u
@@ -878,10 +894,16 @@ export function createAtmosphereStage(
   if (lensFlareStage) scene.postProcessStages.add(lensFlareStage) // atmosphere → lensflare → tonomap
   scene.postProcessStages.add(tonemapStage) // 链尾，读 lensflare（或 atmosphere）线性输出
 
-  // ── v2.1 insertStageBeforeLensFlare（spec §5）：把外部 stage（云 overlay）插入
-  //    atmosphere 与 lensFlare 之间。重挂式：摘 lf/tm → 插入 → rebuild lf → re-add tm。──
+  // ── insertStageBeforeLensFlare（产品化设计 2026-10-27 §7.7 多槽）：把外部 stage 追加到
+  //    atmosphere 与 lensFlare 之间。重挂式：摘 lf/tm → 追加 → rebuild lf → re-add tm；
+  //    已有插入项留在集合中原位不动（顺序自动保持为插入顺序）。──
   let destroyed = false
-  let insertedStage: PostProcessStage | PostProcessStageComposite | undefined
+  interface InsertedStageEntry {
+    stage: PostProcessStage | PostProcessStageComposite
+    /** install 自有项（云 overlay）：removeInsertedStage 拒绝移除，但仍随 handle.destroy() 销毁。 */
+    protectedStage: boolean
+  }
+  const insertedStages: InsertedStageEntry[] = []
 
   // lf rebuild：参数读闭包 resolved 当前值（与 setMode 重建语义一致，非创建时快照）；
   // depthSource 是创建时常量（temporalEmaEnabled）。lfHandle 无 destroy（三方核实：
@@ -907,7 +929,8 @@ export function createAtmosphereStage(
   }
 
   function insertStageBeforeLensFlare(
-    stage: PostProcessStage | PostProcessStageComposite
+    stage: PostProcessStage | PostProcessStageComposite,
+    opts?: { protectedStage?: boolean }
   ): void {
     if (destroyed) {
       console.warn('[atmosphere] insertStageBeforeLensFlare 于 destroy 后调用，no-op')
@@ -918,10 +941,14 @@ export function createAtmosphereStage(
     if (stage.isDestroyed()) {
       throw new DeveloperError('insertStageBeforeLensFlare: stage 已销毁，不可插入')
     }
-    // 同实例幂等（v2.1 C3 收紧：仅未销毁时 no-op——已销毁的同实例走替换，防静默无云）。
+    // 同实例幂等（多槽：不重复 add、不重排链），但允许就地更新 protectedStage 标志（§7.7 归属规则）。
     // 顺序：必须在 contains 前置**之前**——首次 insert 成功后 stage 已在集合中，若 contains
-    // 先判会抛错，幂等 no-op 永远不可达（§8.1.5）。幂等路径不重排链、无 add 冲突风险，安全。
-    if (insertedStage === stage && !stage.isDestroyed()) return
+    // 先判会抛错，幂等 no-op 永远不可达（§8.1.5）。
+    const existing = insertedStages.find((e) => e.stage === stage)
+    if (existing != null) {
+      if (opts?.protectedStage != null) existing.protectedStage = opts.protectedStage
+      return
+    }
     // contains 前置（v2）：已在集合中——后续 add 名字冲突抛错会留「lf/tm 已摘、链残缺」半途状态。
     if (scene.postProcessStages.contains(stage)) {
       throw new DeveloperError(
@@ -931,12 +958,20 @@ export function createAtmosphereStage(
 
     const prevLfEnabled = lensFlareStage?.enabled
     try {
-      // 替换场景：摘旧插入物（isDestroyed 防御在 removeAndDestroy 内）
-      if (insertedStage != null) removeAndDestroy(insertedStage)
       // 摘序 = spec §8.1.1：先 lf 后 tm（回滚/测试时间线断言与此对齐）
       if (lensFlareStage) removeAndDestroy(lensFlareStage)
       removeAndDestroy(tonemapStage)
-      scene.postProcessStages.add(stage)
+      // 多槽：外部自行 remove+destroy 的旧槽剔除（不复活）；存活者已在集合中原位保留，
+      // 只补回「被外部摘除但未销毁」的（顺序仍为插入顺序）。
+      for (let i = insertedStages.length - 1; i >= 0; i--) {
+        if (insertedStages[i].stage.isDestroyed()) insertedStages.splice(i, 1)
+      }
+      for (const entry of insertedStages) {
+        if (!scene.postProcessStages.contains(entry.stage)) {
+          scene.postProcessStages.add(entry.stage)
+        }
+      }
+      scene.postProcessStages.add(stage) // 追加到插入序列末尾（= 最靠近 lensflare）
       const newLf = rebuildLensFlare()
       if (newLf != null) {
         if (prevLfEnabled === false) newLf.enabled = false // enabled 继承（spec §5.2）
@@ -945,9 +980,10 @@ export function createAtmosphereStage(
       }
       tonemapStage = buildTonemapStage()
       scene.postProcessStages.add(tonemapStage)
-      insertedStage = stage // 成功才记忆（回滚不动它）
+      insertedStages.push({ stage, protectedStage: opts?.protectedStage === true }) // 成功才记忆
     } catch (e) {
-      // 尽力回滚（v2.1 C2：撤插入物 + 重建 lf/tm；回滚自身独立 try/catch 保原始异常）
+      // 尽力回滚（v2.1 C2：只撤新插入物 + 重建 lf/tm；回滚自身独立 try/catch 保原始异常）。
+      // 已有插入项从未被摘除，无需恢复。
       try {
         removeAndDestroy(stage)
         const rbLf = rebuildLensFlare()
@@ -963,6 +999,30 @@ export function createAtmosphereStage(
       }
       throw e // 原始异常
     }
+  }
+
+  /**
+   * 从插入链移除并销毁目标 stage（§7.7）。与 Cesium `PostProcessStageCollection.remove` 一致：
+   * remove 成功即由集合销毁；不在集合中则由 removeAndDestroy 自行销毁。
+   * 受保护项（install 自有云 overlay）抛错；未由本 handle 插入 → no-op + warn。
+   */
+  function removeInsertedStage(stage: PostProcessStage | PostProcessStageComposite): void {
+    if (destroyed) {
+      console.warn('[atmosphere] removeInsertedStage 于 destroy 后调用，no-op')
+      return
+    }
+    const index = insertedStages.findIndex((e) => e.stage === stage)
+    if (index < 0) {
+      console.warn('[atmosphere] removeInsertedStage: stage 未由本 handle 插入，no-op')
+      return
+    }
+    if (insertedStages[index].protectedStage) {
+      throw new DeveloperError(
+        'removeInsertedStage: 受保护的 stage（install 自有项）不可移除，请随 handle.destroy() 一并销毁'
+      )
+    }
+    insertedStages.splice(index, 1)
+    removeAndDestroy(stage) // 摘除后链自动闭合（后续插入项/ lf 前移）
   }
 
   // 每帧更新：altitudeCorrection + sunDirection（Simon1994）+ 动态曝光
@@ -1059,6 +1119,7 @@ export function createAtmosphereStage(
       blitTimerHook = hook
     },
     insertStageBeforeLensFlare,
+    removeInsertedStage,
     setMode(newOptions: AtmosphereStageOptions) {
       if (destroyed) {
         console.warn('[atmosphere] setMode 于 destroy 后调用，no-op')
@@ -1072,6 +1133,7 @@ export function createAtmosphereStage(
       // setMode 是 dead code，暂不处理；Task 8 lifecycle 接入后若需 rebuild depthTemporal 再补。
       removeAndDestroy(atmosphereStage)
       removeAndDestroy(tonemapStage)
+      disposeDummyTextures() // 旧 stage 的 dummy 随其闭包失效，重建前释放（§8.5）
       resolved = validateAtmosphereOptions(newOptions)
       atmosphereStage = buildAtmosphereStage()
       tonemapStage = buildTonemapStage()
@@ -1107,6 +1169,10 @@ export function createAtmosphereStage(
       }
       if (depthTemporalStage) removeAndDestroy(depthTemporalStage)
       removeAndDestroy(atmosphereStage)
+      disposeDummyTextures() // 三张惰性 dummy（§8.5 资源归属）
+      // 插入项（含 install 自有的受保护云 overlay）：安装期间所有权在库，一并移除并销毁。
+      for (const entry of insertedStages) removeAndDestroy(entry.stage)
+      insertedStages.length = 0
       if (lensFlareStage) removeAndDestroy(lensFlareStage)
       removeAndDestroy(tonemapStage)
     }
