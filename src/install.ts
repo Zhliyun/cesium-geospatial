@@ -422,7 +422,8 @@ interface MorphGuard {
  *   → lensFlare → tonemap）与云（`CloudsStageHandle.setEnabled(false)`，含 march/resolve
  *   primitive 与 preRender 驱动）；
  * - `morphComplete` 回到 `SCENE3D`：按 morphStart 时的 enabled 快照恢复——**不得强行置 true**
- *   （depthTemporal 在 temporalEma=false 透传模式下恒 false，强行恢复会改变 3D 渲染行为）；
+ *   （depthTemporal 在 temporalEma=false 透传模式下恒 false，强行恢复会改变 3D 渲染行为；
+ *   云同理：宿主可能已用 `handle.clouds.setEnabled(false)` 关过云，恢复按其 `isEnabled()` 快照）；
  * - `morphComplete` 落到 2D/Columbus：保持停用，等下一次回 3D；
  * - 警告：每次安装最多一次（首次进入非 3D 视图时；morph 周期内不重复）。
  */
@@ -441,6 +442,8 @@ function installMorphGuard(
 
   let suspended = false
   let savedEnabled: boolean[] | undefined
+  /** morphStart 时的云启用态快照（宿主可能已用 handle.clouds.setEnabled(false) 关过云）。 */
+  let savedCloudsEnabled: boolean | undefined
   let warned = false
   let warnedInCycle = false
   let removed = false
@@ -460,7 +463,10 @@ function installMorphGuard(
     for (const stage of stages) {
       if (stage != null) stage.enabled = false
     }
-    // 云最后停：setEnabled 同时关 overlay 合成与 march/resolve 两个 primitive 的每帧下发。
+    // 云最后停：先快照宿主当前启用态（可能已被 handle.clouds.setEnabled(false) 关掉），
+    // 再 setEnabled(false)（同时关 overlay 合成与 march/resolve 两个 primitive 的每帧下发）。
+    // 恢复按快照走，不得无条件 setEnabled(true) 复活宿主关掉的云。
+    savedCloudsEnabled = clouds?.isEnabled() ?? false
     clouds?.setEnabled(false)
   }
 
@@ -472,7 +478,10 @@ function installMorphGuard(
       if (stage != null) stage.enabled = savedEnabled?.[index] ?? true
     })
     savedEnabled = undefined
-    clouds?.setEnabled(true)
+    // 按 morphStart 快照恢复云启用态（宿主未关 → true；已关 → 保持 false，不复活）。
+    const cloudsEnabled = savedCloudsEnabled ?? true
+    savedCloudsEnabled = undefined
+    clouds?.setEnabled(cloudsEnabled)
   }
 
   const onMorphStart = (): void => {

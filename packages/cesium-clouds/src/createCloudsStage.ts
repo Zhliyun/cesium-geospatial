@@ -478,6 +478,14 @@ export interface CloudsStageHandle {
    */
   setEnabled(enabled: boolean): void
   /**
+   * 当前云是否启用（3D 守卫快照用，spec §7.6 / Task 10A）。destroy 后恒 `false`。
+   *
+   * 以 `overlayStage.enabled` 为准（而不是内部 `enabled` 标志）：兼容历史用法
+   * `handle.clouds.overlayStage.enabled = false`——宿主直接关过合成时，morph 往返必须
+   * 保持关闭，不得用内部标志把它复活。缺省 enabled（Cesium 默认 true）视为启用。
+   */
+  isEnabled(): boolean
+  /**
    * T6 天气预设热切（spec §6.1）：写当前 impl 的 params.coverage / coverageFilterWidths
    * （闭包引用改值即生效，nightAmbient 同款）+ state.climateBandsFloor（spec §5.4 组合语义：
    * 预设激活 0.6，防「阴天」×副热带谷退化为近晴空）。**undefined = 清除预设**：恢复创建时
@@ -1727,6 +1735,10 @@ export function createCloudsStage(
       }
       enabled = next
       applyEnabled()
+    },
+    // Task 10A 修复轮 1：启用态快照读 overlay（含宿主直接写 enabled 的历史用法）；destroy 后 false。
+    isEnabled(): boolean {
+      return !destroyed && overlayStage.enabled !== false
     },
     // T6 天气预设热切：委托当前 impl（写 params/state 闭包引用即生效）+ handle 侧记忆
     // activePreset（setQuality 重建后重放）。destroy 后 no-op + warn（对齐 setQuality 风格）。

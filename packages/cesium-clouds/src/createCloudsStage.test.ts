@@ -1942,6 +1942,25 @@ describe('Task 10A setEnabled（3D 守卫云停用）', () => {
     handle.destroy()
   })
 
+  it('isEnabled：缺省 true；setEnabled 同步；宿主直接写 overlayStage.enabled 也生效；destroy 后 false', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })!
+    expect(handle.isEnabled()).toBe(true)
+
+    handle.setEnabled(false)
+    expect(handle.isEnabled()).toBe(false)
+    handle.setEnabled(true)
+    expect(handle.isEnabled()).toBe(true)
+
+    // 历史用法：宿主直接关 overlay（未走 handle.setEnabled）——快照必须读到 false
+    handle.overlayStage.enabled = false
+    expect(handle.isEnabled()).toBe(false)
+
+    handle.destroy()
+    expect(handle.isEnabled()).toBe(false)
+  })
+
   it('setEnabled(false) 后 preRender 早退（不再驱动云 march/BSM）；true 恢复', () => {
     vi.clearAllMocks()
     const scene = createMockScene()

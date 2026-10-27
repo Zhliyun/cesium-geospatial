@@ -236,7 +236,12 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
       cloudsPass,
       overlayStage,
       setQuality: vi.fn(),
-      setEnabled: vi.fn(),
+      // 有状态启用开关（修复轮 1）：isEnabled 读 overlayStage.enabled（与真实 handle 同源），
+      // 供 morph 往返保留宿主关闭态的用例断言。
+      setEnabled: vi.fn((next: boolean) => {
+        overlayStage.enabled = next
+      }),
+      isEnabled: vi.fn(() => overlayStage.enabled !== false),
       getGroundShadowBridgeData: vi.fn(() => groundShadowBridge),
       destroy: vi.fn(() => {
         order.push('clouds.destroy')
@@ -1216,6 +1221,75 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
     fire(f.scene.morphComplete)
     expect(f.atmosphere.mock.atmosphereStage.enabled).toBe(true)
     expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(true)
+
+    handle.destroy()
+    warn.mockRestore()
+  })
+
+  it('宿主已关云（handle.clouds.setEnabled(false)）时 morph 往返不复活', async () => {
+    const f = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handle = await install(f)
+
+    // 宿主主动关云（新公开 API）→ 快照必须保留 false
+    handle.clouds!.setEnabled(false)
+    expect(handle.clouds!.isEnabled()).toBe(false)
+    f.clouds.mock.setEnabled.mockClear()
+
+    f.scene.mode = 1
+    fire(f.scene.morphStart)
+    expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(false)
+
+    f.scene.mode = 3
+    fire(f.scene.morphComplete)
+    // 恢复按快照（false），不是无条件 true
+    expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(false)
+    expect(handle.clouds!.isEnabled()).toBe(false)
+
+    // 宿主保留下来的关闭态在后续周期同样不被复活
+    f.scene.mode = 1
+    fire(f.scene.morphStart)
+    f.scene.mode = 3
+    fire(f.scene.morphComplete)
+    expect(handle.clouds!.isEnabled()).toBe(false)
+
+    handle.destroy()
+    warn.mockRestore()
+  })
+
+  it('宿主直接写 overlayStage.enabled=false（历史用法）时 morph 往返同样不复活', async () => {
+    const f = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handle = await install(f)
+
+    handle.clouds!.overlayStage.enabled = false
+    expect(handle.clouds!.isEnabled()).toBe(false)
+
+    f.scene.mode = 1
+    fire(f.scene.morphStart)
+    f.scene.mode = 3
+    fire(f.scene.morphComplete)
+    expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(false)
+    expect(handle.clouds!.isEnabled()).toBe(false)
+
+    handle.destroy()
+    warn.mockRestore()
+  })
+
+  it('宿主未关云时 morph 往返恢复为启用（对照组）', async () => {
+    const f = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handle = await install(f)
+    expect(handle.clouds!.isEnabled()).toBe(true)
+
+    f.scene.mode = 1
+    fire(f.scene.morphStart)
+    expect(handle.clouds!.isEnabled()).toBe(false) // morph 中强制停用
+
+    f.scene.mode = 3
+    fire(f.scene.morphComplete)
+    expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(true)
+    expect(handle.clouds!.isEnabled()).toBe(true)
 
     handle.destroy()
     warn.mockRestore()
