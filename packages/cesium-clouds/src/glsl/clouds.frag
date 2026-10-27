@@ -1007,7 +1007,10 @@ vec4 marchClouds(
     // maxStepSize。步长与「段长」彻底解耦，不再产生等值线；帧时由 maxIterationCount 兜底。
     float lodMixInLayer = inLayerCam > 0.5
       ? saturate((rayDistance - 300.0) / 6000.0)
-      : min(1.0, mipLevel * u_hitStepMipBoost);
+      // 【2026-10-27 同心环·第二半】原来层外云内步距仍按 mipLevel 随距离放大（25m→数百米），
+      // 与「恒定纹理 LOD」失配 → 远段欠采样成等距带（环）。改为恒等于 cloudStepSize：
+      // 采样间隔与纹理 LOD 假设一致、与距离无关。代价：远段云内步数回升（受 maxIterationCount=500 兜底）。
+      : 0.0;
     rayDistance += mix(stepSize, maxStepSize, lodMixInLayer);
   }
 
