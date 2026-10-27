@@ -10,7 +10,7 @@
 - **镜头光晕**（LensFlare）：太阳入镜时 ghost/halo/bloom，image-based，物理感光；云遮挡联动（太阳被云挡时 halo/ghost 按云覆盖率衰减）
 - **体积云**（raymarch）：3D 噪声形状 + 全球天气图覆盖——纬度气候带分布（ITCZ/副热带晴空带/温带气旋带）+ 时间切片演化（云图随时间聚散形变，高卷云演化快于低云）+ 风场平流（云团整体漂移、云内纹理同步流动），级联 **BSM 自阴影**（世界锚定固定网格），云间 **god rays** 光柱
 - **性能自适应**（2026-09-05）：夜晚太阳侧次级采样自动门控（辐照精确零，逐位等价）+ 太阳角影子预算（BSM 步数随太阳高度平滑收缩）+ god rays march 分辨率与 BSM 信息量对齐——平视地平线视角类实测云甲内夜 30→60FPS、贴地夜 17→9.4ms，白天逐位零回归
-- **HDR 管线**：HalfFloat 中间缓冲 + ACES filmic tonemap + display dithering
+- **HDR 管线**：HalfFloat 中间缓冲 + AGX tonemap（缺省，2026-10-24 对齐参考库；`?toneMap=aces` 回 ACES filmic 对照）+ display dithering
 
 ## 快速开始
 
@@ -93,7 +93,8 @@ http://localhost:5173/?time=2026-08-28T17:30:00Z&camera=-80.6057,64.5197,7852,68
 | `inscatterScale` | 8 | 内散射放大（2026-09-02 定稿 25→8，近景海景视角实测；1=回退物理量级，偏淡；25=旧默认） |
 | `distanceScale` | 1 | 散射距离缩放（等效空气密度倍率） |
 | `ditherScale` | 1 | dithering 强度倍率（放大打散 banding） |
-| `limbGlow` / `limbDecay` | 0.3 / 30 | 太空视角大气边缘辉光强度 / 扩散范围 km |
+| `limbGlow` / `limbDecay` | 1.0 / 30 | 太空视角大气边缘辉光强度 / 扩散范围 km（强度 1.0 线性域、独立加 finalColor 不乘 inscatterScale；`limbGlow=0` 关） |
+| `toneMap` / `agxExposure` | AGX / 1.0 | 色调映射模式：缺省 AGX（2026-10-24 对齐参考库），`?toneMap=aces` 回退 ACES Filmic（A/B 对照）；`agxExposure` 标定 AGX 曝光（本项目 exposure 已在 atmosphere 施加，AGX 段不再二次放大） |
 | `lighting=0` | 开 | 关 Cesium 原生地表光照（无昼夜分界线，大气仍提供昼夜感） |
 | `atmo=0` | – | 跳过全部大气后处理，画面=纯 Cesium globe |
 | `hdr=0` | 自动 | 强制 RGBA8 管线（HalfFloat 设备上对比用） |
@@ -122,13 +123,14 @@ http://localhost:5173/?time=2026-08-28T17:30:00Z&camera=-80.6057,64.5197,7852,68
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `cloudsQuality` | `high` | 质量档位 `low`/`medium`/`high`/`ultra`：march 步数/编译开关（光柱/细节/湍流/精确天光）/BSM 级联数与尺寸整档联动（ultra 另含 march 半分，见 `cloudsUpscale`）；键盘 `1`-`4` 运行时切换 |
+| `cloudsQuality` | `high` | 质量档位 `low`/`medium`/`high`/`ultra`：march 步数（high=缺省 `minStepSize` 25，low 100，ultra 10）/编译开关（光柱/细节/湍流/精确天光）/BSM 级联数与尺寸整档联动；四档 march 降采样均为 1/4（见 `cloudsUpscale`）；键盘 `1`-`4` 运行时切换 |
 | `cloudsExposure` | 12 | 云层曝光（线性域缩放，链尾统一 tonemap；偏灰调大、过曝调小） |
 | `cloudsNightAmbient` | 0.03 | 夜间环境底光：太阳沉没后云照明地板（0 = 关闭回退纯黑夜间云）。2026-09-02 过亮重标（原 0.12 标定漏算 ACES+gamma 暗部放大+月光叠加未整体验收，深夜云带亮度达夜空底光 30 倍）；?cloudsNightAmbient=0.12 可回旧行为 |
 | `cloudsNightRetreat` | 0.25 | 月光地板退让上限（2026-09-21）：底光乘 mix(1, 本值, moonFactor)——月光（真实照明）主导时非物理底光让位，moonFactor=月相×月高度门（0 新月/月落、1 满月+月高）。满月夜地板贡献 ×1/4 对冲 84f3306 后残余偏亮（>120 像素 24%）；1=关零回归（新月/月落/白天逐位） |
 | `cloudsTint` | 0.88,1,1 | 夜间云色调乘子（线性 RGB，乘底光+月光；沿革冷蓝 1.32→弱蓝 1.15→中性偏暖定稿） |
 | `cloudsTwilightBoost` | 6 | 暮光天光补偿倍率：太阳 [+2°,-1.5°] 窗内云天光项 1→boost（黄昏云过黑修复——crude 天光+overlay 不乘动态曝光欠亮 ~3×；实测云/天空显示比 32%→80%；1=关；白天零回归） |
-| `cloudsInLayerFog` | 1 | 层内雾化（2026-09-28 方案 A）：相机在云层带内（如 1500-2150m）时 march 专用路径——步长细化铺满段长+早退抑制全段积分+radiance 去饱和提亮+出口 alpha×0.88 软化，治「层内单点辐射平刷」（1536 白板/1692 蓝板）；`0`=逐位回退 |
+| `cloudsInLayerFog` | 0 | 层内雾化（2026-09-28 方案 A，**2026-10-27 缺省关闭**）：相机在云层带内时 march 专用路径（步长细化+早退抑制+去饱和提亮+出口 alpha 软化），治「层内单点辐射平刷」（1536 白板/1692 蓝板）。缺省关闭原因：该路径作用于所有层内像素，代价是云体变圆润、丢细节、出现等距等高线条纹（3158m 实测；逐条收窄无法根治）；`1`=恢复护栏 |
+| `cloudsTopPuff` | 0 | 顶面蓬松化权重（2026-09-29 密度分布专项，**2026-10-27 缺省关闭**）：`1`=(1,1,0,0) L0/L1 开、L2 卷云关；`0`=全关。缺省关闭原因：它把云顶压成近乎等高的平台，俯视等于用平面切 3D 噪声 → 云面大量同心圆/等值线环纹（`?cloudsTopPuff=1` 可恢复该观感） |
 | `cloudsFade=0` | 开 | 高空云层渐隐开关：相机高度 >50km 起云渐隐、>300km 全隐（太空俯视视角云 march 域外伪影不可根治且视觉贡献趋零，隐去后为干净蓝色地球；`0` 关闭看全量云盘）。近地/航空体验域（<50km）零影响 |
 | `cloudsHitMipBoost=N` | 1 | 云内步 mip 调制倍率（甲内近水平性能修复，2026-09-04）：命中云后的 march 步长 `mix(stepSize, maxStepSize, min(1, mipLevel·N))` 与空区步 LOD 对齐——上游云内步只 ×1.01/步，甲内近水平「沿云飞」几十 km 时 500 步打满（2519m+pitch≈-9.5° 实测 28 FPS）。缺省 1=38 FPS 档（近景 <2km 逐位不变）；`4`=54 FPS（中景云略淡、俯视云海轻微糊化）；`8`=59 FPS 满帧（中景云墙消解，慎用）。近景/俯视主视觉优先保真时保持 1 |
 | `cloudsShadow=0` | 开 | 关 BSM 自阴影（对比云体积感） |
@@ -137,20 +139,28 @@ http://localhost:5173/?time=2026-08-28T17:30:00Z&camera=-80.6057,64.5197,7852,68
 | `cloudsShadowFreeze=1` | – | 冻结 BSM 矩阵（首帧后不更新，噪声分解诊断） |
 | `cloudsShadowTemporal=1` | 关 | BSM 时序累积 |
 | `groundShadow` | `1` | M6 地面云影总开关；`0`=桥不注入（define 不开，与 main 逐位零回归）。注意 `cloudsShadow=0`（关自阴影）时地面云影连带关闭（无 BSM）。 |
-| `groundShadowStrength` | `1` | 地面云影强度 0-1；`0` 时采样短路（与 `groundShadow=0` 像素等价，便宜逐位门）。 |
+| `groundShadowStrength` | 0.8 | 地面云影强度 0-1（demo 缺省 0.8，2026-09-30 拍板；库缺省 1=物理满档，勿 >1）；`0` 时采样短路（与 `groundShadow=0` 像素等价，便宜逐位门）。 |
 | `cloudsShadowAdaptive=0` | 开 | 太阳角影子预算（2026-09-04）：BSM 生成端 march 步数随当地太阳仰角平滑收缩（≥20° 满档逐位原值，≤5° 收缩至一半），低太阳角运动帧省成本；`0`=恒满档逐位回退（逃生门） |
 | `cloudsShaftStep=` | 100 | god rays shadowLength march 起始步长（米，2026-09-05 P1）：BSM 纹理 texel 实际足迹 62-375m，50m 本就过采样；100=缺省（迭代 -34%，贴地夜 17→9.4ms，黄昏光柱画面数值不可见级）；`50`=three 上游原值（光柱形态 A/B 对照）；`150`=更省（近级联 texel 2.4× 欠采样，慎用）。另：夜晚（太阳当地沉没 >5°）云照明自动跳过朝太阳次级采样（辐照精确为零，逐位等价，无参数）——云甲内夜视角实测 30→60FPS |
 | `cloudsShaftFallbackScale=` | 自适应 | 兜底光柱步幅倍率（2026-09-21 P4）：无云像素（!hitClouds）的 shadowLength march 起步步长 = `cloudsShaftStep` × 本倍率。缺省按当地太阳仰角自适应 2→4（≤5°=×2 低角零回归域，≥20°=×4 白天逐位零差域，smoothstep 中间带）——兜底成本 ∝ 无云像素占比随时刻/天气漂移，高太阳角放开倍率对冲（实测某上午时刻 25.7→17ms 满帧）；`2`=恒 P3 静态行为；`cloudsShadowAdaptive=0` 时恒回 2 |
-| `cloudsMotionShaft=` | 4 | 运动帧光柱步幅上限（2026-09-21 P5）：相机运动时光柱 march（hitClouds+兜底两处）步幅乘 shaftMotionScale∈[1,本值]，运动标量（平移+旋转×5km 等效半径）0-50m 线性渐入、静止精确 1 零回归。光柱=旋转最大单项（关断 -6ms p50），25-68ms 帧时在 60Hz vsync 下呈现段不均=「周期性卡顿」体感；运动中 temporal rejection 高、光柱本在抖，粗化低感；`1`=关 |
-| `cloudsTemporal=0` | 开 | 云时序重建开关（`0` 回退全分 march 无 resolve）：march 低分辨率 + resolve 时域重建（帧率↑）。默认开对齐源库；含静止冻结——相机静止时相位冻结逐位稳定 |
-| `cloudsUpscale` | 1 | march 降采样分母 `4`/`2`/`1`：1=全分 march + resolve 切 TAA 分支（**默认**，画质最佳、静止最稳；实测 60FPS）；2=半分（RT 面积 ×4，涂抹感约减半）；4=1/4 分（源库原行为，低端 GPU 余量）。用户显式 > 质量档位（ultra 档默认 2） |
-| `cloudsMotionAlpha` | 0.4 | 运动中混合比上限：相机移动/旋转超阈值时 resolve 的新帧占比从 0.1 平滑升至此值（拖影/错位换细颗粒，防移动抖动；停止自动回落收敛）。= temporalAlpha 时等效禁用 |
-| `temporalAlpha` | 0.1 | 云 resolve 静止混合比（新帧占比；0=纯 history 收敛慢，1=纯 current 无降噪） |
+| `cloudsMotionShaft=` | 1 | 运动帧光柱步幅上限（2026-09-21 P5，**2026-10-26 缺省回退 1=关**）：相机运动时光柱 march（hitClouds+兜底两处）步幅乘 shaftMotionScale∈[1,本值]，静止精确 1 零回归。`4`=旧 P5 降载档（旋转 p50 22.7ms 档）；实测不粗化时运动中颗粒反而更低（1.24 vs 1.51），故缺省回满精度，`?cloudsMotionShaft=4` 可恢复降载 |
+| `cloudsTemporal=0` | 开 | 云时序重建开关（`0` 回退全分 march 无 resolve）：march 低分辨率 + resolve 时域重建（帧率↑）。缺省 converge 档（2026-10-26 定稿）：相位持续轮换 + 静止关重投影 + 静止 EMA 1/256（停下头 6 帧先用 1/32 快速收敛）+ 运动 EMA 0.1（进入运动头 6 帧用 `cloudsMotionFlush` 洗掉旧历史）；静止判据=位移 <0.01m 且朝向变化 <1e-5 rad（慢拖/惯性尾段不再误判静止）；运动时远段（20-60km）另用 α=0.05 长窗（`?cloudsFarBlend=0` 关） |
+| `cloudsUpscale` | 4 | march 降采样分母 `1`/`2`/`4`：**缺省 4 = 1/4 分 march**（四档预设均为 4，2026-10-24 对齐参考库；同帧实测颗粒 −54% 且帧率更高）；`2`=半分（RT 面积 ×4）；`1`=全分 march + resolve 切 TAA 分支（画质最佳、最贵，此时 `temporalAlpha`/`cloudsMotionAlpha` 才生效）。用户显式 > 质量档位 |
+| `cloudsMotionAlpha` | 0.4 | 运动中混合比上限（仅 `cloudsUpscale=1` 的 TAA 分支）：相机移动/旋转超阈值时 resolve 的新帧占比从 0.1 平滑升至此值（拖影/错位换细颗粒，防移动抖动；停止自动回落收敛）。= temporalAlpha 时等效禁用 |
+| `temporalAlpha` | 0.1 | 云 resolve 静止混合比（仅 `cloudsUpscale=1` 的 TAA 分支；新帧占比；0=纯 history 收敛慢，1=纯 current 无降噪） |
 | `temporalGamma` | 2.0 | variance clipping AABB 宽度（大=更宽容 history 拖影多；小=更快贴 current 抖动大） |
-| `cloudsDisocclusion` | 0.5 | disocclusion rejection 阈值（`1.01`=禁用）：云 alpha 差异超阈拒 history 直出 current（黑块修复） |
+| `cloudsDisocclusion` | 1.01 | disocclusion rejection 阈值：云 alpha 差异超阈拒 history 直出 current。缺省 `1.01`=关闭（2026-10-24 对齐参考库——该 rejection 让云缘每帧直出原始噪声=颗粒带）；`0.5`=2026-09-02 云地平线黑块修复档 |
+| `cloudsMotionJitter` | 1 | 运动时 march 逐样本相位抖动倍率（2026-10-27）：`1`=满幅不调制；降低可压运动颗粒，但步进采样重新同相位 → 云面出现等高线状驻波环纹（`0.3` 即可见）。只缩放逐样本相位——起点抖动与朝太阳光深 march 的步数 dither 恒满幅（缩放会产生等距条纹/等高线阴影） |
+| `cloudsMotionFlush` | 0.5 | 进入运动后头 6 帧的「洗历史」α：静止 1/256 长寿历史若按正常 α=0.1 衰减要约 30 帧才冲掉（刚开始转动半秒有拖影），故先大 α 快速洗掉再回落 |
+| `cloudsHoldBlend` | 0.00390625 | 静止稳态 EMA 权重（=1/256）：停下后先用 1/32 收敛 `cloudsWarmupFrames`(6) 帧，之后切 1/256 长窗；相位仍持续轮换（冻结会把单相位锯齿烤进画面），但云面细碎游动残留降档 |
+| `cloudsDejitter` | 1 | resolve 去抖动重采样（2026-10-27）：`1`=用 `texture(colorBuffer, vUv − u_jitterUV)` 把整帧平移过的低分图重采样回像素栅格（jitter 不再产生跨帧位移，history/current 同一栅格才能长窗累积）；`0`=旧点采样行为。jitter 以低分 FBO 尺寸归一化（N=4 时 ±1.5 全分像素，与参考库一致） |
+| `cloudsMotionBlendDepthFalloff` | 0 | 运动 EMA 权重的距离衰减（0=关）：实测收益很小（rotate 13.0→12.6），按需开启 |
+| `cloudsDetailLod` | 1.5 | detail 层显式 `textureLod` 的 LOD 值（缺省 1.5；`0`=mip0 全细节）。shape 层已对齐参考库恒 LOD 0（参考库 3D 纹理无 mip 链；LOD 随步长走会在入云首样本处跳变 → 以相机为圆心的同心环）；detail 保留此旋钮压 N=1 全分 march 的走样 |
 | `cloudsLightShafts=0` | 开 | 关云间 god rays 光柱 |
 | `cloudsGodRays=N` | 1 | god rays 增益（20=艺术放大出明显光柱） |
 | `cloudsShapeDetail=0` / `cloudsTurbulence=0` / `cloudsAccurate=0` | – | 关对应噪声/光照分支（隔离诊断） |
+
+> **伪影判别速查（2026-10-27 集中排查定论）**：俯视云面**同心圆/等值线环** → 顶面蓬松化（`?cloudsTopPuff=0` 已是缺省）与 shape 层纹理 LOD（已对齐参考库恒 LOD 0）；相机在云层带内**云体变圆润 + 等高线条纹** → 层内雾化路径（`?cloudsInLayerFog=0` 已是缺省）；**拖影** → 慢转判据（朝向变化 <1e-5 rad 才算静止，慢拖/惯性尾段不再冻结历史）/ 运动远段长窗（缺省 0.05，`?cloudsFarBlend=0` 可关）/ 起步洗历史（`cloudsMotionFlush`）；**运动颗粒** → march 采样密度（`minStepSize` 25 已压 −29%）优先于降步进抖动（`cloudsMotionJitter` 降幅有等高线驻波代价）。
 
 #### 云分布重设计参数
 
@@ -191,7 +201,7 @@ add 时机由消费者编排，否则云不可见：
 | 参数 | 说明 |
 |---|---|
 | `debug=N` | 大气调试视图：1=finalColor 量级 / 2=太阳方向 / 3=相机距离量级 / 5=depth / 6=透传输入色 / 11=地面云影透射率灰度直显（R=groundSunTrans，定位采样/级联问题） |
-| `cloudsDebug=N` | 云调试视图：1=天气图 UV / 2=云前深度 / 3=march 采样数 / 4=BSM 阴影图 / 5=级联层 |
+| `cloudsDebug=N` | 云调试视图：1=天气图 UV / 2=云前深度 / 3=march 采样数 / 4=BSM 阴影图 / 5=级联层 / 6=march 分量 / 7=marchA / 8=末次采样光照 / 9=ext+光深+radiance / 10=aerial 前 rgb / 12=雾化三通道 / 13=raw weather |
 | `tileCache=N` | 瓦片缓存（默认 5000，减少回收引起的深度时序抖动） |
 | `sse=N` | 屏幕空间误差阈值（调高→瓦片更晚细化，减 LOD 抖动；地形更粗） |
 | `profile=1` | 逐 stage GPU 计时（每 60 帧 console.log，需 EXT_disjoint_timer_query_webgl2） |

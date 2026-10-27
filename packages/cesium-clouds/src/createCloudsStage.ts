@@ -1123,8 +1123,9 @@ function buildCloudsStageImpl(
           // 远段长窗（仅运动时）：>50km smoothstep 到 α=0.05（20 帧）。远云视差小、重投影近乎
           // 精确，长窗是「高机位俯视云海」颗粒感的唯一有效解；2026-10-27 曾疑其造成拖影
           // 而关闭，同构建对拍显示 farBlend=0.05 的追平 p99 反而更低（11.7 vs 24.3），已恢复。
-          // 【2026-10-27 拖影定稿】运动时不再开远段长窗（20 帧）：两位专家独立指认它是拖影
-          // 最强来源——远段判据只看深度，「远=视差小」在旋转下不成立。需要时可 ?cloudsFarBlend=0.05
+          // 【2026-10-27】远段长窗：缺省 0.05（>50km 走 20 帧窗，压高机位俯视云海颗粒）；
+          // 拖影由 farSpeedGate（屏幕速度门控）+ 有界历史约束，不再靠关长窗解决。
+          // ?cloudsFarBlend=0 可完全关闭。
           resolvePass?.setTemporalBlendFar(still ? 0 : (options.farBlend ?? 0.05))
         }
         if (options.frameUnfreeze !== false && advancePhase) {

@@ -280,8 +280,8 @@ MediaSample sampleMedia(
     // 一片随画面平移的亮点（用户「拖动时噪声点垂直移动」）。按 mipLevel（随 rayDistance
     // 增长）给显式 LOD 下限，把近处步进内的 detail 采样压到可分辨尺度。
     // shape/turbulence 频率低 5-20 倍，保持隐式 LOD（与参考库一致）。
-    // 同上：detail 也用隐式 LOD（参考库原样）。u_detailLodFloor 不再参与——
-    // 它当初是为了压 N=1 全分 march 的走样，与 LOD 量化是同一类副作用。
+    // detail 用显式 LOD：常量 floor 保证不随步长/距离跳动（隐式导数在 march 循环里
+    // 不可靠，会随距离跳变产生同心环）。u_detailLodFloor 仍参与（缺省 1.5，可 ?cloudsDetailLod= 调）。
     // 同上：恒为常量 LOD，不随步长/距离变化 → 不产生等距环。
     float detail = textureLod(shapeDetailTexture, detailPosition, u_detailLodFloor).r;
     // Fluffy at the top and whippy at the bottom.

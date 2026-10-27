@@ -57,7 +57,7 @@ GLSL 以 `.glsl` 文本经 Vite `?raw` 导入，在 TS 里字符串拼装成最�
 
 ### 大气合成（B 路径，phase1 成果）
 
-核心式（`aerialPerspective.frag.ts` main 末端）：`finalColor = originalColor·transmittance·u_groundDim + inscatter`。**不重算照明、不碰屏幕法线**（A 路径已弃——重算 irradiance 需 exposure≈15，放大 half-float LUT 灾消致山体透明）。`exposure≈1.5` 即可。phase2a 后 atmosphere 末端输出**线性 HDR**（HalfFloat RT）；ACES filmic + gamma 1/2.2 + display triangular dithering（±1.5 LSB）移至链尾独立 `tonemap.frag.ts`（`?hdr=0` 时回退内联 `tonemapDisplay` 兜底）。
+核心式（`aerialPerspective.frag.ts` main 末端）：`finalColor = originalColor·transmittance·u_groundDim + inscatter`。**不重算照明、不碰屏幕法线**（A 路径已弃——重算 irradiance 需 exposure≈15，放大 half-float LUT 灾消致山体透明）。`exposure≈1.5` 即可。phase2a 后 atmosphere 末端输出**线性 HDR**（HalfFloat RT）；tonemap（**缺省 AGX**，2026-10-24 对齐参考库；`?toneMap=aces` 回退 ACES Filmic）+ gamma 1/2.2 + display triangular dithering（±1.5 LSB）在链尾独立 `tonemap.frag.ts`（`?hdr=0` 只把中间 RT 降为 RGBA8，tonemap stage 仍走链尾）。
 
 phase2a 已落地（2026-08-04 验收合入）：把末端内联 ACES 拆为「atmosphere stage 输出线性 HDR（HalfFloat）+ 链尾独立 ToneMappingStage」，为 image-based LensFlare（phase2b）留线性域消费点——当前渲染链 atmo→clouds→lensFlare→tonemap。详见 `docs/superpowers/specs/2026-08-04-phase2a-hdr-pipeline-design.md` 与 `docs/superpowers/plans/2026-08-04-phase2a-results.md`。
 
@@ -66,6 +66,7 @@ phase2a 已落地（2026-08-04 验收合入）：把末端内联 ACES 拆为「a
 - 云主 shader `src/glsl/clouds.frag`（three-geospatial 同源移植 + 本仓库手术桥接，`CloudsMaterial.surgeryCloudsFrag`）：**三条 march 是云成本三大件**（2026-09-05 性能台账）——主 march `marchClouds`、朝太阳次级 march `marchOpticalDepth` + BSM 光深采样 `sampleShadowOpticalDepth`（夜晚已门控：sunIrradiance 精确零时跳过，逐位等价）、god rays 第二 march `marchShadowLength`（SHADOW_LENGTH define，步长缺省 100m=`?cloudsShaftStep=`）。
 - 编排 `createCloudsStage.ts`：preRender 内 BSM 级联 update/render（world 锚定、静止帧跳过重画）+ A 太阳角影子预算乘数（`shadowBudgetAdaptation.ts` 纯函数，`?cloudsShadowAdaptive=0` 逃生门）；渲染链 `CloudsPass`（march RT）→`CloudsResolvePass`（时序重建）→顶层 overlay stage（线性域合成）。
 - 改云 shader 的验证闭环：`cloudsMain.compile.test.ts` 等 glslang 编译测试 + 全量单测 + 真机 A/B（性能/画质协议见「开发流程」）。
+- **已知伪影判别（2026-10-27 集中排查）**：俯视云面**同心圆/等值线环** → 顶面蓬松化（`topPuffWeights`，缺省已关）+ shape 纹理 LOD（已对齐参考库恒 LOD 0——LOD 若随 march 步长走，会在「空区膨胀→入云首样本」处跳变，每跨一阶=一圈以相机为圆心的环）；相机在云层带内**云体变圆润+等高线条纹** → 层内雾化路径（`inLayerFog`，缺省已关）；**拖影** → 静止判据（朝向变化 <1e-5 rad 才算静止，慢拖/惯性尾段不再冻结历史）/ 静止一律关重投影 / 运动远段长窗 `farBlend`（缺省 0.05）/ 起步洗历史（运动头 6 帧 α=0.5）；**运动颗粒** → 优先提 march 采样密度（`minStepSize` 50→25），降 `motionJitterScale` 会让步进重新同相位、产生等高线驻波环纹。resolve 侧 jitter 按**低分 FBO 尺寸**归一化（不是全分 `resolution`），去抖动重采样 `texture(colorBuffer, vUv − u_jitterUV)` 是 history/current 落在同一像素栅格的前提。
 
 ### Cesium 集成关键点
 
@@ -94,7 +95,7 @@ phase2a 已落地（2026-08-04 验收合入）：把末端内联 ACES 拆为「a
 - `mode=atmosphere|sky|depth`（**默认 atmosphere** = B 路径主分支；sky/depth 为回归对照）
 - `clouds` **默认开启**（atmosphere 模式自动建云；`clouds=0` 关闭）；`fps` **默认关闭**（`fps=1` 开右上角帧率角标）
 - `play` **默认开、正常流速**（`play=0` 冻结；`speed=N` 调倍率）；`time=ISO8601`（钉初值）、`camera=lon,lat,height,heading,pitch`（角度制）——**确定性验收须 `?time=` + `?play=0` 成对**（时间默认流动后单 `?time=` 不再冻结）
-- `debug=N`（u_debugMode：1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor）——**排查 artifact 的主手段**；云侧 `cloudsDebug=1-8`/`cloudsOverlayDebug=1-2`（天气 UV/采样数/BSM/级联等）
+- `debug=N`（u_debugMode：1=log finalColor 2=太阳方向 3=相机 r 量级 5=depth/r 6=透传 inputColor 11=地面云影透射率）——**排查 artifact 的主手段**；云侧 `cloudsDebug=1-10`、`12-13`（无 11；天气 UV/采样数/BSM/级联/march 分量/雾化三通道等）/`cloudsOverlayDebug=1-2`
 - `exposureDay`/`exposureNight`/`groundDim`/`tileCache`/`lighting=0`/`atmo=0`（诊断基线，跳过大气后处理）；云性能旋钮 `cloudsQuality=low|medium|high|ultra`（质量整档）、`cloudsShaftStep=`（god rays march 步长，缺省 100，=50 上游原值）、`cloudsShadowAdaptive=0`（太阳角影子预算逃生门）、`cloudsLightShafts=0`/`cloudsShadow=0`（关光柱/关自阴影对照）——完整参数表见 README
 - 相机停稳后地址栏 `#camera=...` 自动更新为当前视角，复制即可精确复现问题视角。
 
