@@ -1022,7 +1022,10 @@ vec4 marchClouds(
   // g_probeSky=末次受照样本 skyIrradiance（无受照=0 → 地板 0 → 恒等）。夜间 sky≈0 同理。
   // 量级标定：原路径深部蓝 rgb≈(0.13,0.2,0.4)≈sky×0.01-0.02。
   vec3 fogExitFloor = g_probeSky * (RECIPROCAL_PI4 * skyLightScale * 0.02);
-  radianceIntegral = max(radianceIntegral, fogExitFloor * inLayerCam);
+  // 【2026-10-27 收窄】原式对所有层内像素无条件托底 → 把整屏亮度拉平（层内圆润的直接来源）。
+  // 该地板是为「**薄段**单点平刷」（1536 白板，段长 ~117m）设计的，故按 thinSegment 收窄：
+  // 只有真正短的横穿段才托底；长段（3158m 近水平看云海）走真实积分。
+  radianceIntegral = max(radianceIntegral, fogExitFloor * inLayerCam * thinSegment);
   // 【2026-09-28 2022m 黑斑出口兜底】RT 写入前终检：NaN 像素按无云处理（rgb=0、α=0）。
   // 〔勘误：readPixels NaN 为 HALF_FLOAT 回读伪像——本兜底保留为无害防御。〕
   if (isnan(radianceIntegral.r) || isnan(radianceIntegral.g) || isnan(radianceIntegral.b)) {
@@ -1033,7 +1036,10 @@ vec4 marchClouds(
   // 也被恒打 8 折=恒定 20% 透底（远处地平线透出，「体积云半透明」）。软化的物理意图=
   // 让薄雾纱更透，不应动实心浓云：软化量改随出口透射比门控——T>0.15 的纱全软化、
   // T→0 的浓云精确保持遮蔽（1740 雾面 T≈0.12 仍在软化域，弧线软化保持）。
-  float softenGate = inLayerCam * smoothstep(0.0, 0.15, transmittanceIntegral);
+  // 【2026-10-27 收窄】α×0.80 软化对**所有层内像素**生效 → 层内云整体变透、边界变柔
+  // （观感=圆润、细节丢）。它的目标是「薄雾纱」（1740 雾面 T≈0.12），故按 thinSegment 收窄：
+  // 短段才有雾纱问题；长段近水平看云海保持真实遮蔽。
+  float softenGate = inLayerCam * thinSegment * smoothstep(0.0, 0.15, transmittanceIntegral);
   return vec4(radianceIntegral, mix(outAlpha, outAlpha * 0.80, softenGate));
 }
 
