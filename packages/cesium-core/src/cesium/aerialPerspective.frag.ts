@@ -64,6 +64,12 @@ export interface AerialPerspectiveFragOptions {
    * 默认 true；false 时产物与现状逐字符一致（golden 守门）。
    */
   moon?: boolean
+  /**
+   * 高阶散射 LUT 可选加载（spec §7.5）：默认 true。
+   * false 时 prefix 不输出 HAS_HIGHER_ORDER_SCATTERING_TEXTURE（bruneton runtime 走单阶
+   * 散射近似），配合 loadAtmosphereLUTs 不请求 8MB 资产 + AtmosphereStage 条件 binding。
+   */
+  higherOrderScattering?: boolean
 }
 
 type ResolvedOptions = Required<AerialPerspectiveFragOptions>
@@ -1059,6 +1065,7 @@ export function buildAerialPerspectiveFragmentShader(
     cloudsGodRaysGain: 1.0,
     groundCloudShadow: false, // M6 地面云影 define（默认 false 零回归；AtmosphereStage 依桥存在注入）
     moon: true,
+    higherOrderScattering: true, // spec §7.5：默认加载高阶散射 LUT（零回归）
     ...options
   }
 
@@ -1104,7 +1111,13 @@ export function buildAerialPerspectiveFragmentShader(
     }
   )
 
-  return [buildAtmospherePrefix(), defines.join('\n'), body].filter(s => s.length > 0).join('\n')
+  return [
+    buildAtmospherePrefix({ higherOrderScattering: o.higherOrderScattering }),
+    defines.join('\n'),
+    body
+  ]
+    .filter(s => s.length > 0)
+    .join('\n')
 }
 
 // 供 Task 8 glslang 独立校验：补 #version 300 es + precision + Cesium 自动注入符号的桩。

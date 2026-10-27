@@ -140,6 +140,59 @@ const SHAPE_DETAIL_SIZE = 32
 const STBN_SIZE = 128
 const STBN_DEPTH = 64
 
+// 资产字节表（spec §7.4）：必须与根包 src/assets.ts 的 ASSET_BYTES 保持一致。
+// 为什么不从根包导入：@cesium-geospatial/clouds 是被根包聚合的子包，反向依赖会形成环。
+const WEATHER_BYTES = {
+  shape: 2097152, // 128³ R8
+  shape_detail: 32768, // 32³ R8
+  stbn: 1048576 // 128×128×64 R8
+} as const
+
+function joinUrl(dir: string, file: string): string {
+  // resolveAssetUrls 返回的目录末尾带 `/`；统一去尾再拼，避免 `clouds//x.bin`
+  // （部分静态服务器不折叠双斜杠）。demo 的 'clouds'/'weather' 形态产物 URL 逐字节不变。
+  return `${dir.endsWith('/') ? dir.slice(0, -1) : dir}/${file}`
+}
+
+function contentTypeOf(res: Response): string {
+  return res.headers?.get?.('content-type') ?? '未知'
+}
+
+/**
+ * 取回 .bin 资产并校验精确字节数（spec §7.4）。
+ * `r.ok` 挡不住 Vite dev / SPA fallback 的 200 text/html——必须看长度。
+ */
+async function fetchChecked(
+  url: string,
+  expectedBytes: number
+): Promise<ArrayBuffer> {
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`资产请求失败：${url}（HTTP ${res.status}）`)
+  }
+  const buffer = await res.arrayBuffer()
+  if (buffer.byteLength !== expectedBytes) {
+    throw new Error(
+      `资产长度不符：${url}（期望 ${expectedBytes} 字节，实际 ${buffer.byteLength} 字节，` +
+        `content-type: ${contentTypeOf(res)}）——缺失资产常以 200 text/html 返回`
+    )
+  }
+  return buffer
+}
+
+/** local_weather.png 只校验非空（可解码性由 decodePngRgba + 既有 fallback 判定）。 */
+async function fetchBlobChecked(url: string): Promise<Blob> {
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`资产请求失败：${url}（HTTP ${res.status}）`)
+  }
+  const blob = await res.blob()
+  if (blob.size === 0) {
+    throw new Error(`资产为空：${url}`)
+  }
+  return blob
+}
+
 /**
  * PNG decode 为 RGBA 字节（createImageBitmap + OffscreenCanvas 2d，浏览器原生无依赖）。
  * local_weather.png 是 512² RGBA（RGBA 通道 = 4 层 packed coverage）。
@@ -171,11 +224,20 @@ export async function loadWeatherTextures(
   context: Context,
   baseUrl: string
 ): Promise<WeatherTextures> {
+  // local_weather 维持 M2 既有降级语义：加载/校验失败不拖垮整体（decode 失败 → 1×1 全白），
+  // 其余 .bin 是硬依赖（长度不符直接 reject，避免把 HTML 当噪声纹理）。
+  let pngLoadError: unknown
+  const pngPromise = fetchBlobChecked(joinUrl(baseUrl, 'local_weather.png')).catch(
+    (err) => {
+      pngLoadError = err
+      return undefined
+    }
+  )
   const [shapeBuf, detailBuf, stbnBuf, weatherPng] = await Promise.all([
-    fetch(`${baseUrl}/shape.bin`).then((r) => r.arrayBuffer()),
-    fetch(`${baseUrl}/shape_detail.bin`).then((r) => r.arrayBuffer()),
-    fetch(`${baseUrl}/stbn.bin`).then((r) => r.arrayBuffer()),
-    fetch(`${baseUrl}/local_weather.png`).then((r) => r.blob())
+    fetchChecked(joinUrl(baseUrl, 'shape.bin'), WEATHER_BYTES.shape),
+    fetchChecked(joinUrl(baseUrl, 'shape_detail.bin'), WEATHER_BYTES.shape_detail),
+    fetchChecked(joinUrl(baseUrl, 'stbn.bin'), WEATHER_BYTES.stbn),
+    pngPromise
   ])
   // shape/shape_detail: R8 Uint8 3D（推算 128³/32³；M2 云 shader 采样时校准）。
   // PixelFormat.RED 单通道（WebGL2），UNSIGNED_BYTE。
@@ -212,6 +274,9 @@ export async function loadWeatherTextures(
   let localWeather: Texture
   let localWeatherRaw: { width: number; height: number; data: Uint8Array } | undefined
   try {
+    if (weatherPng == null) {
+      throw pngLoadError ?? new Error('local_weather.png 不可用')
+    }
     const { width, height, data } = await decodePngRgba(weatherPng)
     // 原始 RGBA 留一份给 T6 atlasDisabled escape（与 Texture 共享同一 buffer——Texture 构造
     // 仅上传 GPU，JS 侧 buffer 不被接管）
@@ -226,7 +291,7 @@ export async function loadWeatherTextures(
     })
     ;(localWeather as unknown as { generateMipmap: () => void }).generateMipmap()
   } catch (err) {
-    console.warn('[clouds] local_weather.png decode 失败，fallback 1×1 全白 dummy（连续云墙+地平线白线）', err)
+    console.warn('[clouds] local_weather.png 加载/decode 失败，fallback 1×1 全白 dummy（连续云墙+地平线白线）', err)
     localWeather = new Texture({
       context,
       source: { width: 1, height: 1, arrayBufferView: new Uint8Array([255, 255, 255, 255]) },

@@ -309,3 +309,20 @@ describe('M6 乘子插入锚（spec §6.6 零回归锚）', () => {
     expect(groundLightColor(0.5, 0)).toBe(Math.max((sunIrrDot + skyIrr) / solar, ambient)) // strength=0 短路≡现状
   })
 })
+
+describe('higher_order 可选加载（spec §7.5）', () => {
+  it('默认输出 HAS_HIGHER_ORDER_SCATTERING_TEXTURE define（零回归）', () => {
+    expect(buildAerialPerspectiveFragmentShader({})).toContain(
+      '#define HAS_HIGHER_ORDER_SCATTERING_TEXTURE'
+    )
+  })
+
+  it('higherOrderScattering=false 时移除 define（不采样未绑定的 sampler3D）', () => {
+    const off = buildAerialPerspectiveFragmentShader({ higherOrderScattering: false })
+    expect(off).not.toContain('#define HAS_HIGHER_ORDER_SCATTERING_TEXTURE')
+    // 其余宏不受影响
+    expect(off).toContain('#define GROUND')
+    expect(off).toContain('#define SKY')
+    expect(off).toContain('#define SUN')
+  })
+})

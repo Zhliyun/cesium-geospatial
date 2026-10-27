@@ -327,6 +327,8 @@ export function validateAtmosphereOptions(
   return {
     sun: options.sun ?? true,
     sky: options.sky ?? true,
+    // spec §7.5：默认加载 8MB 高阶散射 LUT（零回归）；false 时 shader 不 define + 不绑定 uniform
+    higherOrderScattering: options.higherOrderScattering ?? true,
     exposureFollowTimeline: options.exposureFollowTimeline ?? true,
     exposureDay: options.exposureDay ?? 1.2,
     exposureNight: options.exposureNight ?? 0.1,
@@ -436,14 +438,13 @@ export function buildAtmosphereUniforms(
   options: ResolvedAtmosphereStageOptions,
   state: AtmosphereFrameState
 ): Record<string, unknown> {
-  return {
+  const uniforms: Record<string, unknown> = {
     SUN_SPECTRAL_RADIANCE_TO_LUMINANCE: SUN_SPECTRAL_RADIANCE_TO_LUMINANCE,
     SKY_SPECTRAL_RADIANCE_TO_LUMINANCE: SKY_SPECTRAL_RADIANCE_TO_LUMINANCE,
     transmittance_texture: () => luts.transmittance,
     scattering_texture: () => luts.scattering,
     single_mie_scattering_texture: () => luts.scattering, // COMBINED 模式不采样，传同值占位
     irradiance_texture: () => luts.irradiance,
-    higher_order_scattering_texture: () => luts.higherOrderScattering, // C9：云 god rays 防过暗（HAS_HIGHER_ORDER_SCATTERING_TEXTURE 分支）
     sunDirection: () => state.sunDirection,
     // 月方向闭包（preRender 每帧更新）；ω/radiance 静态值。moon=false 时 shader 无这三件声明，
     // Cesium 静默忽略（同 u_cloudsGodRaysGain 先例，无条件绑定零分支）
@@ -476,6 +477,13 @@ export function buildAtmosphereUniforms(
     // display dithering 的 u_ditherScale 仍在 tonomapStage 消费（?ditherScale= 仍有效）。
     cosSunAngularRadius: Math.cos(SUN_ANGULAR_RADIUS)
   }
+  // C9 + spec §7.5：高阶散射 LUT 条件 binding。默认 true 时键集合与既有行为逐字节一致；
+  // false 时既不请求资产也不绑定（shader 侧同选项不输出 define）。绝不能用 1×1 dummy——
+  // 它会被 GetScattering 当真实高阶散射采样，改变大气亮度。
+  if (options.higherOrderScattering) {
+    uniforms.higher_order_scattering_texture = () => luts.higherOrderScattering
+  }
+  return uniforms
 }
 
 // M5 atmosphere 路径：clouds shadowLength bridge → atmosphere uniform 表增量。

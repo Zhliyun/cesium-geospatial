@@ -128,6 +128,15 @@ describe('uniform 接线一致性', () => {
     const keys = Object.keys(uniforms).sort()
     expect(keys).toEqual([...AERIAL_PERSPECTIVE_UNIFORM_NAMES].sort())
   })
+
+  it('higherOrderScattering=false 时不绑定 higher_order_scattering_texture（spec §7.5 条件 binding，不用 1×1 dummy）', () => {
+    const uniforms = buildAtmosphereUniforms(
+      stubLuts,
+      validateAtmosphereOptions({ higherOrderScattering: false }),
+      makeState()
+    )
+    expect('higher_order_scattering_texture' in uniforms).toBe(false)
+  })
 })
 
 // 水下相机防护（2026-08-15 bug：里海视角 camera=54.2518,37.3749,-12,... 天空黑、云正常）：
@@ -289,6 +298,7 @@ describe('validateAtmosphereOptions', () => {
     expect(validateAtmosphereOptions({})).toEqual({
       sun: true,
       sky: true,
+      higherOrderScattering: true, // spec §7.5 默认加载 8MB 高阶散射 LUT（零回归）
       exposureFollowTimeline: true,
       exposureDay: 1.2,
       exposureNight: 0.1,

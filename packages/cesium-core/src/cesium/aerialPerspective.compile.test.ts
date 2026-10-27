@@ -25,6 +25,7 @@ import { compileFragment } from './glslangUtil'
 // 的默认 true，覆盖宏裁剪与 uniform 接线的真实组合空间）。
 const COMBOS: Array<[string, AerialPerspectiveFragOptions]> = [
   ['默认（SKY+SUN 全开）', {}],
+  ['无高阶散射 LUT（spec §7.5 可选加载）', { higherOrderScattering: false }],
   ['无日盘（SUN 关，SKY 开）', { sun: false }],
   ['无天空分支（SKY+SUN 关，远平面直通）', { sun: false, sky: false }],
   ['M6 地面云影（GROUND_CLOUD_SHADOW define 全函数族）', { groundCloudShadow: true }],

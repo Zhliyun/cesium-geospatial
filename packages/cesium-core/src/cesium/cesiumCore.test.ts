@@ -9,8 +9,8 @@ describe('buildAtmospherePrefix', () => {
     )
   })
 
-  it('契约：prefix 恒 define HAS_HIGHER ⇒ 所有 include bruneton/runtime 的消费端 frag 必须声明+绑定 higher_order_scattering_texture', () => {
-    // 回归锁（2026-09-03 seed 链排查副产）：prefix 自 C9 起无条件加 define，runtime.glsl 的
+  it('契约：prefix 默认 define HAS_HIGHER ⇒ 所有 include bruneton/runtime 的消费端 frag 必须声明+绑定 higher_order_scattering_texture', () => {
+    // 回归锁（2026-09-03 seed 链排查副产）：prefix 默认（higherOrderScattering !== false，spec §7.5）加 define，runtime.glsl 的
     // GetScattering/GetSkyRadiance 在该分支引用 higher_order_scattering_texture——消费端 frag
     // 漏声明 = undeclared identifier 编译炸 → Cesium render loop 停 → tiles/云全停摆，
     // 浏览器 A/B 实验全成死帧伪像（当日 seed=1 vs 1337「同图」实为此伪像）。
