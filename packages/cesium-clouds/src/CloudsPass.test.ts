@@ -509,21 +509,21 @@ describe('createCloudsPass', () => {
     pass2.destroy()
   })
 
-  it('层内雾化 u_inLayerFog：默认 1（2026-09-28 方案 A 拍板，治 1536 白板/1692 蓝板平刷）；0=逐位回退', () => {
+  it('层内雾化 u_inLayerFog：默认 0（2026-10-27 缺省关闭——层内圆润/等高线的根源）；1=开回旧护栏', () => {
     vi.clearAllMocks()
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
-    expect(um.u_inLayerFog()).toBe(1.0)
+    expect(um.u_inLayerFog()).toBe(0.0)
     pass.destroy()
 
     vi.clearAllMocks()
     const params = defaultCloudsParameters()
-    params.inLayerFog = 0
+    params.inLayerFog = 1
     const pass2 = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state, {
       parameters: params
     })
     const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
-    expect(um2.u_inLayerFog()).toBe(0)
+    expect(um2.u_inLayerFog()).toBe(1)
     pass2.destroy()
   })
 

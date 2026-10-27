@@ -395,7 +395,12 @@ export function defaultCloudsParameters(): CloudsParameters {
     twilightSkyBoost: 6.0,
     // 层内雾化总开关（2026-09-28 方案 A）：1=开（缺省，治 1536 白板/1692 蓝板平刷）；
     // 0=逐位回退。?cloudsInLayerFog= 即调
-    inLayerFog: 1.0,
+    // 【2026-10-27 缺省关闭】层内路径（禁早退 + 步长预算 + 雾化 + 亮度托底 + α 软化）是为治
+    // 1536 白板 / 1692 蓝板 / 1740 蓝雾 加的一组护栏，但它套用到**所有层内像素**，代价是：
+    // 相机在云层带内时云体变圆润、丢细节、并出现等距等高线条纹（用户 3158m 实测，
+    // `?cloudsInLayerFog=0` 即完全恢复）。逐条收窄（/12、/32、亮度地板、α 软化）都无法根治，
+    // 属整体设计取舍 → 缺省关闭，需要那组保护时显式 `?cloudsInLayerFog=1`。
+    inLayerFog: 0.0,
     // 顶面蓬松化（2026-09-29 密度分布专项）：(1,1,0,0)=L0/L1 开、L2 卷云关；0 向量=逐位
     // 回退。?cloudsTopPuff=0 即调（同 interface 注释）
     topPuffWeights: new Cartesian4(1.0, 1.0, 0.0, 0.0),
