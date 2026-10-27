@@ -60,6 +60,21 @@ const repoDist = join(repoRoot, 'dist')
 const CESIUM_VERSION = '1.143.0'
 const CESIUM_OVERRIDES = { '@cesium/engine': '26.1.0', '@cesium/widgets': '16.1.0' }
 
+// fixture 的构建工具**钉精确版本**，取值与仓库根 pnpm-lock.yaml 解析出的版本逐位一致
+// （vite 6.4.3 / webpack 5.112.2 / webpack-cli 7.2.3 / rollup 4.62.3 / 两个 rollup
+// plugin / typescript 5.9.3）。fixture 没有 lockfile，写 ^x.y.z 会让 CI 冷缓存或元数据
+// 刷新时解析出仓库从未测过的更高版本——门禁就跨机器、跨时间不可复现。升级根依赖后
+// 必须同步改这里（这正是「与仓库根对齐」的字面含义，不是凑巧同版）。
+const TOOL_VERSIONS = {
+  vite: '6.4.3',
+  webpack: '5.112.2',
+  'webpack-cli': '7.2.3',
+  rollup: '4.62.3',
+  '@rollup/plugin-node-resolve': '16.0.3',
+  '@rollup/plugin-commonjs': '29.0.3',
+  typescript: '5.9.3'
+}
+
 const ASSET_DIR_NAME = 'cesium-geospatial-assets'
 const TRANSMITTANCE_BYTES = 131072 // 256×64×RGBA×half-float(2B)
 const ASSET_FILE_COUNT = 10 // luts 4 + clouds 4 + moon 2
@@ -202,6 +217,27 @@ function assertProductDist() {
   )
   assert.deepEqual(withImportMeta, [], '产品 dist 的 JS 里出现 import.meta（构建期相对解析会破坏打包）')
   console.log(`[smoke] 前置检查通过：dist ${chunks.length} 个 chunk 均无 import.meta`)
+}
+
+/**
+ * 自检：TOOL_VERSIONS 必须与仓库根「已安装版本」（= 根 lockfile 的解析结果）逐位一致。
+ * 这样升级根 devDeps 却忘了同步 fixture 钉版时，冒烟会直接报错，而不是悄悄测出另一套版本。
+ * 根 node_modules 里没有的工具（rollup 是 vite 的传递依赖、未被提升）跳过。
+ */
+function assertToolVersionsAligned() {
+  const mismatches = []
+  for (const [name, pinned] of Object.entries(TOOL_VERSIONS)) {
+    const manifestPath = join(repoRoot, 'node_modules', name, 'package.json')
+    if (!existsSync(manifestPath)) continue
+    const actual = JSON.parse(readFileSync(manifestPath, 'utf8')).version
+    if (actual !== pinned) mismatches.push(`${name}: 根=${actual} / TOOL_VERSIONS=${pinned}`)
+  }
+  assert.deepEqual(
+    mismatches,
+    [],
+    `构建工具版本与仓库根不一致（先 pnpm install，或同步 TOOL_VERSIONS）：\n${mismatches.join('\n')}`
+  )
+  console.log(`[smoke] 构建工具钉版与仓库根一致：${Object.keys(TOOL_VERSIONS).length} 项已核对`)
 }
 
 /** fixture 的 package.json：file:<仓库根> + 固定 Cesium + 各自构建依赖 */
@@ -356,8 +392,12 @@ async function runFixture(name, body) {
 
 /** Vite fixture：copy-assets → dev server（curl 三个 URL）→ build → 共享断言 */
 async function viteFixture(ctx) {
-  writeFixtureBase(ctx, 'vite', { vite: '^6.0.0', typescript: '^5.9.3' }, {
-    'index.html': `<!doctype html>
+  writeFixtureBase(
+    ctx,
+    'vite',
+    { vite: TOOL_VERSIONS.vite, typescript: TOOL_VERSIONS.typescript },
+    {
+      'index.html': `<!doctype html>
 <html>
   <body>
     <div id="app"></div>
@@ -365,7 +405,8 @@ async function viteFixture(ctx) {
   </body>
 </html>
 `
-  })
+    }
+  )
   install(ctx)
 
   // copy-assets 走「安装副本」里的 CLI：同时验证 bin 与 assets 真进了 files 副本
@@ -476,8 +517,11 @@ async function webpackFixture(ctx) {
   writeFixtureBase(
     ctx,
     'webpack',
-    // webpack-cli 版本与仓库根 devDeps 对齐，fixture 安装可直接命中 pnpm store
-    { webpack: '^5.0.0', 'webpack-cli': '^7.0.0', typescript: '^5.9.3' },
+    {
+      webpack: TOOL_VERSIONS.webpack,
+      'webpack-cli': TOOL_VERSIONS['webpack-cli'],
+      typescript: TOOL_VERSIONS.typescript
+    },
     {
       // fixture 是 type: module，webpack 配置走 .cjs
       'webpack.config.cjs': `const path = require('node:path')
@@ -524,10 +568,10 @@ async function rollupFixture(ctx) {
     ctx,
     'rollup',
     {
-      rollup: '^4.0.0',
-      '@rollup/plugin-node-resolve': '^16.0.0',
-      '@rollup/plugin-commonjs': '^29.0.0',
-      typescript: '^5.9.3'
+      rollup: TOOL_VERSIONS.rollup,
+      '@rollup/plugin-node-resolve': TOOL_VERSIONS['@rollup/plugin-node-resolve'],
+      '@rollup/plugin-commonjs': TOOL_VERSIONS['@rollup/plugin-commonjs'],
+      typescript: TOOL_VERSIONS.typescript
     },
     {
       'rollup.config.mjs': `import { nodeResolve } from '@rollup/plugin-node-resolve'
@@ -562,6 +606,7 @@ export default {
 
 async function main() {
   assertProductDist()
+  assertToolVersionsAligned()
 
   const started = Date.now()
   const fixtures = [
@@ -594,6 +639,10 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`[smoke] 致命错误：${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+  // 断言失败本身就是结论（前置检查的版本/产物不一致），栈没有信息量；其余异常打栈便于定位
+  const isAssertion = error instanceof Error && error.name === 'AssertionError'
+  const detail =
+    error instanceof Error ? (isAssertion ? error.message : error.stack ?? error.message) : String(error)
+  console.error(`[smoke] 致命错误：${detail}`)
   process.exitCode = 1
 })
