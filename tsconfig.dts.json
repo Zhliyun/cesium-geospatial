@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@cesium-geospatial/core": ["packages/cesium-core/dist/index.d.ts"],
+      "@cesium-geospatial/clouds": ["packages/cesium-clouds/dist/index.d.ts"]
+    }
+  }
+}

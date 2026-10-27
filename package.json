@@ -1,18 +1,56 @@
 {
   "name": "cesium-geospatial",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./clouds": {
+      "types": "./dist/clouds.d.ts",
+      "import": "./dist/clouds.js"
+    }
+  },
+  "bin": {
+    "cesium-geospatial": "./bin/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "docs",
+    "bin",
+    "README.md"
+  ],
+  "sideEffects": false,
   "scripts": {
     "dev": "pnpm --filter demo dev",
-    "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "build": "vite build && node scripts/build-dts.mjs && node scripts/write-build-stamp.mjs",
+    "prepare": "pnpm run build",
+    "test": "vitest run && pnpm -r test",
+    "verify": "tsc --noEmit && vitest run && pnpm run build && node scripts/assert-dist.mjs"
+  },
+  "peerDependencies": {
+    "cesium": ">=1.143.0 <2.0.0"
   },
   "packageManager": "pnpm@10.32.1",
   "devDependencies": {
+    "@microsoft/api-extractor": "^7.60.0",
+    "@types/node": "^20.19.43",
     "@types/pngjs": "^6.0.5",
+    "cesium": "^1.143.0",
     "playwright": "^1.62.1",
     "pngjs": "^7.0.0",
-    "tsx": "^4.23.8"
+    "tsx": "^4.23.8",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3",
+    "vitest": "^4.1.10"
   }
 }

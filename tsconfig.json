@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@cesium-geospatial/core": ["packages/cesium-core/src/index.ts"],
+      "@cesium-geospatial/clouds": ["packages/cesium-clouds/src/index.ts"]
+    }
+  },
+  "include": ["src", "packages/*/src/**/*.d.ts"]
+}
