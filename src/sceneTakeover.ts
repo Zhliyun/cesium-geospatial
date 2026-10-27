@@ -5,17 +5,18 @@
 // `captureSceneState` + `applySceneTakeover`，destroy/回滚时 `takeover.restore()`。
 //
 // 必须遵守的规则（spec §7.6，逐条对应下方实现）：
-// 1. **无条件还原**：restore 按快照逐项写回，不做「值是否仍等于安装值」的归属判定。
-//    宿主在安装期间改过的设置也会被还原——文档必须明示「安装期间不要改这些设置，
-//    或 destroy 后重新应用」；完全不想被接管用 `takeOverScene: false`。
+// 1. **无条件还原**：接管（`enabled: true`）期间 restore 按快照逐项写回，不做
+//    「值是否仍等于安装值」的归属判定。宿主在安装期间改过的设置也会被还原——文档
+//    必须明示「安装期间不要改这些设置，或 destroy 后重新应用」。`takeOverScene: false`
+//    时本库从未改过这 11 项，restore **不得**写回（否则会静默覆盖宿主自己管的设置）。
 // 2. **按对象记录快照**：globe / skyAtmosphere / skyBox / sun / moon / fog 上的设置
 //    在捕获时记录对象引用；宿主替换对象后，旧值只写回捕获时的旧对象，不落到新对象上。
 // 3. **`takeOverScene: false` 仍快照并还原 `depthTestAgainstTerrain`**：底层
 //    `createAtmosphereStage` 无条件把它置 true（PostProcessStage 的 depthTexture 需要
-//    真实地形深度），与是否接管无关。
-// 4. **还原 requestRenderMode 后补一帧**：恢复为 true 时调用 `scene.requestRender()`，
-//    但必须先 `scene.isDestroyed()` 守卫——Cesium `destroyObject` 会把未保留的方法
-//    （含 requestRender）替换为抛错版本。
+//    真实地形深度），与是否接管无关；它是唯一不受 `enabled` 门控的还原项。
+// 4. **还原 requestRenderMode 后补一帧**（仅接管时）：恢复为 true 时调用
+//    `scene.requestRender()`，但必须先 `scene.isDestroyed()` 守卫——Cesium
+//    `destroyObject` 会把未保留的方法（含 requestRender）替换为抛错版本。
 //
 // 备注：`scene.logarithmicDepthBuffer` 置 true 后的**读回校验**由 install 层执行
 // （spec §8.1 步骤 3「读回校验 log-depth」），失败时先 restore 再抛错；本模块只负责写。
@@ -167,7 +168,17 @@ export function applySceneTakeover(
       if (restored) return
       restored = true
 
-      // 规则 1：无条件按快照写回，不做值相等/归属判定。
+      // 【唯一不受 enabled 门控的还原项】规则 3：底层 createAtmosphereStage 无条件
+      // 把 depthTestAgainstTerrain 置 true，所以无论是否接管都必须按快照还原。
+      if (state.globe) {
+        state.globe.depthTestAgainstTerrain = state.depthTestAgainstTerrain
+      }
+
+      // takeOverScene:false = 本库从未改过其余 11 项：不得写回（否则会静默覆盖宿主
+      // 在安装期间自己设置的值）；requestRenderMode 也没动过，无需补帧。
+      if (!opts.enabled) return
+
+      // 规则 1：接管期间无条件按快照写回，不做值相等/归属判定。
       // 1-4. scene 级
       scene.logarithmicDepthBuffer = state.logarithmicDepthBuffer
       scene.highDynamicRange = state.highDynamicRange
@@ -191,10 +202,10 @@ export function applySceneTakeover(
         state.fog.enabled = state.fogEnabled
       }
 
-      // 10-12. globe 级：写捕获时的 globe 对象（规则 2）——宿主替换后的新 globe
-      // 保持自己的值，不会被写回旧值。
+      // 10-11. globe 级：写捕获时的 globe 对象（规则 2）——宿主替换后的新 globe
+      // 保持自己的值，不会被写回旧值。（第 12 项 depthTestAgainstTerrain 在上方
+      // enabled 门控之外已还原。）
       if (state.globe) {
-        state.globe.depthTestAgainstTerrain = state.depthTestAgainstTerrain
         state.globe.showGroundAtmosphere = state.showGroundAtmosphere
         state.globe.enableLighting = state.enableLighting
       }

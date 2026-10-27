@@ -128,6 +128,35 @@ describe('场景接管（spec §7.6）', () => {
     expect(scene.globe.depthTestAgainstTerrain).toBe(false)
   })
 
+  it('takeOverScene=false 时安装期宿主改的设置不被还原（restore 不越权回写）', () => {
+    const scene = makeScene()
+    const t = takeOver(scene, false)
+    // 宿主的语义正是「场景我自己管」：安装期改回自己要的值
+    scene.skyBox!.show = false
+    scene.fog.enabled = false
+
+    t.restore()
+    // 不接管时本库从未改过这 11 项，restore 不得把宿主的值写回快照值
+    expect(scene.skyBox?.show).toBe(false)
+    expect(scene.fog.enabled).toBe(false)
+    expect(scene.requestRenderMode).toBe(true)
+    // 唯一天然还原项：depthTestAgainstTerrain（底层强制改过）
+    expect(scene.globe.depthTestAgainstTerrain).toBe(false)
+    // 本库没动过 requestRenderMode，无需补帧
+    expect(scene.requestRender).not.toHaveBeenCalled()
+  })
+
+  it('takeOverScene=true 时安装期宿主改的设置仍被无条件还原', () => {
+    const scene = makeScene()
+    scene.fog.enabled = false // 捕获值 false（安装值也是 false）
+    const t = takeOver(scene)
+    scene.fog.enabled = true // 宿主安装期改成第三个值
+
+    t.restore()
+    // 无条件还原：不做「宿主是否改过」的判定，直接写回捕获值
+    expect(scene.fog.enabled).toBe(false)
+  })
+
   it('宿主替换 globe 后不向新 globe 写旧值（按捕获对象还原）', () => {
     const scene = makeScene()
     const originalGlobe = scene.globe
