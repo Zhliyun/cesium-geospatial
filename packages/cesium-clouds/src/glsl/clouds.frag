@@ -440,14 +440,14 @@ float marchOpticalDepth(
   const float jitter,
   out float rayDistance
 ) {
-  int iterationCount = int(
-    max(0.0, remap(mipLevel, 0.0, 1.0, float(maxIterationCount + 1), 1.0) - jitter)
-  );
-  if (iterationCount == 0) {
-    // Fudge factor to approximate the mean optical depth.
-    // TODO: Remove it.
-    return 0.5;
-  }
+  // 【2026-10-27 同心圆波纹·根治】原式把迭代次数按 mipLevel 量化成**整数**：
+  //   iterationCount = int(remap(mipLevel, 0,1, maxIter+1, 1) - jitter)
+  // 而 mipLevel 随 rayDistance 变化 → 采样分辨率在固定距离处整段跳变 → 云面出现
+  // **以相机为圆心的同心圆**（缺省 maxIterationCountToSun=4 → 约 19/41/68/100km 四道）。
+  // jitter 只把台阶摊成噪声，均值仍随距离跳。参考库同式，差异在 dither 不足。
+  // 修：步数**固定**为 maxIterationCount（缺省 4，成本极低），积分分辨率为常数；
+  // jitter 只保留为起点相位（`nextDistance = stepSize * jitter`），不再参与步数取整。
+  int iterationCount = max(1, maxIterationCount);
   float stepSize = minSecondaryStepSize / float(iterationCount);
   float nextDistance = stepSize * jitter;
   float opticalDepth = 0.0;
