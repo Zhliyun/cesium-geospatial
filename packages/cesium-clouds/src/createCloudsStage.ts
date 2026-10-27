@@ -1002,7 +1002,10 @@ function buildCloudsStageImpl(
           prevCameraPos != null && Cartesian3.distance(camera.positionWC, prevCameraPos) < 0.01
         if (still && prevDirWC != null) {
           const cosAngle = Math.min(1, Math.max(-1, Cartesian3.dot(prevDirWC, camera.directionWC)))
-          still = Math.acos(cosAngle) < 1e-4
+          // 【2026-10-27 慢转拖影】方向判据 1e-4 → 1e-5 rad（≈0.1px → 0.02px 全分）：
+          // 旧阈值把「慢拖/惯性尾段」判成静止 → 关重投影 → 历史冻结、地形在动 = 拖影。
+          // 位置判据保持 0.01m 不动（上次两个一起收紧导致静止判定完全失效，std 0.088→7.0）。
+          still = Math.acos(cosAngle) < 1e-5
         }
         frameStill = still
         movingFrames = still ? 0 : movingFrames + 1
