@@ -1007,11 +1007,15 @@ vec4 marchClouds(
     // maxStepSize。步长与「段长」彻底解耦，不再产生等值线；帧时由 maxIterationCount 兜底。
     float lodMixInLayer = inLayerCam > 0.5
       ? saturate((rayDistance - 300.0) / 6000.0)
-      // 【2026-10-27 同心环·第二半】原来层外云内步距仍按 mipLevel 随距离放大（25m→数百米），
-      // 与「恒定纹理 LOD」失配 → 远段欠采样成等距带（环）。改为恒等于 cloudStepSize：
-      // 采样间隔与纹理 LOD 假设一致、与距离无关。代价：远段云内步数回升（受 maxIterationCount=500 兜底）。
-      : 0.0;
-    rayDistance += mix(stepSize, maxStepSize, lodMixInLayer);
+      // 【2026-10-27 回退】恒 0.0 让远段云内步距恒 25m → 步数暴涨、帧率不可接受（用户实测）。
+      // 恢复按 mipLevel 随距离放大（性能优先），环的第二半改用别的办法解决。
+      : min(1.0, mipLevel * u_hitStepMipBoost);
+    // 【2026-10-27 同心环·拍频打散】步距随 rayDistance 连续变化，而云顶是近等距面 →
+    // 采样点相对云顶密度剖面的相位**逐像素相干**漂移 → 等距拍频 = 以相机为圆心的环。
+    // 恒定步距被帧率否掉，故改为**逐像素抖动步长本身**（±25%，时间稳定、零帧时代价）：
+    // 相邻像素相位立刻去相关，拍频碎成噪声。
+    float stepDither = 0.75 + 0.5 * interleavedGradientNoise(gl_FragCoord.xy);
+    rayDistance += mix(stepSize, maxStepSize, lodMixInLayer) * stepDither;
   }
 
   // The final product of 5.9.1 and we'll evaluate this in aerial perspective.
