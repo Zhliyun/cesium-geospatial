@@ -662,7 +662,10 @@ vec4 marchClouds(
   // 【v3.2 连续化 2026-09-29】300m 阶跃在近水平层内相机的「逐像素段长剧变」下产生
   // 处理分支域拼贴=弧状色带（1688 实测）——细化比例改 400→200m smoothstep 连续过渡。
   float thinSegment = 1.0 - smoothstep(200.0, 400.0, maxRayDistance);
-  stepSize = mix(stepSize, max(maxRayDistance * 0.0833333, 1.0), inLayerCam * thinSegment);
+  // 【2026-10-27 去等高线条纹】原式把段长**等分 12 步**（段长×0.0833）——采样点落在段长的
+  // 固定分数上，而段长随屏幕平滑变化 → 等值线状条纹，且每步 122–269m 把细节平均掉（圆润）。
+  // 参考库没有这一层：它的步长只随 rayDistance 演化、与段长解耦，所以天然无条纹。
+  // 薄段的采样密度改由「minStepSize=25m + 层内距离阶梯」保证（见云内推进处）。
   // 【层内步数上限 v3.2】禁早退全横穿必须有限步完成：密云区无空区大步，minStepSize 100m/步
   // 走 3.9-8.6km 段 = 39-86 步 × 全屏 × 每步光照采样 → 帧时爆炸（1650/1740 实测页面导航
   // 超时级卡顿）。段长/64 在 minStepSize=100m 地板下不生效（61m<100m）——升段长/32 直接
@@ -925,9 +928,14 @@ vec4 marchClouds(
       // 的色调分量，弱去饱和把雾面拉向灰白靠拢地面色调（强 0.45 会抹平云团/云隙结构）。
       // 【v3.2 连续化】1000m 阶跃同为色带源（1688 实测多段色带）——0.45→0.25 于
       // 1200→800m smoothstep 连续过渡，与薄段细化的连续化配套。
-      vec3 inLayerLuma = vec3(dot(radiance, vec3(0.33333333)));
-      float shortFog = 0.45 - 0.2 * smoothstep(800.0, 1200.0, maxRayDistance);
-      radiance = mix(radiance, inLayerLuma * 1.15, shortFog * inLayerCam);
+      // 【2026-10-27 去圆润】原式无条件把辐射拉向「平均亮度 ×1.15」——既抬亮又抹平亮度梯度，
+      // 是「层内云变圆润」的直接来源（用户实测 cloudsInLayerFog=0 即恢复细节）。
+      // 参考库无此注入（1692 蓝板 / 1740 蓝雾是 Bruneton LUT 天光偏蓝的真问题，仍需护栏）。
+      // 改：只做**色度中和**（把天光拉向中性灰），不抬亮、不改梯度，并按光深门控——
+      // 只有真正「深遮蔽」的样本才中和，受光云体完全不受影响。
+      float shadeGate = smoothstep(0.5, 3.0, opticalDepth) * inLayerCam;
+      vec3 ambNeutral = vec3(dot(radiance, vec3(0.33333333)));
+      radiance = mix(radiance, ambNeutral, 0.45 * shadeGate);
       g_probeSky = skyIrradiance;
       // 【2026-09-28 2022m 黑斑止血】NaN 样本免疫：2022m（L0∩L1 重叠带深部）雾化路径
       // readPixels 实证黑斑像素 rgb=NaN（α=0.88 雾化签名、全图 ~29 万 NaN 分量）→
