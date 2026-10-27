@@ -251,8 +251,13 @@ MediaSample sampleMedia(
   // 相邻像素采样点差 ≈ 起点抖动×步长，步长随距离增 → 导数随距离跳 → 纹理 mip 在**很多个
   // 距离处**离散切换 → 云面出现大量以相机为圆心的同心环（用户在 3211m 实测）。
   // 改回显式 LOD（由步长推，连续、与屏幕相位无关）。
-  float shapeLod = log2(max(1.0, stepLength * abs(shapeRepeat.x) * SHAPE_TEX_SIZE));
-  float shape = textureLod(shapeTexture, shapePosition, shapeLod).r;
+  // 【2026-10-27 同心环根治】参考库的 shape/detail 3D 纹理**没有 mip 链**
+  // （Procedural3DTexture minFilter=LinearFilter、Data3DTexture generateMipmaps=false）→
+  // 隐式 LOD 算出来也被钳到 level 0。我们 2026-10-23 加了 mip 链后，`stepLength` 驱动的
+  // LOD 才第一次真正生效；而 stepLength 在「空区几何膨胀 → 入云首样本」处有跳变，俯视时
+  // 入云首样本就是云顶等值面 → 每越过一个 mip 台阶就是**一圈以相机为圆心的环**，多层起伏
+  // = 大量同心环。故对齐参考库：恒 LOD 0（mip 链保留给未来的屏幕足迹版）。
+  float shape = textureLod(shapeTexture, shapePosition, 0.0).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
   #ifdef DEBUG_SHOW_SAMPLE_COUNT
@@ -277,8 +282,8 @@ MediaSample sampleMedia(
     // shape/turbulence 频率低 5-20 倍，保持隐式 LOD（与参考库一致）。
     // 同上：detail 也用隐式 LOD（参考库原样）。u_detailLodFloor 不再参与——
     // 它当初是为了压 N=1 全分 march 的走样，与 LOD 量化是同一类副作用。
-    float detailLod = log2(max(1.0, stepLength * abs(shapeDetailRepeat.x) * DETAIL_TEX_SIZE));
-    float detail = textureLod(shapeDetailTexture, detailPosition, max(detailLod, u_detailLodFloor)).r;
+    // 同上：恒为常量 LOD，不随步长/距离变化 → 不产生等距环。
+    float detail = textureLod(shapeDetailTexture, detailPosition, u_detailLodFloor).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(
       vec4(pow(detail, 6.0)),
