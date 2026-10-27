@@ -1,6 +1,6 @@
 // 最小接入示例：一个 Cesium Viewer + 一行 installAtmosphereClouds。
 // 示例只演示产品入口，不碰任何 stage 顺序 / LUT / 云插入点细节。
-import { Viewer } from 'cesium'
+import { Cartesian3, JulianDate, Math as CesiumMath, Viewer } from 'cesium'
 import { installAtmosphereClouds } from 'cesium-geospatial'
 
 // 示例不携带 ion token：baseLayer: false 不加载底图，baseLayerPicker/geocoder 也关掉
@@ -16,6 +16,17 @@ const viewer = new Viewer('cesiumContainer', {
   animation: false,
   timeline: false,
   fullscreenButton: false
+})
+
+// 初始机位 + 时钟：落在云层之上（卷云顶 8km < 15km）、又远低于「300km 以上云渐隐」，
+// 打开示例即俯视云海；钉住时间保证任何时刻都是白天（否则可能是夜晚）。
+// Viewer 默认全球视角（~15000km）只看得到大气——体云在 50–300km 已被渐隐。
+// 删掉这三行即回到实时太阳 + 默认全球视角。
+viewer.clock.currentTime = JulianDate.fromIso8601('2026-08-28T17:30:00Z')
+viewer.clock.shouldAnimate = false
+viewer.camera.setView({
+  destination: Cartesian3.fromDegrees(-80.6057, 64.5197, 15000),
+  orientation: { heading: CesiumMath.toRadians(68.8), pitch: CesiumMath.toRadians(-30), roll: 0 }
 })
 
 // 顶层 await 需要 es2022 以上的构建目标，而 Vite 缺省 target 更低（chrome87/es2020）；

@@ -38,8 +38,11 @@
 ## 页面里有什么
 
 - 默认 `baseLayer: false`（示例不带 ion token），裸 globe + 大气 + 体积云；控制台无请求失败。
-- **体积云在 300km 以上按设计渐隐**：默认全球视角（约 15000km）只看得到大气，
-  滚轮拉近到 300km 以下才会出现云层。
+- **首屏即云海**：示例把相机放在 `-80.6057,64.5197,15000`（15km，卷云顶 8km 之上）、
+  heading 68.8° / pitch -30° 俯视云层，并把时钟钉在 `2026-08-28T17:30:00Z` 保证任何时刻
+  打开都是白天。15km 既在云层之上（不会落进云里变一片灰雾），又远低于「300km 以上云渐隐」。
+  删掉 `src/main.ts` 里这几行，即回到实时太阳 + Viewer 默认全球视角。
+- **体积云在 300km 以上按设计渐隐**：从首屏机位拉远到 300km 以上，云会淡出、只剩大气。
 - 想加底图：给 `Viewer` 传 `baseLayer`，或先设 `Ion.defaultAccessToken`。
 - 需要换资产位置时用 `installAtmosphereClouds(viewer, { assetsBaseUrl: 'https://cdn.example.com/geo-assets/' })`，
   目录内需保持 `luts/`、`clouds/`、`moon/` 三子目录结构。
