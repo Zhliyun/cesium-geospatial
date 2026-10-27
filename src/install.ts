@@ -12,8 +12,10 @@
 //   `cloudsError`；天气纹理无消费者，立即释放。
 // - overlay 插入失败：全量回滚（云 → 大气 → 纹理 → 场景）后抛原始异常。
 //
-// 本任务范围：生命周期（viewer/widget destroy 包装、并发 Map、取消、3D morph 守卫）由
-// Task 10/10A 接入；`autoDestroy` 此处只记录开关，不注册任何监听。
+// 生命周期（spec §8.2）：模块级 pending/installed 注册表做并发去重；Viewer/CesiumWidget 的
+// `destroy` 在第一个 await 之前包装（autoDestroy !== false），安装中销毁 → 取消 + 回滚 +
+// reject(InstallCancelledError)；handle.destroy 幂等并恢复原方法。3D morph 守卫（Task 10A）
+// 尚未接入。
 
 import * as CesiumRuntime from 'cesium'
 import {
@@ -46,7 +48,7 @@ import { resolveAssetUrls, type AssetOverrides } from './assets'
 import { checkCompat, type CompatResult } from './compat'
 import { DEMO_PROFILE } from './demoProfile'
 import { loadMoonTextures } from './moonTexture'
-import { applySceneTakeover, captureSceneState } from './sceneTakeover'
+import { applySceneTakeover, captureSceneState, type SceneTakeover } from './sceneTakeover'
 
 /** 安装目标：Viewer / CesiumWidget 取 `.scene`，Scene 直接使用。 */
 export type AtmosphereCloudsTarget = Viewer | CesiumWidget | Scene
@@ -78,7 +80,7 @@ export interface InstallOptions {
   allowExistingStages?: boolean
   /**
    * Viewer / CesiumWidget 的 `destroy` 是否自动联动本 handle（默认 true）。
-   * 生命周期包装在 Task 10 接入；本任务只记录该开关。
+   * 关闭后 target 销毁不会联动 handle.destroy、安装也不会被自动取消；Scene 目标无此钩子。
    */
   autoDestroy?: boolean
 }
@@ -103,7 +105,10 @@ export interface AtmosphereCloudsHandle {
   removeInsertedStage(stage: PostProcessStage | PostProcessStageComposite): void
   /** 换云质量档位；无云或 `cloudsError` 时 no-op + warn。 */
   setQuality(quality: CloudsQualityPreset): void
-  /** 幂等释放：云 → 宿主 stage → 大气 → 纹理（4 LUT + 4 weather + 月面合成）。 */
+  /**
+   * 幂等释放：云 → 宿主 stage → 大气 → 纹理（4 LUT + 4 weather + 月面合成），
+   * 并摘除安装注册表、恢复被包装的 `viewer.destroy`／`widget.destroy`。
+   */
   destroy(): void
 }
 
@@ -156,6 +161,158 @@ function warn(message: string, detail?: unknown): void {
   } else {
     console.warn(`${WARN_PREFIX} ${message}`, detail)
   }
+}
+
+// ────────────────────────── 生命周期（spec §8.2 并发与幂等） ──────────────────────────
+
+/**
+ * 安装被取消：安装过程中 target（Viewer/CesiumWidget）被销毁，或 `disposeAllForHmr()`
+ * 取消了进行中的安装。此时已回滚，调用方应把它与普通安装失败区分开（spec §8.2）。
+ */
+export class InstallCancelledError extends Error {
+  constructor(message = '安装已取消：目标在安装过程中被销毁', options?: ErrorOptions) {
+    super(`${WARN_PREFIX} ${message}`, options)
+    this.name = 'InstallCancelledError'
+  }
+}
+
+/** 挂在 target 上的生命周期记录键（Symbol 避免与其他库的 destroy 包装冲突）。 */
+const DESTROY_RECORD_KEY = Symbol('cesium-geospatial.install.destroyRecord')
+
+/**
+ * 每个 Scene 的生命周期记录。
+ *
+ * Viewer/CesiumWidget 目标会额外包装 `destroy`：`original` 保存包装前的方法**引用本身**
+ * （恢复时原样写回，保证 `viewer.destroy === original`），`invokeOriginal` 是 bind 后的
+ * 调用副本；Scene 目标没有宿主 destroy 钩子，只保留取消标记。
+ */
+interface LifecycleRecord {
+  /** 取消标记：由包装后的 destroy / disposeAllForHmr 同步置位（每步 await 后检查）。 */
+  cancelled: boolean
+  /** 安装完成后的 handle（安装中/销毁后为 undefined），供包装的 destroy 联动销毁。 */
+  currentHandle?: AtmosphereCloudsHandle
+  /** 被包装的宿主（仅 Viewer/CesiumWidget）；Scene 目标为 undefined。 */
+  host?: { destroy: (...args: unknown[]) => void }
+  /** 包装前的方法引用；恢复时写回同一引用（引用相等可断言）。 */
+  original?: (...args: unknown[]) => void
+  /** 以正确 this 调用原方法（bind 副本，不参与引用比较）。 */
+  invokeOriginal?: () => void
+  /** 包装是否已恢复（幂等）。 */
+  restored: boolean
+  cancel(): void
+  /** 恢复原 destroy、摘除宿主 Symbol 与模块记录（幂等；Scene 目标只清模块记录）。 */
+  restoreWrapper(): void
+}
+
+/** 进行中的安装（并发去重：第二次调用返回同一 Promise）。 */
+const pending = new Map<Scene, Promise<AtmosphereCloudsHandle>>()
+/** 已安装完成（isInstalled / 重复 install / HMR 清理）。 */
+const installed = new Map<Scene, AtmosphereCloudsHandle>()
+/** 活跃安装的生命周期记录（取消进行中的安装；成功后在 handle.destroy 时摘除）。 */
+const lifecycleRecords = new Map<Scene, LifecycleRecord>()
+
+/**
+ * 创建生命周期记录，并在**第一个 await 之前**包装宿主 `destroy`（spec §8.1 步骤 1）。
+ *
+ * 包装语义：先同步置取消（安装中 → install 在下一个检查点回滚），再销毁已安装 handle；
+ * `handle.destroy()` 即使抛错，finally 也必须恢复原方法并调用原 destroy（资源释放不可跳过）。
+ */
+function createLifecycleRecord(
+  target: AtmosphereCloudsTarget,
+  scene: Scene,
+  wrapDestroy: boolean
+): LifecycleRecord {
+  const record: LifecycleRecord = {
+    cancelled: false,
+    currentHandle: undefined,
+    host: undefined,
+    original: undefined,
+    invokeOriginal: undefined,
+    restored: false,
+    cancel() {
+      record.cancelled = true
+    },
+    restoreWrapper() {
+      if (record.restored) return
+      record.restored = true
+      const host = record.host
+      if (host != null && record.original != null) {
+        host.destroy = record.original
+        delete (host as { [DESTROY_RECORD_KEY]?: LifecycleRecord })[DESTROY_RECORD_KEY]
+      }
+      // 只摘除自己的记录，避免误删后来者的条目。
+      if (lifecycleRecords.get(scene) === record) {
+        lifecycleRecords.delete(scene)
+      }
+    }
+  }
+
+  const host = target as {
+    scene?: Scene
+    destroy?: (...args: unknown[]) => void
+  } & { [DESTROY_RECORD_KEY]?: LifecycleRecord }
+  // Scene 目标没有 destroy 钩子（Scene 自身虽有 destroy，但不是宿主生命周期入口）。
+  if (!wrapDestroy || host.scene == null || typeof host.destroy !== 'function') {
+    return record
+  }
+
+  // 防叠加：极端情况下残留的旧记录先恢复，再从恢复后的原方法重新包装。
+  const stale = host[DESTROY_RECORD_KEY]
+  if (stale != null) {
+    stale.restoreWrapper()
+  }
+
+  const original = host.destroy
+  record.host = host as { destroy: (...args: unknown[]) => void }
+  record.original = original
+  record.invokeOriginal = original.bind(host)
+  host.destroy = function wrappedDestroy() {
+    // handle.destroy 抛错也要在这里摘注册表，否则 isInstalled 会永远为 true。
+    const finishing = record.currentHandle
+    record.cancel()
+    try {
+      // 安装中 currentHandle 为 undefined：只置取消，回滚由 install 的检查点执行。
+      finishing?.destroy()
+    } finally {
+      if (finishing != null && installed.get(scene) === finishing) {
+        installed.delete(scene)
+      }
+      record.currentHandle = undefined
+      record.restoreWrapper()
+      record.invokeOriginal?.()
+    }
+  }
+  host[DESTROY_RECORD_KEY] = record
+  return record
+}
+
+/**
+ * 是否已**安装完成**（spec §8 契约）：安装中（pending）返回 false；
+ * `handle.destroy()`、target 销毁或安装失败后返回 false。
+ */
+export function isInstalled(target: AtmosphereCloudsTarget): boolean {
+  return installed.has(resolveScene(target))
+}
+
+/**
+ * HMR 清理钩子（spec §8.2）：销毁全部已安装 handle、取消进行中的安装、恢复所有
+ * destroy 包装并清空两个注册表。宿主场景本身不被销毁。
+ */
+export function disposeAllForHmr(): void {
+  for (const handle of [...installed.values()]) {
+    try {
+      handle.destroy()
+    } catch (error) {
+      console.error(`${WARN_PREFIX} HMR 清理时销毁 handle 失败`, error)
+    }
+  }
+  // 进行中的安装：置取消标记并立即恢复包装；其 Promise 在下一个检查点回滚并 reject。
+  for (const record of [...lifecycleRecords.values()]) {
+    record.cancel()
+    record.restoreWrapper()
+  }
+  pending.clear()
+  installed.clear()
 }
 
 /** Viewer/CesiumWidget 有 `.scene`；Scene 自身没有，直接返回。 */
@@ -243,7 +400,8 @@ const defaultDeps: InstallDeps = {
  * 一行安装大气 + 体积云（spec §8）。
  *
  * @throws 自检失败、既有 stage 拒绝、log-depth 读回失败、资产失败、大气创建失败、
- *   overlay 插入失败（均按 §8.2 完成对应回滚）；云创建失败不抛错，改由 handle.cloudsError 报告。
+ *   overlay 插入失败（均按 §8.2 完成对应回滚）；云创建失败不抛错，改由 handle.cloudsError 报告；
+ *   安装期间 target 被销毁 / HMR 取消时 reject `InstallCancelledError`（已回滚）。
  */
 export function installAtmosphereClouds(
   target: AtmosphereCloudsTarget,
@@ -258,42 +416,64 @@ export function installAtmosphereClouds(
  * 编排顺序严格按 spec §8.1：自检 → 前置拒绝 → 快照接管+log-depth 读回 → LUT → 月面 →
  * 大气 → 天气/云 → overlay → handle。
  */
-export async function installWithDeps(
+export function installWithDeps(
   target: AtmosphereCloudsTarget,
   options: InstallOptions | undefined,
   deps: InstallDeps
 ): Promise<AtmosphereCloudsHandle> {
-  const opts = options ?? {}
   const scene = resolveScene(target)
 
-  // ── 自检 + 安装前置检查（此刻零改动，spec §8.2 第一行） ──
-  const compat = deps.runCompat(scene)
-  for (const warning of compat.warnings) warn(warning)
-  if (!compat.ok) {
-    throw new Error(`${WARN_PREFIX} 安装自检失败：\n${compat.errors.join('\n')}`)
+  // ── 并发与幂等（spec §8.2）：按 scene 去重，第二次调用拿到同一 Promise/handle ──
+  const inFlight = pending.get(scene)
+  if (inFlight != null) {
+    warn('该 Scene 正在安装中：本次调用的 options 未生效，返回进行中的安装 Promise')
+    return inFlight
   }
-  const existingStageCount = scene.postProcessStages.length
-  if (existingStageCount > 0 && opts.allowExistingStages !== true) {
-    throw existingStagesError(existingStageCount)
+  const existing = installed.get(scene)
+  if (existing != null) {
+    warn('该 Scene 已安装：options 未生效；如需重新安装请先调用 handle.destroy()')
+    return Promise.resolve(existing)
   }
-  warnEnabledSceneEffects(scene)
 
-  // autoDestroy 在本任务只记录（Task 10 接入 viewer/widget destroy 包装与取消语义）。
-  const autoDestroy = opts.autoDestroy !== false
-  void autoDestroy
+  const promise = runInstall(target, scene, options, deps)
+  pending.set(scene, promise)
+  // pending 清理挂在 promise 反应上，而不是 runInstall 内：自检/既有 stage 在第一个
+  // await 之前就失败时也能清掉（否则同 scene 的后续调用永远拿到已失败的 Promise）。
+  // 相等性守卫：避免异步清理误删后来者的 pending 条目。
+  const settle = (): void => {
+    if (pending.get(scene) === promise) {
+      pending.delete(scene)
+    }
+  }
+  void promise.then(settle, settle)
+  return promise
+}
 
-  const context = (scene as unknown as { context: Context }).context
+/**
+ * 真正的安装流程：spec §8.1 八步编排 + §8.2 生命周期（destroy 包装、取消、注册表）。
+ * 由 `installWithDeps` 在去重之后调用；`pending` 条目由调用方清理。
+ */
+async function runInstall(
+  target: AtmosphereCloudsTarget,
+  scene: Scene,
+  options: InstallOptions | undefined,
+  deps: InstallDeps
+): Promise<AtmosphereCloudsHandle> {
+  const opts = options ?? {}
 
-  // ── 场景快照 + 接管，随后读回校验对数深度（spec §8.1 步骤 3） ──
-  const state = captureSceneState(scene)
-  const takeover = applySceneTakeover(scene, state, { enabled: opts.takeOverScene !== false })
-  if (scene.logarithmicDepthBuffer !== true) {
-    takeover.restore()
-    throw new Error(
-      `${WARN_PREFIX} scene.logarithmicDepthBuffer 读回不是 true：本库 shader 无条件反演对数深度，` +
-        `必须开启对数深度缓冲（默认接管会设置它；takeOverScene: false 时请自行设置 ` +
-        `scene.logarithmicDepthBuffer = true）。已还原场景设置。`
-    )
+  // ── 步骤 1（spec §8.1）：生命周期记录 + destroy 包装，必须先于第一个 await ──
+  const record = createLifecycleRecord(target, scene, opts.autoDestroy !== false)
+  lifecycleRecords.set(scene, record)
+
+  /** 每个 await 之后调用：取消由包装后的 destroy 同步置位（不是轮询）。 */
+  const assertActive = (): void => {
+    if (record.cancelled || scene.isDestroyed()) {
+      throw new InstallCancelledError(
+        record.cancelled
+          ? '安装已取消：安装期间 target 被销毁（viewer/widget.destroy 或 disposeAllForHmr）'
+          : '安装已取消：安装期间 Scene 已被销毁'
+      )
+    }
   }
 
   // ── 资源记账（§8.5：install 拥有并销毁） ──
@@ -314,7 +494,15 @@ export async function installWithDeps(
       for (const texture of group.splice(0)) quietly('纹理', () => texture.destroy())
     }
   }
+  /** 从所有权数组摘除（失败路径自行释放时用，防 double destroy）。 */
+  const detachTextures = (group: TextureLike[], items: TextureLike[]): void => {
+    for (const item of items) {
+      const index = group.indexOf(item)
+      if (index >= 0) group.splice(index, 1)
+    }
+  }
 
+  let takeover: SceneTakeover | undefined
   let atmosphere: AtmosphereStageHandle | undefined
   let cloudsHandle: CloudsStageHandle | undefined
   /** 全量回滚（§8.2）：云 → 大气 → 纹理 → 场景。各步独立兜底，保证后续步骤执行。 */
@@ -330,13 +518,55 @@ export async function installWithDeps(
       quietly('大气 stage', () => handle.destroy())
     }
     releaseTextures()
-    quietly('场景还原', () => takeover.restore())
+    if (takeover != null) {
+      const sceneTakeover = takeover
+      quietly('场景还原', () => sceneTakeover.restore())
+    }
+  }
+  /**
+   * 取消回滚（target/scene 已销毁）：Cesium `destroyObject` 已释放 GL 资源，再调用
+   * stage/纹理的 destroy 会抛；只丢引用与注册表，不做 GL 销毁（spec §8.1）。
+   */
+  const discardDestroyedResources = (): void => {
+    cloudsHandle = undefined
+    atmosphere = undefined
+    lutTextures.length = 0
+    weatherTextures.length = 0
+    moonTextures.length = 0
   }
 
   let cloudsError: unknown
   let hasCloudsError = false
 
   try {
+    assertActive()
+
+    // ── 自检 + 安装前置检查（此刻零改动，spec §8.2 第一行） ──
+    const compat = deps.runCompat(scene)
+    for (const warning of compat.warnings) warn(warning)
+    if (!compat.ok) {
+      throw new Error(`${WARN_PREFIX} 安装自检失败：\n${compat.errors.join('\n')}`)
+    }
+    const existingStageCount = scene.postProcessStages.length
+    if (existingStageCount > 0 && opts.allowExistingStages !== true) {
+      throw existingStagesError(existingStageCount)
+    }
+    warnEnabledSceneEffects(scene)
+
+    const context = (scene as unknown as { context: Context }).context
+
+    // ── 场景快照 + 接管，随后读回校验对数深度（spec §8.1 步骤 3） ──
+    const state = captureSceneState(scene)
+    takeover = applySceneTakeover(scene, state, { enabled: opts.takeOverScene !== false })
+    if (scene.logarithmicDepthBuffer !== true) {
+      takeover.restore()
+      throw new Error(
+        `${WARN_PREFIX} scene.logarithmicDepthBuffer 读回不是 true：本库 shader 无条件反演对数深度，` +
+          `必须开启对数深度缓冲（默认接管会设置它；takeOverScene: false 时请自行设置 ` +
+          `scene.logarithmicDepthBuffer = true）。已还原场景设置。`
+      )
+    }
+
     // ── 步骤 4：资产解析 + LUT 加载（clouds:false 跳过 8MB higher_order，spec §7.5） ──
     const urls = resolveAssetUrls(opts.assetsBaseUrl, opts.assets)
     const withClouds = opts.clouds !== false
@@ -346,6 +576,8 @@ export async function installWithDeps(
     if (luts.higherOrderScattering != null) {
       lutTextures.push(luts.higherOrderScattering)
     }
+    // 先登记所有权再查取消：未销毁 target 的取消由统一回滚释放这些纹理。
+    assertActive()
 
     // 月面纹理是可选增强：失败（抛错或 loader 内部 warn 后返回 undefined）不阻断安装。
     let moon: { texture: Texture; albedoMean: number } | undefined
@@ -361,6 +593,7 @@ export async function installWithDeps(
     if (moon != null) {
       moonTextures.push(moon.texture)
     }
+    assertActive()
 
     // ── 步骤 5：大气 stage（云桥闭包惰性求值，云创建后自动指向真实 handle） ──
     // 注：月面均值补偿（moonRadianceScale = moonRadianceBase / albedoMean）只在 demo 的
@@ -398,6 +631,9 @@ export async function installWithDeps(
           weather.stbn,
           weather.localWeather
         ]
+        // 先登记所有权再查取消：未销毁 target 的取消由统一回滚释放这些纹理。
+        weatherTextures.push(...loadedWeatherTextures)
+        assertActive()
         let created: CloudsStageHandle | undefined
         try {
           created = deps.createClouds(scene, luts, weather, {
@@ -415,9 +651,11 @@ export async function installWithDeps(
             created.setQuality(opts.quality)
           }
           cloudsHandle = created
-          weatherTextures.push(...loadedWeatherTextures)
         } catch (error) {
+          // 取消不是「云创建失败」：原样上抛，交给外层统一取消回滚。
+          if (error instanceof InstallCancelledError) throw error
           // 云未建成（含 setQuality 抛错后的半死 handle）：天气纹理无消费者，立即释放。
+          detachTextures(weatherTextures, loadedWeatherTextures)
           if (created != null) {
             const halfBuilt = created
             quietly('云 stage', () => halfBuilt.destroy())
@@ -428,6 +666,10 @@ export async function installWithDeps(
           throw error
         }
       } catch (error) {
+        // 取消/目标销毁不是「云创建失败」：原样上抛交给外层统一回滚（spec §8.1/§8.2）。
+        if (error instanceof InstallCancelledError || record.cancelled || scene.isDestroyed()) {
+          throw error
+        }
         // 天气/云失败：大气保留，降级为仅大气 handle（cloudsError 可查）。
         hasCloudsError = true
         cloudsError = error
@@ -441,12 +683,15 @@ export async function installWithDeps(
       atmosphere.insertStageBeforeLensFlare(cloudsHandle.overlayStage, { protectedStage: true })
     }
 
-    // ── 步骤 8：组装 handle ──
+    // 注册前最后一次检查：注册后 handle 即对外可见，不再接受取消。
+    assertActive()
+
+    // ── 步骤 8：组装 handle 并登记注册表（spec §8.1 步骤 8 / §8.2） ──
     const atmosphereHandle = atmosphere
     const hostStages = new Set<PostProcessStage | PostProcessStageComposite>()
     let destroyed = false
 
-    return {
+    const handle: AtmosphereCloudsHandle = {
       atmosphere: atmosphereHandle,
       ...(cloudsHandle != null ? { clouds: cloudsHandle } : {}),
       ...(hasCloudsError ? { cloudsError } : {}),
@@ -488,6 +733,13 @@ export async function installWithDeps(
       destroy() {
         if (destroyed) return
         destroyed = true
+        // 生命周期（§8.2）：先摘注册表并恢复 destroy 包装，再释放 GL 资源。
+        // 由包装的 viewer.destroy 调用时 currentHandle 已被置空，restoreWrapper 幂等。
+        if (installed.get(scene) === handle) {
+          installed.delete(scene)
+        }
+        record.currentHandle = undefined
+        record.restoreWrapper()
         // spec §8.5：stage → primitive → 纹理（clouds.destroy 内含 overlay 摘除与 primitive 销毁）。
         if (cloudsHandle != null) {
           const handle = cloudsHandle
@@ -501,12 +753,35 @@ export async function installWithDeps(
         quietly('大气 stage', () => atmosphereHandle.destroy())
         releaseTextures()
         // spec §7.6 / 反目标：destroy 后场景设置必须与安装前一致（无条件按快照还原）。
-        quietly('场景还原', () => takeover.restore())
+        if (takeover != null) {
+          const sceneTakeover = takeover
+          quietly('场景还原', () => sceneTakeover.restore())
+        }
       }
     }
+
+    installed.set(scene, handle)
+    record.currentHandle = handle
+    return handle
   } catch (error) {
-    // 资产 / 大气创建 / overlay 插入失败：全量回滚后抛原始异常（§8.2）。
-    rollback()
+    // ── 失败 / 取消统一回滚（spec §8.1/§8.2）：回滚 → 恢复包装 → 抛错 ──
+    // 普通失败（资产 / 大气创建 / overlay 插入）：全量回滚后抛原始异常；
+    // 取消：按「target 是否已销毁」选择跳过 GL 销毁。
+    const cancelled = record.cancelled || scene.isDestroyed()
+    if (cancelled && scene.isDestroyed()) {
+      // target 已销毁：GL 已随 Cesium 释放，跳过 stage/纹理销毁与场景还原。
+      discardDestroyedResources()
+    } else {
+      rollback()
+    }
+    record.currentHandle = undefined
+    record.restoreWrapper()
+
+    if (cancelled) {
+      throw error instanceof InstallCancelledError
+        ? error
+        : new InstallCancelledError('安装已取消：目标在安装过程中被销毁', { cause: error })
+    }
     throw error
   }
 }

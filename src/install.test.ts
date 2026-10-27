@@ -17,7 +17,15 @@ import type {
   CloudsStageOptions,
   WeatherTextures
 } from '@cesium-geospatial/clouds'
-import { installWithDeps, type InstallDeps, type InstallOptions } from './install'
+import {
+  disposeAllForHmr,
+  installWithDeps,
+  InstallCancelledError,
+  isInstalled,
+  type AtmosphereCloudsTarget,
+  type InstallDeps,
+  type InstallOptions
+} from './install'
 import type { CompatResult } from './compat'
 
 // 全部用例用结构化假 scene + 假 deps，不构造任何真实 Cesium 对象、不触 GL。
@@ -50,6 +58,8 @@ interface FakeScene {
   highDynamicRange: boolean
   requestRenderMode: boolean
   requestRender: ReturnType<typeof vi.fn>
+  /** 生命周期用例用它模拟 Cesium `viewer.destroy()` 后的 scene 状态。 */
+  destroyed: boolean
   isDestroyed: () => boolean
   postProcessStages: FakePostProcessStages
   context: { webgl2: boolean }
@@ -59,7 +69,7 @@ interface FakeScene {
 const ORIGINAL_BACKGROUND: FakeColor = { red: 0.1, green: 0.2, blue: 0.3, alpha: 1 }
 
 function makeScene(): FakeScene {
-  return {
+  const scene: FakeScene = {
     globe: { depthTestAgainstTerrain: false, showGroundAtmosphere: true, enableLighting: true },
     skyAtmosphere: { show: true },
     skyBox: { show: true },
@@ -71,7 +81,8 @@ function makeScene(): FakeScene {
     highDynamicRange: true,
     requestRenderMode: true,
     requestRender: vi.fn(),
-    isDestroyed: () => false,
+    destroyed: false,
+    isDestroyed: () => scene.destroyed,
     postProcessStages: {
       length: 0,
       ambientOcclusion: { enabled: false },
@@ -81,9 +92,31 @@ function makeScene(): FakeScene {
     context: { webgl2: true },
     mode: 3
   }
+  return scene
 }
 
 const asScene = (fake: FakeScene): Scene => fake as unknown as Scene
+
+interface FakeViewer {
+  scene: Scene
+  destroy: () => void
+}
+
+/**
+ * 假 Viewer：`destroy` 写进 order 并把 scene 标记为已销毁——与 Cesium 的
+ * `viewer.destroy()` 真实后果一致（GL 资源随 scene 释放）。
+ */
+function makeViewer(fakeScene: FakeScene, order: string[]) {
+  const original = vi.fn(() => {
+    order.push('viewer.destroy.original')
+    fakeScene.destroyed = true
+  })
+  const viewer: FakeViewer = { scene: asScene(fakeScene), destroy: original }
+  return { viewer, original }
+}
+
+const asTarget = (viewer: FakeViewer): AtmosphereCloudsTarget =>
+  viewer as unknown as AtmosphereCloudsTarget
 
 // ────────────────────────────── 假纹理 / 假 handle ──────────────────────────────
 
@@ -240,6 +273,16 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
   }
 
   type Fixture = ReturnType<typeof setup>
+
+  /** 供「可控 deferred」用例在卡点解除时喂回合法 LUT 集合（含高阶散射）。 */
+  function lutsOf(textures: ReturnType<typeof makeTextureSet>): AtmosphereLUTs {
+    return {
+      transmittance: textures.lut.transmittance,
+      scattering: textures.lut.scattering,
+      irradiance: textures.lut.irradiance,
+      higherOrderScattering: textures.lut.higherOrderScattering
+    } as unknown as AtmosphereLUTs
+  }
 
   async function install(fixture: Fixture, options?: InstallOptions) {
     return installWithDeps(asScene(fixture.scene), options, fixture.deps)
@@ -687,5 +730,286 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
 
     handle.destroy()
     expect(f.scene.globe.depthTestAgainstTerrain).toBe(false)
+  })
+
+  // ── 生命周期：并发 / 取消 / autoDestroy / HMR（spec §8.2 并发与幂等） ──
+
+  it('并发 install 返回同一 Promise 与 handle，createAtmosphere 只调用一次且第二次 options 未生效', async () => {
+    const f = setup()
+    const target = asScene(f.scene)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const first = installWithDeps(target, {}, f.deps)
+      const second = installWithDeps(target, { quality: 'ultra' }, f.deps)
+      expect(second).toBe(first)
+
+      const [h1, h2] = await Promise.all([first, second])
+      expect(h1).toBe(h2)
+      expect(f.deps.loadLuts).toHaveBeenCalledTimes(1)
+      expect(f.deps.createAtmosphere).toHaveBeenCalledTimes(1)
+      expect(f.clouds.mock.setQuality).not.toHaveBeenCalled()
+
+      const text = warn.mock.calls.map((call) => String(call[0])).join('\n')
+      expect(text).toMatch(/正在安装/)
+      expect(text).toMatch(/options/)
+
+      h1.destroy()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('已安装后重复 install 返回既有 handle 并 warn「options 未生效」', async () => {
+    const f = setup()
+    const target = asScene(f.scene)
+    const handle = await installWithDeps(target, {}, f.deps)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const again = await installWithDeps(target, { quality: 'low' }, f.deps)
+      expect(again).toBe(handle)
+      expect(f.deps.createAtmosphere).toHaveBeenCalledTimes(1)
+      expect(f.clouds.mock.setQuality).not.toHaveBeenCalled()
+
+      const text = warn.mock.calls.map((call) => String(call[0])).join('\n')
+      expect(text).toMatch(/已安装/)
+      expect(text).toMatch(/options 未生效/)
+    } finally {
+      warn.mockRestore()
+      handle.destroy()
+    }
+  })
+
+  it('安装中 target 被销毁 → reject InstallCancelledError，跳过 GL 销毁并恢复原 destroy', async () => {
+    const f = setup()
+    const { viewer, original } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+    let resolveLuts!: (luts: AtmosphereLUTs) => void
+    f.deps.loadLuts.mockImplementation(
+      () =>
+        new Promise<AtmosphereLUTs>((resolve) => {
+          resolveLuts = resolve
+        })
+    )
+
+    const promise = installWithDeps(target, {}, f.deps)
+    // 包装在第一个 await 之前完成；pending 期间 isInstalled 为 false
+    expect(viewer.destroy).not.toBe(original)
+    expect(isInstalled(target)).toBe(false)
+
+    // 安装中销毁：包装同步取消，再走原 destroy（scene 标记为已销毁）
+    viewer.destroy()
+    expect(f.order).toEqual(['viewer.destroy.original'])
+    expect(viewer.destroy).toBe(original)
+
+    resolveLuts(lutsOf(f.textures))
+    await expect(promise).rejects.toBeInstanceOf(InstallCancelledError)
+    await expect(promise).rejects.toThrow(/取消/)
+
+    // 已销毁 target：GL 已随 Cesium 释放，stage/纹理的 destroy 一次都不该调用
+    expect(f.deps.loadMoon).not.toHaveBeenCalled()
+    expect(f.deps.loadWeather).not.toHaveBeenCalled()
+    expect(f.deps.createAtmosphere).not.toHaveBeenCalled()
+    expect(f.atmosphere.mock.destroy).not.toHaveBeenCalled()
+    expect(f.clouds.mock.destroy).not.toHaveBeenCalled()
+    for (const texture of f.textures.all) {
+      expect(texture.destroy).not.toHaveBeenCalled()
+    }
+    expect(isInstalled(target)).toBe(false)
+
+    // 无残留：对已销毁 scene 再装会在第一个检查点立即取消，不产生任何资源
+    await expect(installWithDeps(target, {}, f.deps)).rejects.toBeInstanceOf(
+      InstallCancelledError
+    )
+    expect(f.deps.createAtmosphere).not.toHaveBeenCalled()
+  })
+
+  it('handle.destroy 清理注册表并恢复原 destroy；同一 target 可重新安装（全新实例）', async () => {
+    const f = setup()
+    const { viewer, original } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+
+    const first = await installWithDeps(target, {}, f.deps)
+    expect(isInstalled(target)).toBe(true)
+    expect(viewer.destroy).not.toBe(original)
+
+    first.destroy()
+
+    expect(isInstalled(target)).toBe(false)
+    expect(viewer.destroy).toBe(original)
+
+    const second = await installWithDeps(target, {}, f.deps)
+    expect(second).not.toBe(first)
+    expect(f.deps.createAtmosphere).toHaveBeenCalledTimes(2)
+    expect(viewer.destroy).not.toBe(original)
+
+    second.destroy()
+    expect(isInstalled(target)).toBe(false)
+    expect(viewer.destroy).toBe(original)
+  })
+
+  it('isInstalled：pending=false，完成后=true（不同 target 形态命中同一 scene），destroy 后=false', async () => {
+    const f = setup()
+    const { viewer } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+    let resolveLuts!: (luts: AtmosphereLUTs) => void
+    f.deps.loadLuts.mockImplementation(
+      () =>
+        new Promise<AtmosphereLUTs>((resolve) => {
+          resolveLuts = resolve
+        })
+    )
+
+    const promise = installWithDeps(target, {}, f.deps)
+    expect(isInstalled(target)).toBe(false)
+    expect(isInstalled(asScene(f.scene))).toBe(false)
+
+    resolveLuts(lutsOf(f.textures))
+    const handle = await promise
+    expect(isInstalled(target)).toBe(true)
+    // 以 scene 为键：Viewer 与其 scene 指向同一次安装
+    expect(isInstalled(asScene(f.scene))).toBe(true)
+
+    handle.destroy()
+    expect(isInstalled(target)).toBe(false)
+    expect(isInstalled(asScene(f.scene))).toBe(false)
+  })
+
+  it('autoDestroy：先 handle.destroy 再原 destroy；handle.destroy 抛错时原 destroy 仍执行', async () => {
+    const f = setup()
+    const { viewer, original } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+    const handle = await installWithDeps(target, {}, f.deps)
+
+    const steps: string[] = []
+    handle.destroy = vi.fn(() => {
+      steps.push('handle.destroy')
+      throw new Error('handle destroy boom')
+    })
+
+    expect(() => viewer.destroy()).toThrow(/handle destroy boom/)
+    // 顺序：handle.destroy → 原 destroy；抛错不阻断 finally 里的恢复与原 destroy
+    expect(steps).toEqual(['handle.destroy'])
+    expect(f.order).toEqual(['viewer.destroy.original'])
+    expect(viewer.destroy).toBe(original)
+    // 即使 handle.destroy 抛错，包装也必须摘掉注册表条目
+    expect(isInstalled(target)).toBe(false)
+  })
+
+  it('destroy 后恢复原 viewer.destroy；重新安装再销毁不叠加包装', async () => {
+    const f = setup()
+    const { viewer, original } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+
+    const first = await installWithDeps(target, {}, f.deps)
+    expect(viewer.destroy).not.toBe(original)
+    first.destroy()
+    expect(viewer.destroy).toBe(original)
+
+    const second = await installWithDeps(target, {}, f.deps)
+    expect(second).not.toBe(first)
+    expect(viewer.destroy).not.toBe(original)
+
+    viewer.destroy()
+    expect(viewer.destroy).toBe(original)
+    expect(isInstalled(target)).toBe(false)
+    // 包装只跑一次原 destroy，不因重复安装而叠加
+    expect(f.order.filter((entry) => entry === 'viewer.destroy.original')).toHaveLength(1)
+  })
+
+  it('安装失败（自检）也恢复 viewer.destroy 并清空 pending，可立即重试', async () => {
+    const f = setup()
+    const { viewer, original } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+    f.deps.runCompat.mockReturnValue({
+      ok: false,
+      warnings: [],
+      errors: ['缺少 Texture3D 构造器']
+    })
+
+    await expect(installWithDeps(target, {}, f.deps)).rejects.toThrow(/缺少 Texture3D 构造器/)
+    expect(viewer.destroy).toBe(original)
+    expect(isInstalled(target)).toBe(false)
+
+    // pending 已清理：同 scene 立即重试不会被去重逻辑拦成已失败的 Promise
+    f.deps.runCompat.mockReturnValue({ ok: true, warnings: [], errors: [] })
+    const handle = await installWithDeps(target, {}, f.deps)
+    expect(f.deps.createAtmosphere).toHaveBeenCalledTimes(1)
+    handle.destroy()
+  })
+
+  it('autoDestroy:false 不包装 viewer.destroy，handle.destroy 与注册表清理照常', async () => {
+    const f = setup()
+    const { viewer, original } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+
+    const handle = await installWithDeps(target, { autoDestroy: false }, f.deps)
+    expect(viewer.destroy).toBe(original)
+    expect(isInstalled(target)).toBe(true)
+
+    handle.destroy()
+    expect(isInstalled(target)).toBe(false)
+    expect(viewer.destroy).toBe(original)
+  })
+
+  it('disposeAllForHmr 销毁全部已安装 handle、恢复包装并清空注册表（可重装）', async () => {
+    const a = setup()
+    const b = setup()
+    const va = makeViewer(a.scene, a.order)
+    const vb = makeViewer(b.scene, b.order)
+    const targetA = asTarget(va.viewer)
+    const targetB = asTarget(vb.viewer)
+
+    await installWithDeps(targetA, {}, a.deps)
+    await installWithDeps(targetB, {}, b.deps)
+    expect(isInstalled(targetA)).toBe(true)
+    expect(isInstalled(targetB)).toBe(true)
+    expect(va.viewer.destroy).not.toBe(va.original)
+
+    disposeAllForHmr()
+
+    expect(isInstalled(targetA)).toBe(false)
+    expect(isInstalled(targetB)).toBe(false)
+    expect(va.viewer.destroy).toBe(va.original)
+    expect(vb.viewer.destroy).toBe(vb.original)
+    expect(a.order).toContain('clouds.destroy')
+    expect(a.order).toContain('atmosphere.destroy')
+    expect(b.order).toContain('atmosphere.destroy')
+
+    // 注册表已清空：可重新安装
+    const again = await installWithDeps(targetA, {}, a.deps)
+    expect(a.deps.createAtmosphere).toHaveBeenCalledTimes(2)
+    again.destroy()
+  })
+
+  it('disposeAllForHmr 取消进行中的安装：未销毁 target 走正常回滚（释放已载纹理、还原场景）', async () => {
+    const f = setup()
+    const { viewer, original } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+    let resolveLuts!: (luts: AtmosphereLUTs) => void
+    f.deps.loadLuts.mockImplementation(
+      () =>
+        new Promise<AtmosphereLUTs>((resolve) => {
+          resolveLuts = resolve
+        })
+    )
+
+    const promise = installWithDeps(target, {}, f.deps)
+    expect(viewer.destroy).not.toBe(original)
+
+    disposeAllForHmr()
+
+    // 包装立即恢复、注册表清空（pending 已置取消，promise 尚未 settle）
+    expect(viewer.destroy).toBe(original)
+    expect(isInstalled(target)).toBe(false)
+
+    resolveLuts(lutsOf(f.textures))
+    await expect(promise).rejects.toBeInstanceOf(InstallCancelledError)
+
+    // target 未销毁：已加载的 LUT 走正常回滚（销毁一次 + 场景还原）
+    for (const texture of Object.values(f.textures.lut)) {
+      expect(texture.destroy).toHaveBeenCalledTimes(1)
+    }
+    expect(f.scene.highDynamicRange).toBe(true)
+    expect(f.deps.createAtmosphere).not.toHaveBeenCalled()
   })
 })
