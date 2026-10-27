@@ -1426,7 +1426,14 @@ void main() {
       // Apply aerial perspective.
       vec3 frontPosition = cameraPosition + frontDepth * rayDirection;
       g_probePreAerial = color.rgb;
+      // 【2026-10-27 同心环·着色侧最后一环】用户实测：`cloudsDebug=1`（aerial 前的 march 辐射）
+      // 干净，正片有环 → 环来自 `applyAerialPerspective`。相机 3211m、云顶 3200m 时空气路径
+      // 只有几十~几百米，这一步物理贡献≈0，却在沿「相机→云前表面」采样 32 层高度 LUT 时把
+      // 插值边界投影成等距弧（圆心=相机）。按空气路径长度淡出：近云完全不叠 aerial。
+      vec3 preAerial = color.rgb;
       applyAerialPerspective(cameraPosition, frontPosition, shadowLength, color);
+      float apPath = length(frontPosition - cameraPosition);
+      color.rgb = mix(preAerial, color.rgb, smoothstep(300.0, 4000.0, apPath));
 
       // Velocity for temporal resolution.
       vec3 frontPositionWorld = ecefToWorld(frontPosition);
