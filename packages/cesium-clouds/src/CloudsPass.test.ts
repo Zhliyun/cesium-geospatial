@@ -527,24 +527,24 @@ describe('createCloudsPass', () => {
     pass2.destroy()
   })
 
-  it('顶面蓬松化 u_topPuffWeights：默认 (1,1,0,0)（2026-09-29 密度分布专项，治 3035/3199 层状二维）；0 向量=逐位回退', () => {
+  it('顶面蓬松化 u_topPuffWeights：默认 (0,0,0,0)（2026-10-27 缺省关闭——它是同心环纹的根源）；1=开回旧观感', () => {
     vi.clearAllMocks()
     const pass = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state)
     const um = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
-    expect(um.u_topPuffWeights().x).toBe(1.0)
-    expect(um.u_topPuffWeights().y).toBe(1.0)
+    expect(um.u_topPuffWeights().x).toBe(0.0)
+    expect(um.u_topPuffWeights().y).toBe(0.0)
     expect(um.u_topPuffWeights().z).toBe(0.0)
     expect(um.u_topPuffWeights().w).toBe(0.0)
     pass.destroy()
 
     vi.clearAllMocks()
     const params = defaultCloudsParameters()
-    params.topPuffWeights = new Cartesian4(0, 0, 0, 0)
+    params.topPuffWeights = new Cartesian4(1, 1, 0, 0)
     const pass2 = createCloudsPass(scene2(), createMockLuts(), createMockWeather(), state, {
       parameters: params
     })
     const um2 = (createVolumetricPrimitive as any).mock.calls[0][0].uniformMap
-    expect(um2.u_topPuffWeights().x).toBe(0)
+    expect(um2.u_topPuffWeights().x).toBe(1)
     pass2.destroy()
   })
 })
