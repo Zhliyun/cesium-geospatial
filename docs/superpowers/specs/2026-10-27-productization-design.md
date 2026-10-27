@@ -195,7 +195,7 @@ cesium-geospatial/                 # 根 package.json = 产品包
 - `takeOverScene: false` 跳过本表，但 `depthTestAgainstTerrain` 仍必须快照并还原（底层会强制改）。
 - **安装前置拒绝**：`scene.postProcessStages.length > 0` 抛错并给迁移步骤；逃生门 `allowExistingStages: true`。迁移说明必须写明：经 handle 插入的 stage 拿到的是 atmosphere 之后的**线性 HDR** 输入，不是原始 globe 颜色，shader 需按线性域处理。
 - `ambientOcclusion` / `bloom` / `fxaa` 处于 enabled 时 `console.warn`。
-- **3D 守卫**：安装时 `scene.mode !== SCENE3D` 抛错；监听 `morphStart`（进入 MORPHING 立即禁用）与 `morphComplete`（回到 SCENE3D 恢复）。禁用时同时：我们的 stage `enabled=false`、`clouds` 的 march primitive 停止（避免每帧白算）、preRender 更新停用。destroy 移除监听。
+- **3D 守卫**：安装时 `scene.mode !== SCENE3D` 抛错；监听 `morphStart`（进入 MORPHING 立即禁用）与 `morphComplete`（回到 SCENE3D 恢复）。禁用时同时：我们的 stage `enabled=false`、`CloudsStageHandle.setEnabled(false)`（底层同时停 march preRender 与 `VolumetricPrimitive`，后者需要新增 `setEnabled`）。destroy 移除监听。
 - 宿主 3D Tiles / labels 会被 `groundDim × groundLightColor` 压暗，文档明示。
 
 ### 7.7 链位置与多 stage 插入
@@ -204,7 +204,7 @@ Cesium 后处理顺序固定（§5.8），install 只保证自身顺序：depthT
 
 **core 改造（破坏性，需测试）**：`insertStageBeforeLensFlare` 从单槽改为**有序多槽**，插入只追加、不销毁旧槽；新增 `removeInsertedStage(stage)` 显式移除**并销毁**（与 Cesium 语义一致），拒绝移除 install 自有的 stage（云 overlay）。
 
-**归属规则**：经 handle 插入的宿主 stage 在 `handle.destroy()` 时会被一并移除并销毁（所有权在安装期间转移给库）；文档明示，宿主需要的话自行重建。
+**归属规则**：`insertStageBeforeLensFlare(stage, opts?: { protectedStage?: boolean })` 中 `protectedStage` 标记 install 自有项（云 overlay），`removeInsertedStage` 拒绝移除它们。经 handle 插入的宿主 stage 在 `handle.destroy()` 时会被一并移除并销毁（所有权在安装期间转移给库）；文档明示，宿主需要的话自行重建。
 
 ## 8. API
 
@@ -216,7 +216,12 @@ export async function installAtmosphereClouds(
   options?: InstallOptions
 ): Promise<AtmosphereCloudsHandle>
 
-export function isInstalled(scene: Scene): boolean
+export function isInstalled(target: AtmosphereCloudsTarget): boolean
+
+export class InstallCancelledError extends Error
+export const VERSION: string
+// 让消费者能命名嵌套选项类型
+export type { AtmosphereStageOptions, CloudsStageOptions, CloudsQualityPreset }
 
 export interface InstallOptions {
   atmosphere?: Omit<AtmosphereStageOptions, 'cloudsShadowLengthBridge' | 'cloudsOcclusionBridge' | 'cloudsShadowBridge' | 'moonSurfaceTexture'>
@@ -233,7 +238,7 @@ export interface AtmosphereCloudsHandle {
   readonly atmosphere: AtmosphereStageHandle
   readonly clouds?: CloudsStageHandle
   readonly cloudsError?: unknown
-  insertStageBeforeLensFlare(stage: PostProcessStage | PostProcessStageComposite): void
+  insertStageBeforeLensFlare(stage: PostProcessStage | PostProcessStageComposite, opts?: { protectedStage?: boolean }): void
   removeInsertedStage(stage: PostProcessStage | PostProcessStageComposite): void
   setQuality(q: CloudsQualityPreset): void
   destroy(): void
@@ -257,7 +262,7 @@ export interface AtmosphereCloudsHandle {
 7. `atmosphere.insertStageBeforeLensFlare(clouds.overlayStage)`（多槽）。
 8. 注册到模块级 `Map<Scene, AtmosphereCloudsHandle>`；返回 handle。
 
-每个 `await` 之后检查 target 是否已销毁；已销毁则全量回滚并 `reject` 一个 `InstallCancelledError`（README 示例用 `try/catch` 或顶层 await，不吞错）。
+每个 `await` 之后检查 target 是否已销毁；已销毁则全量回滚并 `reject` 一个 `InstallCancelledError`（README 示例用 `try/catch` 或顶层 await，不吞错）。取消由包裹的 `destroy` 同步置位（不是轮询）；回滚时若 target 已销毁、GL 上下文已释放，跳过 stage/纹理销毁，只清监听与 Map 条目（Cesium `destroyObject` 会把方法替换为抛错版本，`scene.requestRender()` 等调用必须先 `isDestroyed()` 守卫）。
 
 ### 8.2 失败语义
 

@@ -64,9 +64,10 @@ pnpm add -D cesium@^1.143.0 typescript@^5.9.2 vite@^6.0.0 vitest@^4.1.0 vite-plu
   "files": ["dist", "assets", "docs", "bin", "README.md"],
   "sideEffects": false,
   "scripts": {
+    "dev": "pnpm --filter demo dev",
     "build": "vite build && node scripts/write-build-stamp.mjs",
     "prepare": "pnpm run build",
-    "test": "vitest run",
+    "test": "vitest run && pnpm -r test",
     "verify": "tsc --noEmit && vitest run && pnpm run build && node scripts/assert-dist.mjs"
   },
   "peerDependencies": { "cesium": ">=1.143.0 <2.0.0" }
@@ -88,11 +89,11 @@ pnpm add -D cesium@^1.143.0 typescript@^5.9.2 vite@^6.0.0 vitest@^4.1.0 vite-plu
       "@cesium-geospatial/clouds": ["packages/cesium-clouds/src/index.ts"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "packages/*/src/**/*.d.ts"]
 }
 ```
 
-`vitest.config.ts`：`environment: 'node'`、`globals: true`，alias 两条与上面相同。
+`vitest.config.ts`：`environment: 'node'`、`globals: true`、`include: ['src/**/*.test.ts']`（不设 include 会扫到 `packages/**` 的全量用例，缺 clouds 的 assetsInclude 且重复），alias 两条与上面相同。
 
 `vite.config.ts`：
 ```ts
@@ -116,7 +117,13 @@ export default defineConfig({
   }
 })
 ```
-注：若当前 `vite-plugin-dts` 版本报“未知选项 bundleTypes”，改用该版本对应选项名（≤4.x 为 `rollupTypes`），并在 `docs/api.md` 记录版本。
+**d.ts 策略（先 spike，再定型）**：先用 `bundleTypes: true` 构建一次，`grep VERSION dist/index.d.ts`。实测跨私有包 alias 时 api-extractor 不跟随 `.ts` 路径，可能产出 `export {}`。若为空，按下面回退：
+
+1. 两个内部包各自产出声明：`pnpm --dir packages/cesium-core exec tsc -p tsconfig.json --emitDeclarationOnly`（clouds 同），得到 `packages/*/dist/index.d.ts`；
+2. 新建 `tsconfig.dts.json`：extends 根 tsconfig，但 `paths` 指向 `packages/*/dist/index.d.ts`；`vite-plugin-dts` 的 `tsconfigPath` 指向它（构建期 JS 的 alias 仍指源码，不受影响）；
+3. 重新构建并断言 `dist/index.d.ts` 含 `VERSION`。
+
+若当前 `vite-plugin-dts` 版本不认 `bundleTypes`（v5 之前叫 `rollupTypes`），用该版本对应选项名并在 `docs/api.md` 记录。
 
 - [ ] **Step 4: 写入入口与哈希/盖章脚本**
 
@@ -129,15 +136,18 @@ export default defineConfig({
 
 `scripts/write-build-stamp.mjs`：校验六个产物存在 → 计算 `sourceHash` → 写 `dist/build-stamp.json.tmp` 再 `rename` 为最终文件（原子写）。
 
-`scripts/assert-dist.mjs`：断言六个产物存在、`dist/index.d.ts` 含 `export`、`build-stamp.json` 可解析且 `entries` 长度 6。
+`scripts/assert-dist.mjs`：断言六个产物存在、`dist/index.d.ts` **含 `VERSION` 字符串**（不能只查 `export`——空声明 `export {}` 也会通过）、`build-stamp.json` 可解析且 `entries` 长度 6。
 
 - [ ] **Step 5: 构建并验证**
 
 Run:
 ```bash
-pnpm run build && node scripts/assert-dist.mjs && grep -c "?raw" dist/index.js dist/core.js dist/clouds.js
+pnpm run build
+node scripts/assert-dist.mjs
+grep -c "?raw" dist/index.js dist/core.js dist/clouds.js || true
+grep -q "VERSION" dist/index.d.ts && echo dts-ok
 ```
-Expected: 构建成功；`assert-dist` 无输出退出 0；三个 grep 结果均为 `0`（grep 无匹配时退出码 1，用 `|| true` 包一层）。
+Expected: 构建成功；`assert-dist` 退出 0；三个 `?raw` 计数均为 `0`；输出 `dts-ok`。
 
 - [ ] **Step 6: 提交**
 
@@ -162,6 +172,7 @@ git commit -m "feat: 根包构建骨架（lib mode + d.ts + build-stamp）"
 - [ ] **Step 1: 用 git mv 迁移资产**
 
 ```bash
+mkdir -p assets
 git mv apps/demo/public/luts assets/luts
 git mv apps/demo/public/clouds assets/clouds
 mkdir -p assets/moon
@@ -177,9 +188,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, existsSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = resolve(__dirname, '..')
+const root = fileURLToPath(new URL('..', import.meta.url))
 let out: string
 beforeEach(() => { out = mkdtempSync(join(tmpdir(), 'cg-assets-')) })
 afterEach(() => rmSync(out, { recursive: true, force: true }))
@@ -214,12 +226,13 @@ Expected: PASS。
 
 - [ ] **Step 6: 更新 demo 的资产服务**
 
-在 `apps/demo/vite.config.ts` 的 `viteStaticCopy` targets 末尾追加（保持 demo 现有 URL `/luts`、`/clouds`、`/atmosphere` 不变）：
+在 `apps/demo/vite.config.ts` 顶部加 `import { fileURLToPath } from 'node:url'`，取 `const assetsDir = fileURLToPath(new URL('../../assets/', import.meta.url))`，然后在 `viteStaticCopy` targets 末尾追加（保持 demo 现有 URL `/luts`、`/clouds`、`/atmosphere` 不变）：
 ```ts
-{ src: '../../assets/luts', dest: '.' },
-{ src: '../../assets/clouds', dest: '.' },
-{ src: '../../assets/moon', dest: 'atmosphere' }
+{ src: `${assetsDir}luts`, dest: '.' },
+{ src: `${assetsDir}clouds`, dest: '.' },
+{ src: `${assetsDir}moon/*.webp`, dest: 'atmosphere' }
 ```
+（必须用绝对路径：相对路径会让 viteStaticCopy 以 `apps/demo` 为 cwd 做 glob，实测返回空并抛 “No file was found to copy”。moon 用 `*.webp` 且 dest 为 `atmosphere`，否则会生成 `/atmosphere/moon/...` 与 demo 的 `/atmosphere/moon-surface.webp` 不符。）
 
 - [ ] **Step 7: 冒烟 demo 仍能加载资产**
 
@@ -240,6 +253,9 @@ git commit -m "feat: 资产迁入根包并新增 copy-assets/check CLI"
 **Files:**
 - Create: `src/assets.ts`、`src/assets.test.ts`
 - Modify: `packages/cesium-core/src/cesium/lutLoader.ts`、`packages/cesium-core/src/cesium/lutLoader.test.ts`
+- Modify: `packages/cesium-core/src/cesium/cesiumCore.ts`（`buildAtmospherePrefix` 条件 define）
+- Modify: `packages/cesium-core/src/cesium/AtmosphereStage.ts`（`higherOrderScattering` 选项与条件 binding）
+- Modify: `packages/cesium-core/src/cesium/aerialPerspective.frag.test.ts`（define 断言）
 - Modify: `packages/cesium-clouds/src/weatherTextures.ts`；Create: `packages/cesium-clouds/src/weatherTextures.test.ts`
 
 **Interfaces:**
@@ -317,7 +333,7 @@ Run: `pnpm --dir packages/cesium-core exec vitest run src/cesium/lutLoader.test.
 - `higherOrderScattering === false` 时**不请求**该文件，返回类型改为 `higherOrderScattering?: Texture3D`。
 - **不要用 1×1 dummy 代替**：shader 会把它当真实高阶散射采样，改变大气亮度。正确做法是条件 binding：
   - `buildAtmospherePrefix()` 增加选项 `{ higherOrderScattering?: boolean }`（默认 true），仅 true 时输出 `#define HAS_HIGHER_ORDER_SCATTERING_TEXTURE`。
-  - `AtmosphereStageOptions` 增加 `higherOrderScattering?: boolean`（默认 true），`buildAtmosphereUniforms` 仅 true 时绑定 `u_higherOrderScattering`。
+  - `AtmosphereStageOptions` 增加 `higherOrderScattering?: boolean`（默认 true），`buildAtmosphereUniforms` 仅 true 时绑定真实 uniform `higher_order_scattering_texture`（`AtmosphereStage.ts:446`）。
 - 在 `aerialPerspective.frag.test.ts` 增加一条断言：`higherOrderScattering:false` 时组装出的 shader 不含该 `#define`；默认含。
 
 - [ ] **Step 7: 运行 core 测试确认通过**
@@ -340,11 +356,15 @@ Run: `pnpm --dir packages/cesium-clouds exec vitest run src/weatherTextures.test
 
 - [ ] **Step 10: 跑两包测试并提交**
 
-Run: `pnpm --filter @cesium-geospatial/core test && pnpm --filter @cesium-geospatial/clouds test`
-Expected: 全绿。
+Run: `pnpm --dir packages/cesium-core test && pnpm --dir packages/cesium-clouds test`
+Expected: 全绿。（**不要**用 `pnpm --filter ... test`——本仓库记录过该形式的假绿坑。）
 
 ```bash
-git add src/assets.ts src/assets.test.ts packages/cesium-core/src/cesium/lutLoader.ts packages/cesium-core/src/cesium/lutLoader.test.ts packages/cesium-clouds/src/weatherTextures.ts packages/cesium-clouds/src/weatherTextures.test.ts
+git add src/assets.ts src/assets.test.ts \
+  packages/cesium-core/src/cesium/lutLoader.ts packages/cesium-core/src/cesium/lutLoader.test.ts \
+  packages/cesium-core/src/cesium/cesiumCore.ts packages/cesium-core/src/cesium/AtmosphereStage.ts \
+  packages/cesium-core/src/cesium/aerialPerspective.frag.test.ts \
+  packages/cesium-clouds/src/weatherTextures.ts packages/cesium-clouds/src/weatherTextures.test.ts
 git commit -m "feat: 资产长度校验与 higher_order 可选加载"
 ```
 
@@ -411,7 +431,7 @@ git commit -m "feat: Cesium 版本与能力自检"
 - `applySceneTakeover(scene: Scene, state: SceneState, opts: { enabled: boolean }): SceneTakeover`
 - `interface SceneTakeover { restore(): void; readonly applied: boolean }`
 
-**规则（必须写进注释）：** 无条件按快照还原；`scene.globe` 的属性记在捕获时的 globe 对象上；`takeOverScene:false` 时仍快照并还原 `depthTestAgainstTerrain`；还原 `requestRenderMode` 后调用 `scene.requestRender()`。
+**规则（必须写进注释）：** 无条件按快照还原；`scene.globe` 的属性记在捕获时的 globe 对象上；`takeOverScene:false` 时仍快照并还原 `depthTestAgainstTerrain`；还原 `requestRenderMode` 后调用 `scene.requestRender()`，但必须先 `scene.isDestroyed()` 守卫（Cesium 销毁后会把 `requestRender` 换成抛错版本）。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -427,6 +447,13 @@ it('宿主替换 globe 后不向新 globe 写旧值', () => {
   expect(scene.globe).not.toBe(originalGlobe) // 新对象保持自己的值
 })
 it('restore 后 requestRenderMode 恢复 true 时调用 requestRender', () => { ... })
+it('scene 已销毁时 restore 不抛（requestRender 已被 Cesium 换成抛错版本）', () => {
+  const scene = makeScene()
+  const t = applySceneTakeover(scene, captureSceneState(scene), { enabled: true })
+  scene.isDestroyed = () => true
+  scene.requestRender = () => { throw new Error('requestRender called on destroyed scene') }
+  expect(() => t.restore()).not.toThrow()
+})
 ```
 
 - [ ] **Step 2: 运行确认失败** — FAIL。
@@ -546,40 +573,52 @@ git commit -m "feat: demo 验收档单一来源"
 **Files:**
 - Modify: `packages/cesium-core/src/cesium/AtmosphereStage.ts:873-960`（插入逻辑）、`:624-671`（dummy）、`:1089-1104`（destroy）
 - Modify: `packages/cesium-core/src/cesium/AtmosphereStage.insert.test.ts`
+- Modify: `packages/cesium-core/src/cesium/AtmosphereStage.test.ts`
+- Create: `packages/cesium-core/src/cesium/dummyTextures.ts`、`packages/cesium-core/src/cesium/dummyTextures.test.ts`
 
 **Interfaces:**
-- `AtmosphereStageHandle.insertStageBeforeLensFlare(stage)`：**追加**到有序列表，不销毁已有插入项。
-- `AtmosphereStageHandle.removeInsertedStage(stage)`：只移除并销毁该项；传入 install 自有的 stage（云 overlay 由上层标记）→ 抛错；未插入 → no-op。
+- `insertStageBeforeLensFlare(stage, opts?: { protectedStage?: boolean })`：**追加**到有序列表，不销毁已有插入项；同一实例幂等。
+- `removeInsertedStage(stage)`：按 identity 移除并销毁；`protectedStage`（install 自有的云 overlay）→ 抛错；未插入 → no-op。
+- `dummyTextures.ts` 导出 `createCloudsShadowDummy(context)`、`createGroundShadowDummy(context)`、`createMoonSurfaceDummy(context)`，每个返回 `{ texture: Texture | Texture3D; destroy(): void }`，便于本地模块 mock 与销毁。
 
-- [ ] **Step 1: 写失败测试**
+- [ ] **Step 1: 改写既有单槽测试并新增多槽测试**
 
-在 `AtmosphereStage.insert.test.ts` 追加：
+`AtmosphereStage.insert.test.ts` 里两条用例依赖单槽语义，必须改写：
+- “插入第二个 stage 替换第一个”（约 :239）→ 改为“两个都保留，顺序为插入顺序”；
+- 回滚用例（约 :264）→ 改为多槽下的回滚（失败时恢复原链）。
+
+再追加：
 ```ts
 it('连续插入两个 stage 都保留，顺序与插入顺序一致', () => { ... })
 it('removeInsertedStage 只销毁目标，另一个仍在链中', () => { ... })
 it('移除未插入的 stage 为 no-op', () => { ... })
+it('受保护的 stage 不能被 removeInsertedStage 移除', () => { ... })
 ```
 Run: `pnpm --dir packages/cesium-core exec vitest run src/cesium/AtmosphereStage.insert.test.ts` → FAIL。
 
 - [ ] **Step 2: 实现多槽**
 
-把 `let insertedStage` 改为 `const insertedStages: Array<PostProcessStage | PostProcessStageComposite> = []`；`insertStageBeforeLensFlare` 去重（同一实例幂等）、追加、重建链；`removeInsertedStage` 按 identity 查找后移除并销毁。回滚逻辑保持“失败时重建 lf/tm”。
+把 `let insertedStage` 改为 `const insertedStages: Array<{ stage: PostProcessStage | PostProcessStageComposite; protectedStage: boolean }>`；插入去重、追加、重建链；`removeInsertedStage` 按 identity 查找（protected 抛错）后移除并销毁。回滚逻辑保持“失败时重建 lf/tm”。
 
 - [ ] **Step 3: 运行确认通过** — PASS。
 
-- [ ] **Step 4: dummy 销毁（写失败测试）**
+- [ ] **Step 4: dummy 抽模块 + 销毁测试**
 
-在 `AtmosphereStage.test.ts` 沿用现有 Cesium mock 方式，让 `Texture`/`Texture3D` 的构造实例可被记录；触发三个 dummy 的惰性构造（调用 uniforms 闭包）后执行 `handle.destroy()`，断言三个 dummy 实例的 `destroy()` 各被调用一次。把三个局部变量提升为闭包外字段（不进 handle 公共类型）。
+把 `AtmosphereStage.ts:624-671` 的三段惰性构造抽到 `dummyTextures.ts`。测试用**本地模块 mock**（仓库既有范式：`vi.mock('./dummyTextures')`），不要 `vi.mock('cesium')`——Node 下真实 `new Texture/Texture3D` 会因 `maximumTextureSize=0` 爆掉（`AtmosphereStage.insert.test.ts:31` 已注明）。断言：调用 uniforms 闭包触发构造后 `handle.destroy()`，三个 `destroy()` 各被调用一次；`setMode` 重建时旧 dummy 先销毁再重建。
 
 Run → FAIL。
 
-- [ ] **Step 5: 实现 dummy 销毁**：三个 dummy 提升为字段，`destroy()` 末尾逐个 `destroy()`（存在且未销毁时）。
+- [ ] **Step 5: 实现 dummy 销毁**：`AtmosphereStage` 持有三个 `dummy` 句柄，`destroy()` 与 `setMode` 重建路径逐个销毁。
 
 - [ ] **Step 6: 跑 core 全量测试并提交**
 
 ```bash
 pnpm --dir packages/cesium-core exec vitest run
-git add packages/cesium-core/src/cesium/AtmosphereStage.ts packages/cesium-core/src/cesium/AtmosphereStage.insert.test.ts packages/cesium-core/src/cesium/AtmosphereStage.test.ts
+git add packages/cesium-core/src/cesium/AtmosphereStage.ts \
+  packages/cesium-core/src/cesium/AtmosphereStage.insert.test.ts \
+  packages/cesium-core/src/cesium/AtmosphereStage.test.ts \
+  packages/cesium-core/src/cesium/dummyTextures.ts \
+  packages/cesium-core/src/cesium/dummyTextures.test.ts
 git commit -m "feat(core): 多槽插入与惰性 dummy 纹理销毁"
 ```
 
@@ -593,39 +632,74 @@ git commit -m "feat(core): 多槽插入与惰性 dummy 纹理销毁"
 **Interfaces:**
 ```ts
 export interface InstallDeps {
-  version: string
-  checkCompat(scene: Scene): CompatResult
+  runCompat(scene: Scene): CompatResult          // 内部组装 CompatInput 后调用 Task 4 的纯函数 checkCompat
   loadLuts(context: Context, baseUrl: string, opts: { higherOrderScattering: boolean }): Promise<AtmosphereLUTs>
   loadWeather(context: Context, baseUrl: string): Promise<WeatherTextures>
   loadMoon(context: Context, urls: { surface: string; displacement: string }): Promise<{ texture: Texture; albedoMean: number } | undefined>
   createAtmosphere(scene: Scene, luts: AtmosphereLUTs, options: AtmosphereStageOptions): AtmosphereStageHandle
   createClouds(scene: Scene, luts: AtmosphereLUTs, weather: WeatherTextures, options: CloudsStageOptions): CloudsStageHandle | undefined
 }
-export async function installWithDeps(target: AtmosphereCloudsTarget, options: InstallOptions | undefined, deps: InstallDeps): Promise<AtmosphereCloudsHandle>
+export async function installAtmosphereClouds(
+  target: AtmosphereCloudsTarget,
+  options?: InstallOptions
+): Promise<AtmosphereCloudsHandle>            // = installWithDeps(target, options, defaultDeps)
+export async function installWithDeps(
+  target: AtmosphereCloudsTarget,
+  options: InstallOptions | undefined,
+  deps: InstallDeps
+): Promise<AtmosphereCloudsHandle>
 ```
-`AtmosphereCloudsTarget` / `InstallOptions` / `AtmosphereCloudsHandle` 的字段严格按 spec §8 实现（本任务先实现这些类型，Task 11 只负责从 `index.ts` 导出）。`checkCompat` 返回 Task 4 的 `CompatResult`。
+`AtmosphereCloudsTarget` / `InstallOptions` / `AtmosphereCloudsHandle` 的字段严格按 spec §8 实现（本任务实现这些类型，Task 11 只负责从 `index.ts` 导出）。`InstallDeps.runCompat` 与 Task 4 的纯函数 `checkCompat(input)` 不同名，避免调用点混淆。
 
 - [ ] **Step 1: 写失败测试（happy path + 失败回滚 + quality 守卫）**
 
 用 fake scene/deps（全部 `vi.fn`），断言：
 ```ts
 it('默认装大气+云，并按顺序插入 overlay', async () => { /* createAtmosphere/createClouds 被调用；insertStageBeforeLensFlare 收到 overlay */ })
-it('clouds:false 不加载天气、不传三个桥', async () => {
+it('clouds:false 不加载天气、不传三个桥，并让 loadLuts/createAtmosphere 收到 higherOrderScattering:false', async () => {
   await installWithDeps(scene, { clouds: false }, deps)
   expect(deps.loadWeather).not.toHaveBeenCalled()
+  expect(deps.loadLuts.mock.calls[0][2]).toEqual({ higherOrderScattering: false })
+  expect(deps.createAtmosphere.mock.calls[0][2].higherOrderScattering).toBe(false)
   expect(deps.createAtmosphere.mock.calls[0][2].cloudsShadowLengthBridge).toBeUndefined()
 })
+it('桥闭包在云创建后指向真实 clouds handle', async () => {
+  await installWithDeps(scene, {}, deps)
+  const options = deps.createAtmosphere.mock.calls[0][2]
+  expect(options.cloudsShadowLengthBridge!()).toBe(shadowLengthBridge)
+  expect(options.cloudsOcclusionBridge!()).toBe(colorBridge)
+  expect(options.cloudsShadowBridge!()).toBe(groundShadowBridge)
+})
 it('quality 未传时不调用 setQuality（不会因 undefined 崩）', async () => { ... })
-it('云创建失败返回带 cloudsError 的 handle', async () => { /* createClouds 抛错 */ })
-it('overlay 插入失败时全量回滚：destroy clouds、destroy atmosphere、restore scene', async () => { ... })
-it('资产加载失败时还原场景并抛错', async () => { ... })
+it('既有 postProcessStages 非空时拒绝安装；allowExistingStages 放行', async () => { ... })
+it('AO/BLOOM/FXAA 开启时 warn 但继续', async () => { ... })
+it('runCompat 失败时零改动并抛错', async () => { ... })
+it('log-depth 读回失败时还原场景并抛错', async () => { ... })
+it('createAtmosphere 抛错时还原场景并抛错', async () => { ... })
+it('loadMoon 返回 undefined 时继续，用白 dummy', async () => { ... })
+it('createClouds 返回 undefined 视为失败，返回带 cloudsError 的 handle', async () => { ... })
+it('云创建抛错时返回带 cloudsError 的 handle（大气保留）', async () => { ... })
+it('overlay 插入失败时全量回滚：destroy clouds、释放全部纹理、destroy atmosphere、restore scene', async () => { ... })
+it('资产加载失败时还原场景并抛错（不创建任何 stage）', async () => { ... })
+it('destroy 按 stage→纹理顺序释放 4 LUT + 4 weather + 月面纹理', async () => { ... })
 ```
 
 - [ ] **Step 2: 运行确认失败** — FAIL。
 
 - [ ] **Step 3: 实现 `installWithDeps`**
 
-严格按 spec §8.1 的 8 步；`defaultDeps` 用真实实现（`checkCompat` 组 `CompatInput`、`loadAtmosphereLUTs`、`loadWeatherTextures`、`loadMoonTextures`、`createAtmosphereStage`、`createCloudsStage`）。`options.quality != null` 才调用 `setQuality`。`autoDestroy` 在此任务只记录，Task 10 接生命周期。
+严格按 spec §8.1 的 8 步；`defaultDeps` 用真实实现（`runCompat` 组 `CompatInput` 调 `checkCompat`、`loadAtmosphereLUTs`、`loadWeatherTextures`、`loadMoonTextures`、`createAtmosphereStage`、`createCloudsStage`）。要点：
+
+- `clouds: false` 时把 `higherOrderScattering: false` 同时传给 `loadLuts` 与 `createAtmosphere`，且不传三个桥。
+- `options.quality != null` 才调用 `setQuality`。
+- handle 内部维护 `textures: Array<{ destroy(): void }>`（4 LUT + 4 weather + 月面合成）与 `hostStages: Set`：
+  - 装云时用 `insertStageBeforeLensFlare(clouds.overlayStage, { protectedStage: true })`；
+  - 宿主调 handle 的 `insertStageBeforeLensFlare(stage, opts)` 时转发到 atmosphere 并记入 `hostStages`；
+  - `removeInsertedStage(stage)` 从集合移除并转发；
+  - `destroy()` 先销毁 clouds、再移除/销毁 `hostStages`、再 destroy atmosphere、最后按 stage→纹理顺序逐个销毁 textures。
+- 前置拒绝：`scene.postProcessStages.length > 0` 且 `!allowExistingStages` → 抛错（消息给迁移步骤）；AO/bloom/fxaa enabled → `console.warn`。
+- `createClouds` 返回 `undefined` 视为失败（与抛错同样走 `cloudsError` 分支）。
+- `autoDestroy` 在此任务只记录，Task 10 接生命周期。
 
 - [ ] **Step 4: 运行确认通过** — PASS。
 
@@ -644,25 +718,41 @@ git commit -m "feat: install 编排与失败回滚"
 - Modify: `src/install.ts`、`src/install.test.ts`
 
 **Interfaces:**
-- `export function isInstalled(scene: Scene): boolean`
+- `export function isInstalled(target: AtmosphereCloudsTarget): boolean` —— 只对**已安装完成**的 target 返回 true；安装中（pending）返回 false。
 - `export class InstallCancelledError extends Error`
-- `installWithDeps` 在第一个 `await` 前注册 `viewer.destroy` / `widget.destroy` 包装（`try/finally` 保证原方法执行）；每个 `await` 后检查 `scene.isDestroyed?.()`。
+- `export function disposeAllForHmr(): void` —— 清空 pending/installed 两个 Map 并销毁所有已安装 handle。
+- 模块级 `pending: Map<Scene, Promise<Handle>>` + `installed: Map<Scene, Handle>`（两个 Map，不用 Promise/Handle 混存）。
+- 每个 target 上以 `Symbol` 存 `{ currentHandle, original }`，用于包装 `destroy` 与卸载。
 
 - [ ] **Step 1: 写失败测试**
 
 ```ts
 it('并发 install 返回同一 handle，createAtmosphere 只调用一次', async () => { ... })
-it('安装中 target 被销毁 → reject InstallCancelledError 且无残留（destroy 各 stage、restore scene）', async () => { ... })
-it('销毁后 Map 清理，可重新安装', async () => { ... })
+it('安装中 target 被销毁 → reject InstallCancelledError 且无残留', async () => {
+  // 用可控 deferred 卡住 loadLuts；在 pending 期间调用 viewer.destroy()
+  // wrapper 同步置 cancel 并调用原 destroy；resolve deferred 后 install 应 reject
+  // 断言：destroy 各 stage 调用次数为 0（GL 已释放不做 GL 销毁），restore 被调用，pending/installed 均无条目
+})
+it('销毁后两个 Map 均清理，可重新安装', async () => { ... })
 it('重复 install 返回旧 handle 并 warn 第二次 options 未生效', async () => { ... })
-it('autoDestroy 包装 viewer.destroy：先 handle.destroy 再原 destroy；原方法抛错也执行 handle.destroy', async () => { ... })
+it('isInstalled 在 pending 期间为 false，完成后为 true，destroy 后为 false', async () => { ... })
+it('autoDestroy：先 handle.destroy，再原 destroy；handle.destroy 抛错时原 destroy 仍执行', async () => {
+  // try { handle.destroy() } finally { original() } —— 用 vi.fn 记录顺序
+})
+it('destroy 后恢复原 viewer.destroy；重新安装再 destroy 不叠加包装', async () => {
+  // destroy → 断言 viewer.destroy === original；reinstall → destroy → 仍 === original
+})
 ```
 
 - [ ] **Step 2: 运行确认失败** — FAIL。
 
 - [ ] **Step 3: 实现生命周期**
 
-模块级 `Map<Scene, Promise<AtmosphereCloudsHandle>>`；在 promise settle 的 `finally` 中，如果失败则删除条目；成功则替换为已 resolve 的 handle（用另一个 `Map<Scene, AtmosphereCloudsHandle>` 或同一 Map 存 Promise）。`destroy()` 删除条目。HMR：在 `src/index.ts` 加 `import.meta.hot?.dispose`（Task 11）。
+- 包装 `destroy`：`original = target.destroy.bind(target)`；`target.destroy = () => { record.cancel?.(); try { record.currentHandle?.destroy() } finally { target.destroy = original; delete record; original() } }`（用 Symbol 记录，恢复原方法）。
+- install 开始时创建 `{ cancel: undefined, currentHandle: undefined, original }` 记录；每步 `await` 后检查 `record.cancelled === true` 或 `scene.isDestroyed()`。
+- 取消回滚：若 target 已销毁，**跳过** stage/纹理的 GL 销毁（Cesium 销毁后调用其 destroy 会抛），只清监听、pending/installed 条目；否则走正常回滚。
+- 成功后：`pending.delete(scene)`、`installed.set(scene, handle)`；失败/取消：两者都删。
+- handle.destroy：从 `installed` 删除；若 record.currentHandle 是自己，恢复原 `destroy` 并删记录。
 
 - [ ] **Step 4: 运行确认通过** — PASS。
 
@@ -675,45 +765,101 @@ git commit -m "feat: install 并发/取消/自动销毁"
 
 ---
 
-### Task 11: 公共 API 面与子路径
+### Task 10A: 3D 模式守卫与云停用
 
 **Files:**
-- Modify: `src/index.ts`、`src/version.ts`
-- Test: `src/index.test.ts`
+- Modify: `packages/cesium-core/src/cesium/platform/VolumetricPrimitive.ts`、`VolumetricPrimitive.test.ts`
+- Modify: `packages/cesium-clouds/src/createCloudsStage.ts`、`createCloudsStage.test.ts`
+- Modify: `src/install.ts`、`src/install.test.ts`
 
 **Interfaces:**
-- `src/index.ts` 导出：`installAtmosphereClouds`、`isInstalled`、`InstallCancelledError`、类型 `InstallOptions` / `AtmosphereCloudsHandle` / `AtmosphereCloudsTarget`、`VERSION`。
+- `VolumetricPrimitive.setEnabled(enabled: boolean): void`（切换底层 Cesium primitive 的 `show`；接口原本只有 update/isDestroyed/destroy）。
+- `CloudsStageHandle.setEnabled(enabled: boolean): void`（同时设置 overlay stage 的 `enabled` 与 clouds pass 的 primitive）。
+- install 注册 `scene.morphStart` / `scene.morphComplete`：`morphStart` 时把 atmosphere / tonemap / lensflare / depthTemporal 的 `enabled=false`，`clouds.setEnabled(false)`，并 warn 一次；`morphComplete` 且 `scene.mode === SCENE3D` 时恢复；destroy 移除监听。
 
 - [ ] **Step 1: 写失败测试**
 
+- `VolumetricPrimitive.test.ts`：`setEnabled(false)` 后底层 primitive 的 `show` 为 false；`setEnabled(true)` 恢复。
+- `createCloudsStage.test.ts`：`handle.setEnabled(false)` 后 overlay `enabled=false` 且 primitive `setEnabled` 收到 false。
+- `src/install.test.ts`：fake scene 的 `morphStart`/`morphComplete` 是 `addEventListener/removeEventListener` 记录器；触发 `morphStart` 断言各 stage 的 enabled 与 `setEnabled` 调用；`morphComplete` 回到 3D 后恢复；`destroy` 后监听计数为 0。
+
+Run: `pnpm --dir packages/cesium-core exec vitest run src/cesium/platform/VolumetricPrimitive.test.ts && pnpm --dir packages/cesium-clouds exec vitest run src/createCloudsStage.test.ts && pnpm exec vitest run src/install.test.ts` → FAIL。
+
+- [ ] **Step 2: 实现两层 `setEnabled`**
+
+- `VolumetricPrimitive.ts`：给返回对象加 `setEnabled`，内部 `this._primitive.show = enabled`（找到底层 primitive 字段）。
+- `createCloudsStage.ts`：`CloudsStageHandle` 加 `setEnabled`，转发到 overlay 与 clouds pass（pass 内部再转发给 primitive）。
+
+- [ ] **Step 3: 实现 install 的 morph 守卫**
+
+在 Task 10 的 listener 记录结构里加 `morphStart`/`morphComplete` 两个 remove 函数；destroy 时移除；`scene.isDestroyed()` 时跳过恢复。
+
+- [ ] **Step 4: 跑测试并提交**
+
+```bash
+pnpm --dir packages/cesium-core exec vitest run src/cesium/platform/VolumetricPrimitive.test.ts
+pnpm --dir packages/cesium-clouds exec vitest run src/createCloudsStage.test.ts
+pnpm exec vitest run src/install.test.ts
+git add packages/cesium-core/src/cesium/platform/VolumetricPrimitive.ts \
+  packages/cesium-core/src/cesium/platform/VolumetricPrimitive.test.ts \
+  packages/cesium-clouds/src/createCloudsStage.ts packages/cesium-clouds/src/createCloudsStage.test.ts \
+  src/install.ts src/install.test.ts
+git commit -m "feat: 3D 模式守卫与云停用"
+```
+
+---
+
+### Task 11: 公共 API 面与子路径
+
+**Files:**
+- Modify: `src/index.ts`、`src/version.ts`、`src/install.ts`
+- Test: `src/index.test.ts`
+
+**Interfaces:**
+- `src/index.ts` 导出：`installAtmosphereClouds`、`isInstalled`、`InstallCancelledError`、`VERSION`；类型 `InstallOptions` / `AtmosphereCloudsHandle` / `AtmosphereCloudsTarget`，并**再导出** `AtmosphereStageOptions` / `CloudsStageOptions` / `CloudsQualityPreset`（消费者需要命名嵌套选项类型，spec §8 已列）。
+- `install.ts` 导出 `disposeAllForHmr()`。
+
+- [ ] **Step 1: 写失败测试（运行时 + 类型）**
+
 ```ts
 import * as api from './index'
-it('导出主入口与类型', () => {
+import type { InstallOptions, AtmosphereStageOptions, CloudsStageOptions, CloudsQualityPreset } from './index'
+
+it('导出主入口与错误类型', () => {
   expect(typeof api.installAtmosphereClouds).toBe('function')
   expect(typeof api.isInstalled).toBe('function')
   expect(typeof api.InstallCancelledError).toBe('function')
+  expect(typeof api.VERSION).toBe('string')
+})
+
+it('类型可被命名（编译期）', () => {
+  const o: InstallOptions = { quality: 'high' as CloudsQualityPreset, atmosphere: {} as AtmosphereStageOptions, clouds: {} as CloudsStageOptions }
+  expect(o.quality).toBe('high')
 })
 ```
 
-- [ ] **Step 2: 运行确认失败** — FAIL。
+- [ ] **Step 2: 运行确认失败** — `pnpm exec vitest run src/index.test.ts` → FAIL。
 
 - [ ] **Step 3: 补全导出与 HMR dispose**
 
 `src/index.ts`：
 ```ts
-export { installAtmosphereClouds, isInstalled, InstallCancelledError } from './install'
-export type { InstallOptions, AtmosphereCloudsHandle, AtmosphereCloudsTarget } from './install'
+export { installAtmosphereClouds, isInstalled, InstallCancelledError, disposeAllForHmr } from './install'
+export type { InstallOptions, AtmosphereCloudsHandle, AtmosphereCloudsTarget, AtmosphereStageOptions, CloudsStageOptions, CloudsQualityPreset } from './install'
 export { VERSION } from './version'
-import.meta.hot?.dispose(() => { /* 清 Map 并销毁所有已安装 handle */ })
-```
-（HMR 清理函数放 `src/install.ts` 导出的 `disposeAllForHmr()`，index 只调用。）
 
-- [ ] **Step 4: 跑测试 + 构建 + 断言 d.ts 非空**
+// Vite/vitest 下 import.meta.hot 可能不存在，用可选链
+if (import.meta.hot) import.meta.hot.dispose(() => disposeAllForHmr())
+```
+（`disposeAllForHmr` 在 `install.ts` 内实现：清 pending/installed Map、恢复所有包装的 destroy、销毁全部 handle。）
+
+- [ ] **Step 4: 跑测试 + 类型检查 + 构建断言**
 
 ```bash
 pnpm exec vitest run src/index.test.ts
+pnpm exec tsc --noEmit
 pnpm run build
-grep -q "installAtmosphereClouds" dist/index.d.ts
+grep -q "installAtmosphereClouds" dist/index.d.ts && echo dts-api-ok
 ```
 
 - [ ] **Step 5: 提交**
@@ -769,9 +915,9 @@ window.addEventListener('beforeunload', () => handle.destroy())
 
 ```bash
 pnpm run build
-cd examples/basic && pnpm install && pnpm run build
+cd examples/basic && pnpm install --ignore-workspace && pnpm run build
 ```
-Expected: 构建成功，`public/cesium-geospatial-assets` 下 8 个资产存在。
+Expected: 构建成功；`public/cesium-geospatial-assets` 下共有 **10 个**资产（luts 4 + clouds 4 + moon 2）。`--ignore-workspace` 必需：examples 不在 `pnpm-workspace.yaml` 内，直接 `pnpm install` 会按外层 workspace 作用域安装（实测“Scope: all N workspace projects”），示例自身没有 node_modules。
 
 - [ ] **Step 3: 手动冒烟**
 
@@ -795,27 +941,29 @@ git commit -m "feat: examples/basic 接入示例"
 **Interfaces:**
 - `node scripts/smoke-consumers.mjs`：在 `os.tmpdir()` 建三个 fixture，`pnpm install --offline`，构建，断言。
 
-- [ ] **Step 0: 安装 Rollup 解析依赖**
+- [ ] **Step 0: 安装冒烟依赖**
 
 ```bash
-pnpm add -D @rollup/plugin-node-resolve @rollup/plugin-commonjs
+pnpm add -D @rollup/plugin-node-resolve @rollup/plugin-commonjs webpack webpack-cli typescript
 ```
-（Rollup fixture 用 `node-resolve` 解析 `cesium-geospatial` 与 `cesium`。）
+（webpack / typescript 不在仓库现有 devDeps 与本地 store 里，必须显式装。）
 
 - [ ] **Step 1: 实现脚本**
 
 对每个 fixture（vite / webpack / rollup）：
-1. 写 `package.json`：`"cesium-geospatial": "file:<repo>"`、`"cesium": "1.143.0"`。
-2. `pnpm install --offline`（Cesium 从本地 store 复用）。
+1. 写 `package.json`：`"cesium-geospatial": "file:<repo>"`、`"cesium": "1.143.0"`，外加该 fixture 自己的构建依赖（vite / webpack+webpack-cli / rollup+plugins / typescript）。
+2. `pnpm install --prefer-offline`（`--offline` 会因 fixture 无 lockfile 报 `ERR_PNPM_NO_OFFLINE_META`）。
 3. 写入口 `import { installAtmosphereClouds } from 'cesium-geospatial'`（只引用，不运行）。
-4. 构建；断言产物：
-   - 不含 `?raw`；
-   - 只出现一份 Cesium（统计 bundle 中 `Cesium` 标识数量或用 `du` 上限）；
+4. 构建；Webpack/Rollup 配置 `external: ['cesium']`（否则测的是把 Cesium 打进 bundle，而不是库本身）。断言：
+   - 产物不含 `?raw`；
+   - **单份 Cesium 判据**：用 `createRequire` 从 fixture 入口与 `node_modules/cesium-geospatial/dist/index.js` 各解析一次 `cesium/package.json`，两者 realpath 相同；不是统计字符串出现次数。
    - `dist` 中无 `cesium-geospatial-assets` 的 `new URL`（copy-assets 方案下不应出现）。
-5. `file:` 副本断言：`node_modules/cesium-geospatial` 下只有 `files` 列出的内容（无 `src`、无 `.git`）。
-6. 消费方 `tsc --noEmit`：fixture 写一个 `src/check.ts` 引用 `InstallOptions` 类型，断言编译通过（验证 d.ts 非空）。
+5. `file:` 副本断言：`node_modules/cesium-geospatial` 下只有 `files` 列出的内容（无 `src`、无 `.git`、无 `node_modules`）。
+6. 消费方 `tsc --noEmit`：fixture 写 `src/check.ts` 引用 `InstallOptions` 并构造一个对象，断言编译通过（验证 d.ts 非空、类型可命名）。
 
-Vite dev 用例：`vite dev` 起服务，`curl` `/` 与 `/cesium-geospatial-assets/luts/transmittance.bin`，断言 200 与 131072 字节。
+Vite dev 用例：fixture 先 `node <repo>/bin/cli.mjs copy-assets --out public/cesium-geospatial-assets`，再 `vite dev` 起服务，`curl` `/` 与 `/cesium-geospatial-assets/luts/transmittance.bin`，断言 200 与 131072 字节。
+
+**局限（写进脚本注释）**：fixture 只验证构建与类型，不执行真实渲染（无 WebGL）；真实渲染由 `examples/basic` 的手动验收覆盖。
 
 - [ ] **Step 2: 运行**
 
@@ -881,6 +1029,6 @@ git commit -m "docs: 接入指南与 API 参考"
 
 ## Self-Review 记录
 
-- **Spec 覆盖**：§5 约束 → Global Constraints；§7.1-7.3 → Task 1；§7.4 → Task 2/3；§7.5 → Task 3；§7.6 → Task 5/9；§7.7 → Task 8；§8.1-8.3 → Task 9/10/11；§8.4 → Task 7；§8.5 → Task 8；§8.6 → Task 8；§9 → Task 14；§10 → Task 11/12/13/14；peer/版本表 → Task 1/4/14。
+- **Spec 覆盖**：§5 约束 → Global Constraints；§7.1-7.3 → Task 1；§7.4 → Task 2/3；§7.5 → Task 3；§7.6 → Task 5/9/10A；§7.7 → Task 8；§8.1-8.3 → Task 9/10/11；§8.4 → Task 7；§8.5 → Task 8/9；§8.6 → Task 8；§9 → Task 14；§10 → Task 11/12/13/14；peer/版本表 → Task 1/4/14。
 - **类型一致性**：`InstallDeps` 与 `installWithDeps` 在 Task 9 定义、Task 10 扩展；`SceneTakeover` 在 Task 5 定义、Task 9 消费；`AssetUrls` 在 Task 3 定义、Task 9 消费。
 - **Review Focus 对应测试**：资产 200 HTML → Task 3；安装中销毁 → Task 10；宿主改设置 → Task 5；并发/重复 → Task 10；版本/能力 → Task 4。
