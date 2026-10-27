@@ -408,7 +408,7 @@ async function main(): Promise<void> {
       // ?agxExposure=N 标定 AGX 曝光（缺省 1.0，本项目 exposure 已在 atmosphere 施加）。
       ...(getString('toneMap') === 'aces' ? { toneMapMode: 0 } : {}),
       ...(getNumber('agxExposure') != null ? { agxExposure: getNumber('agxExposure')! } : {}),
-      // limb outer glow（太空视角大气边缘向外扩散辉光）：默认 intensity=0.3 / decay=30km；
+      // limb outer glow（太空视角大气边缘向外扩散辉光）：库缺省 intensity=1.0 / decay=30km；
       // ?limbGlow=N 调强度（0=关），?limbDecay=N 调扩散范围 km。验收视角：camera=93.9439,31.6997,61883,89.2,-19.0
       ...(getNumber('limbGlow') != null ? { limbGlowIntensity: getNumber('limbGlow')! } : {}),
       ...(getNumber('limbDecay') != null ? { limbGlowDecayKm: getNumber('limbDecay')! } : {}),

@@ -205,8 +205,8 @@ export function createCloudsResolvePass(
     u_clipMinHalf: () => clipMinHalf,
     u_temporalBlend: () => temporalBlend,
     u_clipEnabled: () => clipEnabled,
-    // 【2026-10-27】缺省 0.35 全分像素：重投影恒开后用它压静止的亚像素残差
-    //（实测 ~0.013px），既防「静止爬行」又不影响任何可见运动。
+    // 【2026-10-27】缺省 **0**（关）：静止已由「静止时关重投影」保证不爬行；死区只影响
+    // 慢速运动的灵敏度，开大反而会把慢转当成静止（历史冻结）。需要时 ?cloudsVelDeadzone= 单独开。
     u_velocityThresholdPx: () => options.velocityThresholdPx ?? 0,
     u_blendDepthFalloff: () => blendDepthFalloff,
     u_temporalBlendFar: () => temporalBlendFar,
