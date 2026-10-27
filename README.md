@@ -12,7 +12,107 @@
 - **性能自适应**（2026-09-05）：夜晚太阳侧次级采样自动门控（辐照精确零，逐位等价）+ 太阳角影子预算（BSM 步数随太阳高度平滑收缩）+ god rays march 分辨率与 BSM 信息量对齐——平视地平线视角类实测云甲内夜 30→60FPS、贴地夜 17→9.4ms，白天逐位零回归
 - **HDR 管线**：HalfFloat 中间缓冲 + AGX tonemap（缺省，2026-10-24 对齐参考库；`?toneMap=aces` 回 ACES filmic 对照）+ display dithering
 
-## 快速开始
+## 作为库使用（四步接入）
+
+仓库根包 `cesium-geospatial` **本身就是产品包**（deck.gl 模式）：通过 git submodule + `file:`
+依赖接进已有的 CesiumJS 项目，不需要读 demo 源码、不需要自己准备资产或排后处理链。
+
+> **Cesium 版本警告：当前只验证 1.143.x，不要把宿主升到 1.146.0。** 1.146 会自动注入
+> `out_FragData_*` 片段输出，与本库云 MRT shader 的显式 `layout(location=…)` 输出
+> （`outputColor` / `outputDepthVelocity`）位置冲突，fragment shader 编译失败、渲染中止
+> （右上角 `An error occurred while rendering`）。把 cesium 钉在 `1.143.0`，并按下面第 4 步
+> 加上 `@cesium/engine` overrides。详见 [docs/integration.md §9.1](docs/integration.md#91-cesium-11460-不能用云-shader-编译失败)。
+
+### 1. submodule 引入
+
+```bash
+git submodule add <本仓库地址> vendor/cesium-geospatial
+git submodule update --init --recursive
+```
+
+### 2. 在 submodule 内安装并构建 `dist`
+
+```bash
+pnpm --dir vendor/cesium-geospatial install
+```
+
+`prepare` 会自动跑 `vite build` + d.ts + 构建戳。**成功判据**：能看到
+`vendor/cesium-geospatial/dist/build-stamp.json`（`--ignore-scripts` 会跳过 prepare，此时显式
+`pnpm --dir vendor/cesium-geospatial run build`）。
+
+### 3. 首次拷贝运行期资产（之后接进 `predev` / `prebuild`）
+
+```bash
+node vendor/cesium-geospatial/bin/cli.mjs copy-assets --out public/cesium-geospatial-assets
+```
+
+把这两条写进消费方 `package.json`，submodule 升级后就不会忘：
+
+```json
+"predev": "node vendor/cesium-geospatial/bin/cli.mjs copy-assets --out public/cesium-geospatial-assets",
+"prebuild": "node vendor/cesium-geospatial/bin/cli.mjs copy-assets --out public/cesium-geospatial-assets"
+```
+
+### 4. 声明 `file:` 依赖并安装
+
+```json
+{
+  "dependencies": {
+    "cesium": "1.143.0",
+    "cesium-geospatial": "file:vendor/cesium-geospatial"
+  },
+  "pnpm": {
+    "overrides": {
+      "@cesium/engine": "26.1.0",
+      "@cesium/widgets": "16.1.0"
+    }
+  }
+}
+```
+
+```bash
+pnpm install
+```
+
+`file:` 会被 pnpm 按本包 `files` 字段拷成实体副本（不含 `src`）；**submodule 指针移动后必须
+重新 `pnpm install`**。`@cesium/engine` 必须钉 26.1.0（26.4.0 与 cesium 1.143 的 ESM 入口
+不兼容，Vite dev 报 `No matching export ... "AttributeCompression"`）。
+
+### 十行接入代码
+
+```ts
+import { Viewer } from 'cesium'
+import { installAtmosphereClouds } from 'cesium-geospatial'
+
+const viewer = new Viewer('cesiumContainer')
+
+// 顶层 await 需要 es2022 构建目标；Vite 缺省 es2020，实际项目请用 async 函数包一层
+const handle = await installAtmosphereClouds(viewer, { quality: 'high' })
+
+// 释放：云 → 大气 → 纹理 → 场景设置还原；幂等
+window.addEventListener('beforeunload', () => handle.destroy())
+```
+
+### 已验证 Cesium 版本
+
+| Cesium 版本 | 状态 | 说明 |
+|---|---|---|
+| `1.143.0` | **已验证** | 与 `@cesium/engine@26.1.0` / `@cesium/widgets@16.1.0` 组合；`examples/basic` 与消费方冒烟矩阵均基于此 |
+| `1.143.x` 其他补丁 | 未逐版验证 | 补丁级通常兼容；运行期 `console.warn`，不阻断安装。建议钉 `1.143.0` |
+| `1.146.0` | **已知坏** | 装云时云 shader 编译失败、渲染中止（见上方警告） |
+| 其他 1.x | 未验证 | 运行期 warn；升级前先跑 `examples/basic` 冒烟 |
+
+`peerDependencies` 声明为宽范围 `>=1.143.0 <2.0.0`（避免 npm 7+ ERESOLVE 装不上）；版本/能力
+自检在安装前执行：能力缺失（`Texture3D` / `fragmentDepth` / `depthTexture` / 非 WebGL2 / 非 3D）
+直接抛错，未验证版本只 warn。
+
+完整选项、场景接管全表、资产与 CORS、并发与销毁、submodule 升级流程见
+[**docs/integration.md**](docs/integration.md)；API 与类型索引见 [**docs/api.md**](docs/api.md)；
+可直接运行的最小工程见 [`examples/basic/`](examples/basic/)。
+
+## 快速开始（本仓库 demo 验收）
+
+> 这一节是给本仓库开发/验收用的 demo；消费方接入见上一节。
 
 环境要求：Node ≥ 20，pnpm ≥ 10（仓库用 `packageManager: pnpm@10.32.1` 锁定）。
 
@@ -194,7 +294,12 @@ add 时机由消费者编排，否则云不可见：
   无 halo 层级保证）：`scene.postProcessStages.add(cloudsHandle.overlayStage)`
 
 `insertStageBeforeLensFlare` 语义：同实例幂等、传已 add/已销毁的 stage 抛错、失败尽力回滚；
-云销毁调 `cloudsHandle.destroy()` 即可（链自动闭合）。
+云销毁调 `cloudsHandle.destroy()` 即可（链自动闭合）。**2026-10-27 起为有序多槽**：插入只追加、
+不销毁旧槽，新增 `removeInsertedStage(stage)`（移除并销毁）；`protectedStage: true` 标记库自有项
+（云 overlay），`removeInsertedStage` 拒绝移除。
+
+> 产品接入直接用根包 `installAtmosphereClouds` 即可——上面这些接线（LUT/天气加载、云插入点、
+> 线性 HDR 链、销毁顺序）全部由它负责，见 [docs/api.md](docs/api.md)。
 
 ### 诊断
 
@@ -212,7 +317,8 @@ add 时机由消费者编排，否则云不可见：
 ```bash
 pnpm dev                 # 启动 demo
 pnpm test                # 全部 workspace 测试（含 GLSL 编译测试，依赖 glslangValidator：brew install glslang）
-pnpm build               # 构建全部包
+pnpm build               # 构建产品包（dist + d.ts + build-stamp）
+pnpm run verify          # 全链门禁：tsc → vitest → build → assert-dist → 消费方类型 → 冒烟矩阵
 
 # 单包测试 / 单文件 / 按用例名过滤
 pnpm --filter @cesium-geospatial/core test
@@ -223,21 +329,36 @@ pnpm --filter @cesium-geospatial/core exec vitest run -t "动态曝光"
 # 类型检查（仓库无统一脚本，显式跑 tsc）
 pnpm --filter @cesium-geospatial/core exec tsc --noEmit
 pnpm --filter @cesium-geospatial/clouds exec tsc --noEmit
+
+# 构建戳一致性（改源码未重建 / file: 副本陈旧时报错）
+node bin/cli.mjs check --root .
+node bin/cli.mjs check --root . --copy examples/basic/node_modules/cesium-geospatial
 ```
 
 ## 仓库结构
 
 ```
+package.json     # 根包 = 产品包 cesium-geospatial（dist / assets / bin / docs 对外分发）
+src/             # 产品入口与编排（install / sceneTakeover / assets / compat / moonTexture）
+bin/cli.mjs      # copy-assets / check（纯 Node，不依赖 dist）
+assets/          # 唯一资产源：luts/（4 个 .bin）+ clouds/（4 个）+ moon/（2 个 webp）
 packages/
   cesium-core    # @cesium-geospatial/core —— Bruneton 大气：LUT 加载、shader 组装、AtmosphereStage（B 路径大气透视 + 动态曝光 + LensFlare）
   cesium-clouds  # @cesium-geospatial/clouds —— 体积云：weather 纹理、raymarch pass、级联 BSM（世界锚定）、god rays、时序重建
 apps/
-  demo           # Vite + 原生 Cesium Viewer 验收 demo（URL 参数化，见上）
+  demo           # Vite + 原生 Cesium Viewer 验收 demo（URL 参数化，见上；经 viteStaticCopy 从 assets/ 服务）
+examples/
+  basic          # 最小接入示例（file: 依赖，与真实消费路径一致）
 docs/
+  integration.md # 消费方接入指南
+  api.md         # API 参考
   superpowers/   # specs（设计文档）与 plans（实现计划 + 验收结果）
 ```
 
-依赖说明：`cesium` 为 peerDependency（demo 自带），两个核心包只依赖 Cesium 官方发布版。静态资源在 `apps/demo/public/`：`luts/`（大气预计算查找表，half-float .bin）与 `clouds/`（3D 噪声 shape/detail、天气图、STBN）。
+依赖说明：`cesium` 为 peerDependency（宿主/demo 自带），两个核心包只依赖 Cesium 官方发布版。
+静态资源唯一源是包根 `assets/`：`luts/`（大气预计算查找表，half-float .bin）、`clouds/`
+（3D 噪声 shape/detail、天气图、STBN）与 `moon/`（月面颜色/位移 webp）；消费方经
+`node bin/cli.mjs copy-assets --out public/cesium-geospatial-assets` 拷到自己的站点目录。
 
 ## 设计文档
 

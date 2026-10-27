@@ -13,7 +13,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 pnpm dev                      # 启动 demo（= pnpm --filter demo dev，Vite dev server）
 pnpm test                     # 跑全部 workspace 测试（pnpm -r test）
-pnpm build                    # 构建全部 workspace
+pnpm build                    # 构建产品包（dist + d.ts + build-stamp）
+pnpm run verify               # 全链门禁：tsc → vitest → build → assert-dist → 消费方类型 → 冒烟矩阵
+node bin/cli.mjs check --root .   # 源码哈希 vs dist/build-stamp.json（改源码未重建 → 退出码 1）
 
 # 核心库测试（@cesium-geospatial/core）
 pnpm --filter @cesium-geospatial/core test
@@ -38,6 +40,7 @@ pnpm --filter @cesium-geospatial/clouds exec tsc --noEmit
 
 ### Monorepo 布局（pnpm workspace）
 
+- **根包（`cesium-geospatial`）：产品包本身**（deck.gl 模式，`private: true` 只挡 npm publish）。`src/` 是编排层（`install.ts` 并发/取消/回滚、`sceneTakeover.ts` 12 项接管与无条件还原、`assets.ts` URL+字节校验、`compat.ts` 版本自检、`moonTexture.ts` 月面合成）；`bin/cli.mjs` 提供 `copy-assets` / `check`；`assets/` 是唯一资产源；`dist/` 是消费方唯一可见产物（Vite lib mode 三入口 `index`/`core`/`clouds` + d.ts + build-stamp，GLSL 已内联，消费方不需要 `?raw`）。
 - `packages/cesium-core`（`@cesium-geospatial/core`）：核心库。`cesium` 为 peerDependency（消费者自带）。导出 shader 组装器、LUT 加载、`createAtmosphereStage`。
 - `packages/cesium-clouds`（`@cesium-geospatial/clouds`）：体积云库。raymarch 主 march + 级联 BSM（世界锚定）+ god rays 光柱 + 时序重建 + 质量档位（low/medium/high/ultra）+ 天气图烘焙/演化/平流。导出 `createCloudsStage`（返回 `overlayStage`，**不自动 add**——消费者插到 atmosphere 与 lensFlare 之间，见 README）。
 - `apps/demo`：Vite + 原生 Cesium `Viewer` 的验收 demo，URL 参数化（见下）。依赖 `core`/`clouds` via `workspace:*`。
@@ -79,7 +82,7 @@ phase2a 已落地（2026-08-04 验收合入）：把末端内联 ACES 拆为「a
 
 ### LUT 加载
 
-`cesium/lutLoader.ts`：`transmittance.bin`(256×64) / `scattering.bin`(256×128×32) / `irradiance.bin`(64×16) 是 **half-float (Uint16) RGBA**。`@petamoriken/float16` 的 `Float16Array` 视图 → `Float32Array.from` → Cesium `Texture`/`Texture3D`（`PixelDatatype.FLOAT`）。demo 在 `public/luts/` 提供三份 `.bin`。
+`cesium/lutLoader.ts`：`transmittance.bin`(256×64) / `scattering.bin`(256×128×32) / `irradiance.bin`(64×16) 是 **half-float (Uint16) RGBA**。`@petamoriken/float16` 的 `Float16Array` 视图 → `Float32Array.from` → Cesium `Texture`/`Texture3D`（`PixelDatatype.FLOAT`）。**根包即产品包，`assets/` 为唯一资产源**（`luts/` 4 个 `.bin` + `clouds/` 4 个 + `moon/` 2 个 webp）：demo 经 `viteStaticCopy` 从 `assets/` 服务，消费方经 `bin/cli.mjs copy-assets` 拷到自己的 `public/cesium-geospatial-assets/`。
 
 ## 非显而易见的约束与陷阱
 
