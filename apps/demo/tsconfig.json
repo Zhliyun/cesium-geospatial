@@ -2,7 +2,15 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    // demo 经 ../../../src/* 复用根包共享实现（moonTexture/demoProfile），
+    // 这些文件按包名 import 内部包——根包 node_modules 无 workspace 链接，
+    // 故与根 tsconfig.json 同源映射到包源码（与 node_modules 软链目标一致）。
+    "baseUrl": ".",
+    "paths": {
+      "@cesium-geospatial/core": ["../../packages/cesium-core/src/index.ts"],
+      "@cesium-geospatial/clouds": ["../../packages/cesium-clouds/src/index.ts"]
+    }
   },
   "include": ["src"]
 }

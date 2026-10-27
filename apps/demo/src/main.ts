@@ -38,6 +38,8 @@ import { createDepthDebugStage } from './DepthDebugStage'
 import { createCloudsSpike } from './CloudsSpikeMRT'
 // 月面纹理加载/合成走根包共享实现（产品与 demo 同一份，避免逻辑漂移）
 import { loadMoonTextures } from '../../../src/moonTexture'
+// demo 验收档单一来源（spec §8.4）：URL 参数全部在 profile 之上覆盖，产品 install 复用同一份
+import { DEMO_PROFILE } from '../../../src/demoProfile'
 
 // ---- URL 参数解析（评审 critical：可复现验收）----
 const params = new URLSearchParams(location.search)
@@ -311,10 +313,16 @@ async function main(): Promise<void> {
           )
         : undefined
     const moonSurfaceTexture: Texture | undefined = moon?.texture
-    // 纹理在载时 moonRadiance 默认基准（1546=774×(0.014/0.0099)²，ω 拍板 0.014 时同式显示亮度）
-    const moonRadianceDefault = moon != null ? 1546 / moon.albedoMean : 1546
+    // 纹理在载时 moonRadiance 默认基准（数值与推导见 DEMO_PROFILE.moonRadianceBase；
+    // 均值补偿：合成 albedo 乘进 Oren-Nayar 会让盘总亮度掉 ~纹理均值，除以 albedoMean 折回）
+    const moonRadianceDefault =
+      moon != null
+        ? DEMO_PROFILE.moonRadianceBase / moon.albedoMean
+        : DEMO_PROFILE.moonRadianceBase
 
     const options: AtmosphereStageOptions = {
+      // demo 验收档缺省（单一来源；下方 URL 条件项全部覆盖在它之上）
+      ...DEMO_PROFILE.atmosphere,
       debugMode: getNumber('debug') ?? 0,
       // 动态曝光可 URL 微调（默认 day=1.2 / night=0.1 / twilight±6°，按相机当地太阳高度角自动）
       ...(getNumber('exposureDay') != null ? { exposureDay: getNumber('exposureDay')! } : {}),
@@ -361,7 +369,7 @@ async function main(): Promise<void> {
       // M5 云 god rays 光柱增益：默认 1 物理精确（subtle 对齐 three）；?cloudsGodRays=20 艺术放大出可见光柱
       ...(getNumber('cloudsGodRays') != null ? { cloudsGodRaysGain: getNumber('cloudsGodRays')! } : {}),
       // 月光（2026-08-30 方向 C）：?moon=0 全关（月盘不编入+云月光乘 0）——诊断基线；
-      // ?moonRadiance= 月盘倍率（默认 1546=774×(0.014/0.0099)²，ω 拍板 0.014 后同式保显示亮度，纹理在载时按均值放大）；
+      // ?moonRadiance= 月盘倍率（默认 DEMO_PROFILE.moonRadianceBase=1546=774×(0.014/0.0099)²，ω 拍板 0.014 后同式保显示亮度，纹理在载时按均值放大）；
       // ?moonAngularRadius= 月盘角半径 rad（默认 0.014=物理×3.1，~17px，2026-09-01 验收档位后定稿：沿革 0.0135→0.03→0.02→0.0045→0.0099→0.014；
       // 偏离默认时自动 ×k² 补偿显示亮度——spec §5.2 耦合纪律）；?moonLightScale= 云月光倍率（默认 25000，2026-08-31 偏亮反馈拍板减半）；
       // ?moonSurface=0 关月面纹理（均匀月面基线）；?moonTint=r,g,b 月盘色调乘子（默认库冷蓝
@@ -387,7 +395,7 @@ async function main(): Promise<void> {
             // ω 可调时倍率**默认值**同步 ×k²（同式下每像素 radiance ∝ 1/ω²，保持显示亮度——
             // spec §5.2）。仅未显式传 ?moonRadiance= 时补偿；显式值用户自理不补偿（brief 行内
             // 注释/全局约束/spec 三处一致；守卫式而非 spread 顺序——两参同传语义不随顺序漂移）。
-            // moonRadianceDefault = 库默认 1546（纹理在载时已按均值放大；AtmosphereStage.ts/demo 拍板基准）。
+            // moonRadianceDefault = DEMO_PROFILE.moonRadianceBase（单源；纹理在载时已按均值放大）。
             return getNumber('moonRadiance') != null
               ? { moonAngularRadius: omega }
               : { moonAngularRadius: omega, moonRadianceScale: moonRadianceDefault * k * k }
@@ -434,12 +442,14 @@ async function main(): Promise<void> {
         cloudsShadowLengthBridge: () => cloudsShadowBridge?.(),
         cloudsOcclusionBridge: () => cloudsOcclusionBridge?.(),
         // M6 地面云影（spec §5）：?groundShadow=0 时整段不传（define 不开 → 完全零回归）
-        // 【2026-09-30 用户拍板】缺省 strength 0.8：P1 解锁满摆幅后全影过深（trans≈0 场
-        // 影区仅剩天光）；0.7 试档后上调 0.8 定稿；物理满档 ?groundShadowStrength=1
+        // 缺省 strength 固化在 DEMO_PROFILE.atmosphere（0.8，2026-09-30 拍板）；此处只保留
+        // URL 显式覆盖（?groundShadowStrength=1 = 物理满档）。
         ...(getString('groundShadow') !== '0'
           ? {
               cloudsShadowBridge: () => groundShadowBridge?.(),
-              groundShadowStrength: getNumber('groundShadowStrength') ?? 0.8
+              ...(getNumber('groundShadowStrength') != null
+                ? { groundShadowStrength: getNumber('groundShadowStrength')! }
+                : {})
             }
           : {})
       })
@@ -583,7 +593,8 @@ async function main(): Promise<void> {
             ? cloudsWeatherRaw
             : undefined
         const cloudsHandle = createCloudsStage(scene, luts, weather, {
-          clouds: true,
+          // demo 验收档缺省（单一来源：裸 URL 有云）；下方 URL 条件项全部覆盖在它之上
+          ...DEMO_PROFILE.clouds,
           // 质量档位（spec 2026-08-29）：?cloudsQuality=low|medium|high|ultra（缺省 high=现状；
           // 白名单守卫——非法值忽略，防 Record 键 undefined 崩创建。局部 const 收窄使
           // getString 的 string|null 收敛到字面量联合，无需 as 断言）
