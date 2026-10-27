@@ -334,7 +334,10 @@ export function defaultCloudsParameters(): CloudsParameters {
 
     // 主 raymarch（qualityPresets defaults = high）
     maxIterationCount: 500,
-    minStepSize: 50,
+    // 【2026-10-27 降颗粒】50 → 25（噪声 ∝1/√采样数 ≈ −29%）。perf-audit：N=4 时主 march
+    // 只覆盖 1/16 像素，实测档位差（N2→N4 省 4.2ms）表明这笔加价约 +0.3–1ms，是唯一
+    // 「不加拖影、不加模糊」的降噪路径。出现条纹时用 ?cloudsQuality=low 对照。
+    minStepSize: 25,
     maxStepSize: 1000,
     maxRayDistance: 2e5,
     perspectiveStepScale: 1.01,

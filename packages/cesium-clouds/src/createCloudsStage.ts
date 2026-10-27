@@ -1257,7 +1257,9 @@ function buildCloudsStageImpl(
         // 复现该现象后，缺省恢复满幅；?cloudsMotionJitter=0.3 之类作为观感取舍旋钮保留。
         params.jitterScale = frameStill
           ? jitterBase
-          : jitterBase * (options.motionJitterScale ?? 0.3)
+          // 【2026-10-27 回退】0.3 会留下等距条纹（逐样本相位同样参与打散步进驻波）。
+          // 颗粒改由「提高 march 采样密度」解决（见 cloudsDefaultParameters.minStepSize）。
+          : jitterBase * (options.motionJitterScale ?? 1)
         // 【2026-10-26 拖动抖动】几何抖动**只在静止时启用**：我们的 jitter 只作用于云射线，
         // Cesium 渲染的地面不抖 → 运动时云层相对地面每帧晃 ±1.5px（肉眼=整体抖动，且是
         // 低频相干位移，任何时域平均都压不掉，反而会因重投影残差产生拖影）。静止时 jitter
