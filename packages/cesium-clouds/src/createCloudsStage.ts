@@ -1125,7 +1125,7 @@ function buildCloudsStageImpl(
           // 而关闭，同构建对拍显示 farBlend=0.05 的追平 p99 反而更低（11.7 vs 24.3），已恢复。
           // 【2026-10-27 拖影定稿】运动时不再开远段长窗（20 帧）：两位专家独立指认它是拖影
           // 最强来源——远段判据只看深度，「远=视差小」在旋转下不成立。需要时可 ?cloudsFarBlend=0.05
-          resolvePass?.setTemporalBlendFar(still ? 0 : (options.farBlend ?? 0))
+          resolvePass?.setTemporalBlendFar(still ? 0 : (options.farBlend ?? 0.05))
         }
         if (options.frameUnfreeze !== false && advancePhase) {
           params.marchFrame++
@@ -1257,7 +1257,7 @@ function buildCloudsStageImpl(
         // 复现该现象后，缺省恢复满幅；?cloudsMotionJitter=0.3 之类作为观感取舍旋钮保留。
         params.jitterScale = frameStill
           ? jitterBase
-          : jitterBase * (options.motionJitterScale ?? 1)
+          : jitterBase * (options.motionJitterScale ?? 0.3)
         // 【2026-10-26 拖动抖动】几何抖动**只在静止时启用**：我们的 jitter 只作用于云射线，
         // Cesium 渲染的地面不抖 → 运动时云层相对地面每帧晃 ±1.5px（肉眼=整体抖动，且是
         // 低频相干位移，任何时域平均都压不掉，反而会因重投影残差产生拖影）。静止时 jitter
