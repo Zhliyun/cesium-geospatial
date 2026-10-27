@@ -1,0 +1,691 @@
+import { describe, it, expect, vi } from 'vitest'
+import type {
+  Context,
+  PostProcessStage,
+  PostProcessStageComposite,
+  Scene,
+  Texture
+} from 'cesium'
+import type {
+  AtmosphereLUTs,
+  AtmosphereStageHandle,
+  AtmosphereStageOptions,
+  CloudsShadowBridgeData
+} from '@cesium-geospatial/core'
+import type {
+  CloudsStageHandle,
+  CloudsStageOptions,
+  WeatherTextures
+} from '@cesium-geospatial/clouds'
+import { installWithDeps, type InstallDeps, type InstallOptions } from './install'
+import type { CompatResult } from './compat'
+
+// 全部用例用结构化假 scene + 假 deps，不构造任何真实 Cesium 对象、不触 GL。
+// 断言的是 install 的**真实调用与顺序**（依赖方法的入参 / invocationCallOrder / 释放顺序），
+// 不 mock 被测模块内部实现。
+
+// ────────────────────────────── 假 scene ──────────────────────────────
+
+type FakeColor = { red: number; green: number; blue: number; alpha: number }
+interface FakeGlobe {
+  depthTestAgainstTerrain: boolean
+  showGroundAtmosphere: boolean
+  enableLighting: boolean
+}
+interface FakePostProcessStages {
+  length: number
+  ambientOcclusion: { enabled: boolean }
+  bloom: { enabled: boolean }
+  fxaa: { enabled: boolean }
+}
+interface FakeScene {
+  globe: FakeGlobe
+  skyAtmosphere: { show: boolean }
+  skyBox: { show: boolean }
+  sun: { show: boolean }
+  moon: { show: boolean }
+  fog: { enabled: boolean }
+  backgroundColor: FakeColor
+  logarithmicDepthBuffer: boolean
+  highDynamicRange: boolean
+  requestRenderMode: boolean
+  requestRender: ReturnType<typeof vi.fn>
+  isDestroyed: () => boolean
+  postProcessStages: FakePostProcessStages
+  context: { webgl2: boolean }
+  mode: number
+}
+
+const ORIGINAL_BACKGROUND: FakeColor = { red: 0.1, green: 0.2, blue: 0.3, alpha: 1 }
+
+function makeScene(): FakeScene {
+  return {
+    globe: { depthTestAgainstTerrain: false, showGroundAtmosphere: true, enableLighting: true },
+    skyAtmosphere: { show: true },
+    skyBox: { show: true },
+    sun: { show: true },
+    moon: { show: true },
+    fog: { enabled: true },
+    backgroundColor: { ...ORIGINAL_BACKGROUND },
+    logarithmicDepthBuffer: false,
+    highDynamicRange: true,
+    requestRenderMode: true,
+    requestRender: vi.fn(),
+    isDestroyed: () => false,
+    postProcessStages: {
+      length: 0,
+      ambientOcclusion: { enabled: false },
+      bloom: { enabled: false },
+      fxaa: { enabled: false }
+    },
+    context: { webgl2: true },
+    mode: 3
+  }
+}
+
+const asScene = (fake: FakeScene): Scene => fake as unknown as Scene
+
+// ────────────────────────────── 假纹理 / 假 handle ──────────────────────────────
+
+interface FakeTexture {
+  name: string
+  destroy: ReturnType<typeof vi.fn>
+}
+
+/** 所有释放动作写进同一条 order 数组，用于断言全局销毁顺序。 */
+function makeTexture(name: string, order: string[]): FakeTexture {
+  return { name, destroy: vi.fn(() => order.push(`texture:${name}`)) }
+}
+
+describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
+  function makeTextureSet(order: string[]) {
+    const lut = {
+      transmittance: makeTexture('lut.transmittance', order),
+      scattering: makeTexture('lut.scattering', order),
+      irradiance: makeTexture('lut.irradiance', order),
+      higherOrderScattering: makeTexture('lut.higherOrderScattering', order)
+    }
+    const weather = {
+      shape: makeTexture('weather.shape', order),
+      shapeDetail: makeTexture('weather.shapeDetail', order),
+      stbn: makeTexture('weather.stbn', order),
+      localWeather: makeTexture('weather.localWeather', order)
+    }
+    const moon = makeTexture('moon', order)
+    return { lut, weather, moon, all: [...Object.values(lut), ...Object.values(weather), moon] }
+  }
+
+  function makeAtmosphere(order: string[]) {
+    const inserted: PostProcessStage[] = []
+    const handle = {
+      atmosphereStage: {} as PostProcessStage,
+      insertStageBeforeLensFlare: vi.fn(
+        (stage: PostProcessStage | PostProcessStageComposite, _opts?: { protectedStage?: boolean }) => {
+          inserted.push(stage as PostProcessStage)
+        }
+      ),
+      removeInsertedStage: vi.fn((stage: PostProcessStage | PostProcessStageComposite) => {
+        const index = inserted.indexOf(stage as PostProcessStage)
+        if (index >= 0) inserted.splice(index, 1)
+      }),
+      destroy: vi.fn(() => {
+        order.push('atmosphere.destroy')
+      })
+    }
+    return { handle: handle as unknown as AtmosphereStageHandle, inserted, mock: handle }
+  }
+
+  function makeClouds(order: string[]) {
+    const overlayStage = { name: 'clouds_overlay' } as unknown as PostProcessStage
+    const shadowLengthBridge = { _texture: 'shadowLength', _target: 1 }
+    const colorBridge = { _texture: 'color', _target: 1 }
+    const groundShadowBridge = { cascades: [] } as unknown as CloudsShadowBridgeData
+    const cloudsPass = {
+      getShadowLengthBridge: vi.fn(() => shadowLengthBridge),
+      getColorBridge: vi.fn(() => colorBridge)
+    }
+    const handle = {
+      cloudsPass,
+      overlayStage,
+      setQuality: vi.fn(),
+      getGroundShadowBridgeData: vi.fn(() => groundShadowBridge),
+      destroy: vi.fn(() => {
+        order.push('clouds.destroy')
+      })
+    }
+    return {
+      handle: handle as unknown as CloudsStageHandle,
+      mock: handle,
+      overlayStage,
+      shadowLengthBridge,
+      colorBridge,
+      groundShadowBridge
+    }
+  }
+
+  // 不标注 InstallDeps 返回类型：保留 vi.fn 的 Mock 类型（.mock.calls / mockReturnValue 等
+  // 是断言对象；mock 签名本身已满足 InstallDeps 契约）。
+  function makeDeps(
+    order: string[],
+    atmosphere: ReturnType<typeof makeAtmosphere>,
+    clouds: ReturnType<typeof makeClouds>,
+    textures: ReturnType<typeof makeTextureSet>
+  ) {
+    const lutsWithHigherOrder = {
+      transmittance: textures.lut.transmittance,
+      scattering: textures.lut.scattering,
+      irradiance: textures.lut.irradiance,
+      higherOrderScattering: textures.lut.higherOrderScattering
+    } as unknown as AtmosphereLUTs
+    const lutsWithoutHigherOrder = {
+      transmittance: textures.lut.transmittance,
+      scattering: textures.lut.scattering,
+      irradiance: textures.lut.irradiance
+    } as unknown as AtmosphereLUTs
+    const weatherTextures = {
+      shape: textures.weather.shape,
+      shapeDetail: textures.weather.shapeDetail,
+      stbn: textures.weather.stbn,
+      localWeather: textures.weather.localWeather
+    } as unknown as WeatherTextures
+
+    return {
+      runCompat: vi.fn((_scene: Scene): CompatResult => ({ ok: true, warnings: [], errors: [] })),
+      loadLuts: vi.fn(
+        async (
+          _context: Context,
+          _baseUrl: string,
+          options: { higherOrderScattering: boolean }
+        ): Promise<AtmosphereLUTs> =>
+          options.higherOrderScattering ? lutsWithHigherOrder : lutsWithoutHigherOrder
+      ),
+      loadWeather: vi.fn(
+        async (_context: Context, _baseUrl: string): Promise<WeatherTextures> => weatherTextures
+      ),
+      loadMoon: vi.fn(
+        async (
+          _context: Context,
+          _urls: { surface: string; displacement: string }
+        ): Promise<{ texture: Texture; albedoMean: number } | undefined> => ({
+          texture: textures.moon as unknown as Texture,
+          albedoMean: 0.5
+        })
+      ),
+      createAtmosphere: vi.fn(
+        (
+          _scene: Scene,
+          _luts: AtmosphereLUTs,
+          _options: AtmosphereStageOptions
+        ): AtmosphereStageHandle => atmosphere.handle
+      ),
+      createClouds: vi.fn(
+        (
+          _scene: Scene,
+          _luts: AtmosphereLUTs,
+          _weather: WeatherTextures,
+          _options: CloudsStageOptions
+        ): CloudsStageHandle | undefined => clouds.handle
+      )
+    }
+  }
+
+  function setup() {
+    const order: string[] = []
+    const scene = makeScene()
+    const atmosphere = makeAtmosphere(order)
+    const clouds = makeClouds(order)
+    const textures = makeTextureSet(order)
+    const deps = makeDeps(order, atmosphere, clouds, textures)
+    return { order, scene, atmosphere, clouds, textures, deps }
+  }
+
+  type Fixture = ReturnType<typeof setup>
+
+  async function install(fixture: Fixture, options?: InstallOptions) {
+    return installWithDeps(asScene(fixture.scene), options, fixture.deps)
+  }
+
+  const callOrder = (mock: { mock: { invocationCallOrder: readonly number[] } }): number =>
+    mock.mock.invocationCallOrder[0]
+
+  // ── happy path ──
+
+  it('默认装大气+云，按 LUT→月面→大气→天气→云→overlay 顺序编排', async () => {
+    const f = setup()
+    const handle = await install(f)
+
+    expect(f.deps.loadLuts).toHaveBeenCalledTimes(1)
+    expect(f.deps.loadMoon).toHaveBeenCalledTimes(1)
+    expect(f.deps.createAtmosphere).toHaveBeenCalledTimes(1)
+    expect(f.deps.loadWeather).toHaveBeenCalledTimes(1)
+    expect(f.deps.createClouds).toHaveBeenCalledTimes(1)
+
+    // LUT → 大气 → 天气 → 云 → overlay 插入（spec §8.1 步骤 4-7）
+    expect(callOrder(f.deps.loadLuts)).toBeLessThan(callOrder(f.deps.loadMoon))
+    expect(callOrder(f.deps.loadMoon)).toBeLessThan(callOrder(f.deps.createAtmosphere))
+    expect(callOrder(f.deps.createAtmosphere)).toBeLessThan(callOrder(f.deps.loadWeather))
+    expect(callOrder(f.deps.loadWeather)).toBeLessThan(callOrder(f.deps.createClouds))
+    expect(callOrder(f.deps.createClouds)).toBeLessThan(
+      callOrder(f.atmosphere.mock.insertStageBeforeLensFlare)
+    )
+
+    // 云 overlay 以受保护项插入（§7.7 归属规则）
+    expect(f.atmosphere.mock.insertStageBeforeLensFlare).toHaveBeenCalledTimes(1)
+    expect(f.atmosphere.mock.insertStageBeforeLensFlare).toHaveBeenCalledWith(f.clouds.overlayStage, {
+      protectedStage: true
+    })
+    expect(f.atmosphere.inserted).toEqual([f.clouds.overlayStage])
+
+    expect(handle.atmosphere).toBe(f.atmosphere.handle)
+    expect(handle.clouds).toBe(f.clouds.handle)
+    expect(handle.cloudsError).toBeUndefined()
+  })
+
+  it('clouds:false 不加载天气、不传三个云桥，higherOrderScattering 传 false', async () => {
+    const f = setup()
+    const handle = await install(f, { clouds: false })
+
+    expect(f.deps.loadWeather).not.toHaveBeenCalled()
+    expect(f.deps.createClouds).not.toHaveBeenCalled()
+    expect(f.deps.loadLuts.mock.calls[0][2]).toEqual({ higherOrderScattering: false })
+
+    const options = f.deps.createAtmosphere.mock.calls[0][2]
+    expect(options.higherOrderScattering).toBe(false)
+    expect(options.cloudsShadowLengthBridge).toBeUndefined()
+    expect(options.cloudsOcclusionBridge).toBeUndefined()
+    expect(options.cloudsShadowBridge).toBeUndefined()
+
+    expect(handle.clouds).toBeUndefined()
+    expect(handle.cloudsError).toBeUndefined()
+    expect(f.atmosphere.mock.insertStageBeforeLensFlare).not.toHaveBeenCalled()
+
+    // 未加载 higher_order：destroy 只释放 3 LUT + 月面
+    handle.destroy()
+    expect(f.textures.lut.higherOrderScattering.destroy).not.toHaveBeenCalled()
+    for (const texture of [
+      f.textures.lut.transmittance,
+      f.textures.lut.scattering,
+      f.textures.lut.irradiance,
+      f.textures.moon
+    ]) {
+      expect(texture.destroy).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('三个云桥闭包在云创建后指向真实 clouds handle', async () => {
+    const f = setup()
+    await install(f, {})
+
+    const options = f.deps.createAtmosphere.mock.calls[0][2]
+    expect(options.higherOrderScattering).toBe(true)
+    expect(options.cloudsShadowLengthBridge!()).toBe(f.clouds.shadowLengthBridge)
+    expect(options.cloudsOcclusionBridge!()).toBe(f.clouds.colorBridge)
+    expect(options.cloudsShadowBridge!()).toBe(f.clouds.groundShadowBridge)
+    // demo 验收档单一来源（spec §8.4）
+    expect(options.groundShadowStrength).toBe(0.8)
+  })
+
+  it('quality 未传时不调用 setQuality；传入时按顶层 quality 转发', async () => {
+    const none = setup()
+    await install(none)
+    expect(none.clouds.mock.setQuality).not.toHaveBeenCalled()
+
+    const low = setup()
+    await install(low, { quality: 'low' })
+    expect(low.clouds.mock.setQuality).toHaveBeenCalledTimes(1)
+    expect(low.clouds.mock.setQuality).toHaveBeenCalledWith('low')
+  })
+
+  // ── 前置拒绝 / 告警 ──
+
+  it('既有 postProcessStages 非空时拒绝安装（消息含迁移步骤与线性 HDR）；allowExistingStages 放行', async () => {
+    const f = setup()
+    f.scene.postProcessStages.length = 2
+    await expect(install(f)).rejects.toThrow(/allowExistingStages/)
+    await expect(install(f)).rejects.toThrow(/线性 HDR/)
+
+    // 零改动：没有任何资产/stage 动作，场景设置未动
+    expect(f.deps.loadLuts).not.toHaveBeenCalled()
+    expect(f.deps.createAtmosphere).not.toHaveBeenCalled()
+    expect(f.scene.logarithmicDepthBuffer).toBe(false)
+    expect(f.scene.highDynamicRange).toBe(true)
+
+    const allowed = setup()
+    allowed.scene.postProcessStages.length = 2
+    await expect(install(allowed, { allowExistingStages: true })).resolves.toBeDefined()
+    expect(allowed.deps.createAtmosphere).toHaveBeenCalledTimes(1)
+  })
+
+  it('AO/BLOOM/FXAA 开启时逐个 warn 但继续安装', async () => {
+    const f = setup()
+    f.scene.postProcessStages.ambientOcclusion.enabled = true
+    f.scene.postProcessStages.bloom.enabled = true
+    f.scene.postProcessStages.fxaa.enabled = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(install(f)).resolves.toBeDefined()
+      const text = warn.mock.calls.map((call) => String(call[0])).join('\n')
+      expect(text).toMatch(/ambientOcclusion/)
+      expect(text).toMatch(/bloom/)
+      expect(text).toMatch(/fxaa/)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // ── 失败语义（spec §8.2 逐行） ──
+
+  it('runCompat 失败时零改动并抛错（全部 errors 进消息）', async () => {
+    const f = setup()
+    f.deps.runCompat.mockReturnValue({
+      ok: false,
+      warnings: [],
+      errors: ['缺少 Texture3D 构造器', '运行环境不是 WebGL2']
+    })
+    await expect(install(f)).rejects.toThrow(/缺少 Texture3D 构造器[\s\S]*运行环境不是 WebGL2/)
+
+    expect(f.deps.loadLuts).not.toHaveBeenCalled()
+    expect(f.deps.loadMoon).not.toHaveBeenCalled()
+    expect(f.deps.createAtmosphere).not.toHaveBeenCalled()
+    expect(f.textures.all.every((t) => t.destroy.mock.calls.length === 0)).toBe(true)
+    expect(f.scene.logarithmicDepthBuffer).toBe(false)
+    expect(f.scene.highDynamicRange).toBe(true)
+  })
+
+  it('log-depth 读回失败时还原场景并抛错', async () => {
+    const f = setup()
+    // 模拟 Cesium 拒绝写入：setter 无效、getter 恒 false
+    Object.defineProperty(f.scene, 'logarithmicDepthBuffer', {
+      configurable: true,
+      get: () => false,
+      set: () => {}
+    })
+    await expect(install(f)).rejects.toThrow(/对数深度/)
+
+    expect(f.scene.highDynamicRange).toBe(true) // 接管值 false 已还原
+    expect(f.scene.requestRenderMode).toBe(true)
+    expect(f.scene.requestRender).toHaveBeenCalled() // 还原 requestRenderMode 后补帧
+    expect(f.deps.loadLuts).not.toHaveBeenCalled()
+  })
+
+  it('createAtmosphere 抛错时还原场景、释放 LUT 与月面纹理', async () => {
+    const f = setup()
+    const boom = new Error('atmosphere boom')
+    f.deps.createAtmosphere.mockImplementation(() => {
+      throw boom
+    })
+    await expect(install(f)).rejects.toBe(boom)
+
+    expect(f.scene.highDynamicRange).toBe(true)
+    expect(f.scene.globe.showGroundAtmosphere).toBe(true)
+    expect(f.deps.loadWeather).not.toHaveBeenCalled()
+    for (const texture of Object.values(f.textures.lut)) {
+      expect(texture.destroy).toHaveBeenCalledTimes(1)
+    }
+    expect(f.textures.moon.destroy).toHaveBeenCalledTimes(1)
+    expect(f.clouds.mock.destroy).not.toHaveBeenCalled()
+  })
+
+  it('loadMoon 返回 undefined 时继续，不传 moonSurfaceTexture 且不登记月面纹理', async () => {
+    const f = setup()
+    f.deps.loadMoon.mockResolvedValue(undefined)
+    const handle = await install(f)
+
+    expect(f.deps.createAtmosphere.mock.calls[0][2].moonSurfaceTexture).toBeUndefined()
+    expect(handle.clouds).toBe(f.clouds.handle)
+
+    handle.destroy()
+    expect(f.textures.moon.destroy).not.toHaveBeenCalled()
+    // 4 LUT + 4 weather 仍全额释放
+    for (const texture of [...Object.values(f.textures.lut), ...Object.values(f.textures.weather)]) {
+      expect(texture.destroy).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('createClouds 返回 undefined 视为失败：返回带 cloudsError 的 handle，大气保留', async () => {
+    const f = setup()
+    f.deps.createClouds.mockReturnValue(undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const handle = await install(f)
+
+      expect(handle.clouds).toBeUndefined()
+      expect(handle.cloudsError).toBeInstanceOf(Error)
+      expect(f.atmosphere.mock.destroy).not.toHaveBeenCalled()
+      expect(f.atmosphere.mock.insertStageBeforeLensFlare).not.toHaveBeenCalled()
+      // 天气纹理无消费者：立即释放，不进入 handle 所有权
+      for (const texture of Object.values(f.textures.weather)) {
+        expect(texture.destroy).toHaveBeenCalledTimes(1)
+      }
+
+      // 大气与 LUT/月面仍归 handle 所有
+      handle.destroy()
+      expect(f.atmosphere.mock.destroy).toHaveBeenCalledTimes(1)
+      for (const texture of [...Object.values(f.textures.lut), f.textures.moon]) {
+        expect(texture.destroy).toHaveBeenCalledTimes(1)
+      }
+      // 天气纹理不被二次释放
+      for (const texture of Object.values(f.textures.weather)) {
+        expect(texture.destroy).toHaveBeenCalledTimes(1)
+      }
+
+      // 无云：setQuality 为 no-op + warn
+      const warnCallsBefore = warn.mock.calls.length
+      handle.setQuality('ultra')
+      expect(warn.mock.calls.length).toBeGreaterThan(warnCallsBefore)
+      expect(f.clouds.mock.setQuality).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('loadMoon 抛错时 warn 后继续（白 dummy 路径，不阻断安装）', async () => {
+    const f = setup()
+    f.deps.loadMoon.mockRejectedValue(new Error('moon decode'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const handle = await install(f)
+      expect(f.deps.createAtmosphere.mock.calls[0][2].moonSurfaceTexture).toBeUndefined()
+      expect(handle.clouds).toBe(f.clouds.handle)
+      expect(warn.mock.calls.map((call) => String(call[0])).join('\n')).toMatch(/月面纹理/)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('loadWeather 抛错时返回带 cloudsError 的 handle（大气保留，无天气纹理可释放）', async () => {
+    const f = setup()
+    const boom = new Error('weather 404')
+    f.deps.loadWeather.mockRejectedValue(boom)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const handle = await install(f)
+      expect(handle.clouds).toBeUndefined()
+      expect(handle.cloudsError).toBe(boom)
+      expect(f.deps.createClouds).not.toHaveBeenCalled()
+      expect(f.atmosphere.mock.insertStageBeforeLensFlare).not.toHaveBeenCalled()
+      // 天气纹理从未创建：destroy 只释放 LUT + 月面
+      handle.destroy()
+      for (const texture of [...Object.values(f.textures.lut), f.textures.moon]) {
+        expect(texture.destroy).toHaveBeenCalledTimes(1)
+      }
+      for (const texture of Object.values(f.textures.weather)) {
+        expect(texture.destroy).not.toHaveBeenCalled()
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('云创建抛错时返回带 cloudsError 的 handle（大气保留、错误原样带出）', async () => {
+    const f = setup()
+    const boom = new Error('clouds boom')
+    f.deps.createClouds.mockImplementation(() => {
+      throw boom
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const handle = await install(f)
+
+      expect(handle.clouds).toBeUndefined()
+      expect(handle.cloudsError).toBe(boom)
+      expect(handle.atmosphere).toBe(f.atmosphere.handle)
+      expect(f.atmosphere.mock.insertStageBeforeLensFlare).not.toHaveBeenCalled()
+      expect(f.clouds.mock.destroy).not.toHaveBeenCalled()
+      expect(f.textures.weather.shape.destroy).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('overlay 插入失败时全量回滚：destroy 云、释放全部纹理、destroy 大气、还原场景', async () => {
+    const f = setup()
+    const boom = new Error('insert boom')
+    f.atmosphere.mock.insertStageBeforeLensFlare.mockImplementation((stage) => {
+      if (stage === f.clouds.overlayStage) throw boom
+    })
+    await expect(install(f)).rejects.toBe(boom)
+
+    expect(f.clouds.mock.destroy).toHaveBeenCalledTimes(1)
+    expect(f.atmosphere.mock.destroy).toHaveBeenCalledTimes(1)
+    // 先 stage 后纹理（spec §8.5）
+    expect(callOrder(f.clouds.mock.destroy)).toBeLessThan(
+      callOrder(f.atmosphere.mock.destroy)
+    )
+    expect(callOrder(f.atmosphere.mock.destroy)).toBeLessThan(
+      callOrder(f.textures.lut.transmittance.destroy)
+    )
+    for (const texture of f.textures.all) {
+      expect(texture.destroy).toHaveBeenCalledTimes(1)
+    }
+    // 场景还原
+    expect(f.scene.highDynamicRange).toBe(true)
+    expect(f.scene.globe.enableLighting).toBe(true)
+  })
+
+  it('资产加载失败时还原场景并抛错（不创建 stage、不加载月面/天气）', async () => {
+    const f = setup()
+    const boom = new Error('lut 404')
+    f.deps.loadLuts.mockRejectedValue(boom)
+    await expect(install(f)).rejects.toBe(boom)
+
+    expect(f.deps.loadMoon).not.toHaveBeenCalled()
+    expect(f.deps.loadWeather).not.toHaveBeenCalled()
+    expect(f.deps.createAtmosphere).not.toHaveBeenCalled()
+    expect(f.scene.highDynamicRange).toBe(true)
+    expect(f.scene.requestRender).toHaveBeenCalled()
+  })
+
+  // ── 资源归属 / 销毁（spec §8.5） ──
+
+  it('destroy 按 stage→纹理顺序释放 4 LUT + 4 weather + 月面纹理，且幂等', async () => {
+    const f = setup()
+    const handle = await install(f)
+    handle.destroy()
+
+    expect(f.order).toEqual([
+      'clouds.destroy',
+      'atmosphere.destroy',
+      'texture:lut.transmittance',
+      'texture:lut.scattering',
+      'texture:lut.irradiance',
+      'texture:lut.higherOrderScattering',
+      'texture:weather.shape',
+      'texture:weather.shapeDetail',
+      'texture:weather.stbn',
+      'texture:weather.localWeather',
+      'texture:moon'
+    ])
+
+    handle.destroy() // 幂等：不重复释放
+    expect(f.order).toHaveLength(11)
+  })
+
+  it('宿主 stage：insert/remove 转发到 atmosphere 并记账，destroy 时先移除再销毁大气', async () => {
+    const f = setup()
+    const handle = await install(f)
+    const hostStage = { name: 'host' } as unknown as PostProcessStage
+    const otherStage = { name: 'host2' } as unknown as PostProcessStage
+
+    handle.insertStageBeforeLensFlare(hostStage, { protectedStage: false })
+    expect(f.atmosphere.mock.insertStageBeforeLensFlare).toHaveBeenLastCalledWith(hostStage, {
+      protectedStage: false
+    })
+
+    handle.removeInsertedStage(hostStage)
+    expect(f.atmosphere.mock.removeInsertedStage).toHaveBeenCalledWith(hostStage)
+
+    handle.insertStageBeforeLensFlare(otherStage)
+    expect(f.atmosphere.mock.removeInsertedStage).not.toHaveBeenCalledWith(otherStage)
+
+    handle.destroy()
+    expect(f.atmosphere.mock.removeInsertedStage).toHaveBeenCalledWith(otherStage)
+    const removeOrder =
+      f.atmosphere.mock.removeInsertedStage.mock.invocationCallOrder[
+        f.atmosphere.mock.removeInsertedStage.mock.invocationCallOrder.length - 1
+      ]
+    const atmosphereDestroyOrder = callOrder(f.atmosphere.mock.destroy)
+    expect(removeOrder).toBeLessThan(atmosphereDestroyOrder)
+  })
+
+  it('destroy 后 handle 方法安全（no-op + warn），不触碰已销毁 stage', async () => {
+    const f = setup()
+    const handle = await install(f)
+    handle.destroy()
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const lateStage = { name: 'late' } as unknown as PostProcessStage
+      expect(() => handle.insertStageBeforeLensFlare(lateStage)).not.toThrow()
+      expect(() => handle.removeInsertedStage(lateStage)).not.toThrow()
+      expect(() => handle.setQuality('ultra')).not.toThrow()
+      expect(() => handle.destroy()).not.toThrow()
+
+      expect(f.atmosphere.mock.insertStageBeforeLensFlare).toHaveBeenCalledTimes(1) // 仅 overlay
+      expect(f.atmosphere.mock.removeInsertedStage).not.toHaveBeenCalled()
+      expect(f.clouds.mock.setQuality).not.toHaveBeenCalled()
+      expect(f.order).toHaveLength(11)
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // ── 资产 URL 解析 ──
+
+  it('assetsBaseUrl 与 assets 逐项覆盖透传给加载器', async () => {
+    const f = setup()
+    await install(f, {
+      assetsBaseUrl: 'https://cdn.example.com/assets/',
+      assets: { luts: 'https://cdn.example.com/luts/' }
+    })
+
+    expect(f.deps.loadLuts.mock.calls[0][1]).toBe('https://cdn.example.com/luts/')
+    expect(f.deps.loadWeather.mock.calls[0][1]).toBe('https://cdn.example.com/assets/clouds/')
+    expect(f.deps.loadMoon.mock.calls[0][1]).toEqual({
+      surface: 'https://cdn.example.com/assets/moon/moon-surface.webp',
+      displacement: 'https://cdn.example.com/assets/moon/moon-displacement.webp'
+    })
+  })
+
+  // ── 场景接管开关（spec §7.6 与 install 的衔接） ──
+
+  it('takeOverScene:false 不改宿主其余设置，但仍快照/还原 depthTestAgainstTerrain', async () => {
+    const f = setup()
+    // 关闭接管时 install 不会替宿主打开对数深度：宿主须已自行开启（shader 无条件反演）
+    f.scene.logarithmicDepthBuffer = true
+    const handle = await install(f, { takeOverScene: false })
+
+    // 未接管：其余设置原样
+    expect(f.scene.highDynamicRange).toBe(true)
+    expect(f.scene.skyAtmosphere.show).toBe(true)
+    expect(f.scene.sun.show).toBe(true)
+    expect(f.scene.fog.enabled).toBe(true)
+    expect(f.scene.backgroundColor).toEqual(ORIGINAL_BACKGROUND)
+    // 底层无条件设置 depthTestAgainstTerrain（快照/还原仍生效）
+    expect(f.scene.globe.depthTestAgainstTerrain).toBe(true)
+
+    handle.destroy()
+    expect(f.scene.globe.depthTestAgainstTerrain).toBe(false)
+  })
+})
