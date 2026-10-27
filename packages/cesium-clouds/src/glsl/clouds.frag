@@ -617,7 +617,11 @@ vec4 marchClouds(
   // 用于黑块/层内闪屏复发的逃生门。
   float shortSegment = (maxRayDistance < stepSize * 8.0 ? 1.0 : 0.0) * u_jitterZeroing;
   float marchJitter = mix(jitter, 0.0, shortSegment) * u_jitterScale;
-  float startJitter = mix(jitter, 0.0, shortSegment) * u_jitterScale;
+  // 【2026-10-27 等高线条纹】startJitter 是「整条射线的起点偏移」（±2 步），负责把 march 的
+  // 步进采样相位打散；缩它 → 采样点重新同相位 → 步进驻波 → 云面等距条纹（随相机移动而移动）。
+  // 故起点抖动**恒定满幅**，只有逐样本相位（marchJitter）受 u_jitterScale 调制——两者分工：
+  // 起点抖动破条纹（几乎不贡献逐帧噪声），相位抖动换去相关（贡献噪声）。
+  float startJitter = mix(jitter, 0.0, shortSegment);
   // 【2026-10-27 等高线阴影】朝太阳光深 march 的**步数**是 `remap(mipLevel) - jitter` 取整，
   // 靠 jitter 的 dither 把「步数跳变」摊成噪声。若把它也按 u_jitterScale 缩小，dither 失效
   // → 步数在固定 mip 处硬跳变 → 云面出现随距离上下移动的「等高线阴影」。故这一路恒用

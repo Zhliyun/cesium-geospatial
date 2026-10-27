@@ -617,7 +617,7 @@ describe('穿云黑块修复 II：march 起点 jitter 段长守卫', () => {
     const src = buildCloudsMainFragmentShader(M2_OPTIONS)
     // 【2026-10-24 观感对齐】归零改为 u_jitterZeroing 门控，缺省 0 = 参考库「任何情况都用 jitter」
     expect(src).toContain('* u_jitterZeroing')
-    expect(src).toContain('float startJitter = mix(jitter, 0.0, shortSegment) * u_jitterScale;')
+    expect(src).toContain('float startJitter = mix(jitter, 0.0, shortSegment);')
     expect(src).toContain('float rayDistance = stepSize * startJitter * 2.0;')
   })
 
