@@ -83,7 +83,7 @@ phase2a 已落地（2026-08-04 验收合入）：把末端内联 ACES 拆为「a
 
 ## 非显而易见的约束与陷阱
 
-- **天空/地面分类用视线方向，绝不用 raw depth 硬分类**。`lookingAtGround = brunetonIntersectsGround || hitBottom`（平滑、不读 depth）。`depthTexture` 不抗锯齿，在掠射地平线逐像素硬翻转会产生条纹。depth 仅用于近处地形的「前景雾」`sceneDist`，且经 `smoothstep(horizonKm, CLOSE_KM, sceneDist)` mask 过渡带（终点落在地平线）才消费——见 DUAL inscatter（`baseInscatter` 平滑基线 + `foreInscatter` depth 前景雾）。
+- **天空/地面分类用视线方向，绝不用 raw depth 硬分类**。`lookingAtGround = brunetonIntersectsGround || hitBottom`（平滑、不读 depth）。`depthTexture` 不抗锯齿，在掠射地平线逐像素硬翻转会产生条纹。depth 只用于地形的「前景雾」`sceneDist`：`discG>0` 时经 `smoothstep(40km, 20km, sceneDist)` 窄窗混入基线（防 Bug5 同心圆）；**`discG<=0`（视线不与椭球相交）且有真实 depth 的地形像素恒用深度位置（mask=1）**——山峰高于眼高时射线本就 miss 椭球，若按天空分支走 `getSkyRadiance`（全路径辐射）会被涂成地平线天空色，形成「黄灰虚影」带（2026-10-27 camera=8.2614,44.9551,747,119.8,-10.6 实测；参考库 aerialPerspectiveEffect 全程用 depth 重建位置做 aerial perspective）。
 - **LUT 是 half-float（Float16）**。phase1 曾因 half-float 16 位精度出现 inscatter 灾难性抵消（catastrophic cancellation）；改动采样/量级相关代码时留意精度。
 - **input dithering 必须留在大气 stage**：地表 `originalColor` 是 globe 的 RGBA8（已量化），HalfFloat 升级只保住 inscatter/天空 HDR 精度，地表 banding 源头不变；ACES 中间调放大 2–3× 会把 8-bit 阶梯放大成远处「水波纹」，需在源头对 `originalColor` 加 triangular 噪声打散。
 - **dFdx/dFdy 必须在控制流分叉前算**（如 `fragmentAngle`），保证 quad 内控制流一致。

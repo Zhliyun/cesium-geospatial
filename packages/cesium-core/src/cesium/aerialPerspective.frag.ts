@@ -880,7 +880,17 @@ ${skyBranch}  }
   float foreDist = hasScene ? sceneDist : (discG > 0.0 ? tHitG : -1.0);
   float foreMask = 0.0;
   if (foreDist > 0.0) {
-    float mask = smoothstep(CLOSE_KM * 2.0, CLOSE_KM, foreDist);  // 近=1 远=0，过渡带 20km
+    // 【2026-10-27 远地平线「黄灰虚影」根治】discG<=0 = 视线不与椭球相交 = 地形高出数学地平线
+    // （远山/山脊）。这类像素没有可回退的椭球基线：天空分支的 getSkyRadiance 是穿整层大气的
+    // 全路径辐射，比「到山脊真实位置」的空气路径亮得多也黄得多——40km 外的山脊因此被整片涂成
+    // 地平线天空色，与下方可见地形形成一条黄灰虚影带（用户实测 camera=8.2614,44.9551,747,
+    // 119.8,-10.6）。参考库 aerialPerspectiveEffect.frag 的语义：只要 depth 有几何，就用 depth
+    // 重建的真实位置算 transmittance/inscatter，只有 depth 为空才走 sky。
+    // 故 discG<=0 且有真实深度时恒用深度位置（mask=1）；discG>0 仍保留 20~40km 窄过渡
+    //（Bug5 同心圆修复不能回退——那条路径的基线是平滑椭球交点，窄窗让 fore 快速衰减到基线）。
+    float mask = discG > 0.0
+      ? smoothstep(CLOSE_KM * 2.0, CLOSE_KM, foreDist)  // 近=1 远=0，过渡带 20km
+      : 1.0;
     foreMask = mask;
     if (mask > 0.0) {
       vec3 scenePosKm = cameraPosition + rayDirection * foreDist;
