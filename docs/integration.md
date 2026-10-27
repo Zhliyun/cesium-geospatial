@@ -23,6 +23,8 @@
 安装前会做 Cesium 版本与能力自检（`src/compat.ts`）：
 
 - 版本超出 peer 范围、缺 `Texture3D`、非 WebGL2、缺 `fragmentDepth` / `depthTexture`、无 globe、非 3D → **抛错**，错误消息带当前版本与已验证版本表；
+- **已知坏版本 `1.146.0` → 抛错**（`KNOWN_BROKEN_VERSIONS`）：它不是「可能有效」而是页面直接渲染中止，
+  不能只 warn；错误消息给出钉 `1.143.0` + overrides 模板；
 - 在 peer 范围内但不在已验证版本表（当前仅 `1.143.0`）→ `console.warn`，不阻断安装。
 
 > 本库用到了若干 Cesium 非公开 API（`Texture3D`、`context._gl`、`_currentFramebuffer`、纹理
@@ -407,6 +409,10 @@ node vendor/cesium-geospatial/bin/cli.mjs check \
 表现是页面右上角 `An error occurred while rendering` + 不渲染。纯 Cesium、以及本库仅大气
 都正常，**只要装云就崩**。已验证组合是 **cesium 1.143.0 + `@cesium/engine` 26.1.0 +
 `@cesium/widgets` 16.1.0**（§2 步骤 4 的 overrides 即为此刻锁定）。
+
+`1.146.0` 已列入 `KNOWN_BROKEN_VERSIONS`：安装自检命中即**抛错**（`installAtmosphereClouds`
+直接 reject，不是只打印 warning），错误消息里带上面这条 overrides 模板——不会让你跑到「白屏
++ 控制台报错」才发现。
 
 ### 9.2 `@cesium/engine@26.4.0` 与 cesium 1.143 的 ESM 入口不兼容
 

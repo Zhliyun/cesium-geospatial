@@ -22,6 +22,7 @@
 > （`outputColor` / `outputDepthVelocity`）位置冲突，fragment shader 编译失败、渲染中止
 > （右上角 `An error occurred while rendering`）。把 cesium 钉在 `1.143.0`，并按下面第 4 步
 > 加上 `@cesium/engine` overrides。详见 [docs/integration.md §9.1](docs/integration.md#91-cesium-11460-不能用云-shader-编译失败)。
+> **1.146.0 是已知坏版本：安装自检会直接报错（`installAtmosphereClouds` 抛错），不是只打印 warning。**
 
 ### 1. submodule 引入
 
@@ -99,12 +100,12 @@ window.addEventListener('beforeunload', () => handle.destroy())
 |---|---|---|
 | `1.143.0` | **已验证** | 与 `@cesium/engine@26.1.0` / `@cesium/widgets@16.1.0` 组合；`examples/basic` 与消费方冒烟矩阵均基于此 |
 | `1.143.x` 其他补丁 | 未逐版验证 | 补丁级通常兼容；运行期 `console.warn`，不阻断安装。建议钉 `1.143.0` |
-| `1.146.0` | **已知坏** | 装云时云 shader 编译失败、渲染中止（见上方警告） |
+| `1.146.0` | **已知坏** | 装云时云 shader 编译失败、渲染中止（见上方警告）；**安装自检直接报错，install 时抛错** |
 | 其他 1.x | 未验证 | 运行期 warn；升级前先跑 `examples/basic` 冒烟 |
 
 `peerDependencies` 声明为宽范围 `>=1.143.0 <2.0.0`（避免 npm 7+ ERESOLVE 装不上）；版本/能力
 自检在安装前执行：能力缺失（`Texture3D` / `fragmentDepth` / `depthTexture` / 非 WebGL2 / 非 3D）
-直接抛错，未验证版本只 warn。
+直接抛错；未验证版本只 warn；**已知坏版本（`1.146.0`）与能力缺失同级——直接抛错**。
 
 完整选项、场景接管全表、资产与 CORS、并发与销毁、submodule 升级流程见
 [**docs/integration.md**](docs/integration.md)；API 与类型索引见 [**docs/api.md**](docs/api.md)；

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { checkCompat, TESTED_CESIUM_VERSIONS } from './compat'
+import { checkCompat, KNOWN_BROKEN_VERSIONS, TESTED_CESIUM_VERSIONS } from './compat'
 
 // 基线：全部能力齐备、命中已验证版本表。
 const base = { version: '1.143.0', hasTexture3D: true, webgl2: true, fragmentDepth: true, depthTexture: true, hasGlobe: true, mode: 3, scene3dMode: 3 }
@@ -85,6 +85,35 @@ describe('checkCompat', () => {
       expect(r.errors[0]).toContain('>=1.143.0 <2.0.0')
       expect(r.errors[0]).toContain('已验证版本')
     }
+  })
+
+  it('已知坏版本 1.146.0 → error（不是 warn），消息给出钉 1.143.0 + overrides 模板', () => {
+    expect(KNOWN_BROKEN_VERSIONS).toEqual(['1.146.0'])
+    const r = checkCompat({ ...base, version: '1.146.0' })
+    expect(r.ok).toBe(false)
+    // 已知坏版本不再重复报「未验证版本」warning
+    expect(r.warnings).toEqual([])
+    expect(r.errors).toHaveLength(1)
+    // 修复方案：钉 1.143.0 + 三段 overrides 模板
+    expect(r.errors[0]).toContain('1.143.0')
+    expect(r.errors[0]).toContain('overrides')
+    expect(r.errors[0]).toContain('"@cesium/engine": "26.1.0"')
+    expect(r.errors[0]).toContain('"@cesium/widgets": "16.1.0"')
+  })
+
+  it('邻近版本 1.144.0 仍只 warn（已知坏表只命中列出的版本）', () => {
+    const r = checkCompat({ ...base, version: '1.144.0' })
+    expect(r.ok).toBe(true)
+    expect(r.errors).toEqual([])
+    expect(r.warnings).toHaveLength(1)
+  })
+
+  it('已知坏版本仍保留能力类 error（版本 error 与能力 error 并存）', () => {
+    const r = checkCompat({ ...base, version: '1.146.0', webgl2: false })
+    expect(r.ok).toBe(false)
+    expect(r.errors).toHaveLength(2)
+    expect(r.errors.some((e) => e.includes('已知不可用'))).toBe(true)
+    expect(r.errors.some((e) => e.includes('WebGL2'))).toBe(true)
   })
 
   it('范围内未验证版本（1.144.0）ok + warn；已验证版本（1.143.0）ok 无 warn', () => {

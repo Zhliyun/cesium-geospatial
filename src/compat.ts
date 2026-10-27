@@ -46,6 +46,15 @@ export interface CompatResult {
 /** 已验证的 Cesium 版本表（spec §8.3；升版验收后在此追加）。 */
 export const TESTED_CESIUM_VERSIONS: readonly string[] = Object.freeze(['1.143.0'])
 
+/**
+ * 已知不可用的 Cesium 版本（命中即 error，不只是 warn）。
+ *
+ * `1.146.0` 会自动注入 `out_FragData_*` 片段输出，与本库云 MRT shader 的显式
+ * `layout(location=…)` 冲突 → fragment shader 编译失败、页面渲染中止（docs/integration.md §9.1）。
+ * 这类版本不能降级成 warning：宿主装上的后果是「页面白屏 + 右上角报错」而不是画质差异。
+ */
+export const KNOWN_BROKEN_VERSIONS: readonly string[] = Object.freeze(['1.146.0'])
+
 /** 缺省 peer 范围 `>=1.143.0 <2.0.0`（与根包 package.json 的 peerDependencies 一致）。 */
 const DEFAULT_PEER_RANGE: PeerRange = Object.freeze({
   minMajor: 1,
@@ -96,7 +105,18 @@ export function checkCompat(
     errors.push(`Cesium ${input.version} 超出 peer 依赖范围（要求 ${rangeText}）${tail}`)
   }
 
-  if (!testedVersions.includes(input.version)) {
+  // 已知坏版本：硬失败（渲染循环会直接中止，不能只 warn）。命中时略过「未验证版本」warning，
+  // 避免同一条信息报两遍。
+  const knownBroken = KNOWN_BROKEN_VERSIONS.includes(input.version)
+  if (knownBroken) {
+    errors.push(
+      `Cesium ${input.version} 是已知不可用版本：会自动注入 out_FragData_* 片段输出，与云 MRT shader ` +
+        `的 layout(location=…) 冲突，装云时 fragment shader 编译失败、渲染中止。` +
+        `请把 cesium 钉到 1.143.0，并在宿主 package.json 加 overrides：` +
+        `{"cesium": "1.143.0", "@cesium/engine": "26.1.0", "@cesium/widgets": "16.1.0"}` +
+        `（详见 docs/integration.md §9.1）${tail}`
+    )
+  } else if (!testedVersions.includes(input.version)) {
     warnings.push(
       `Cesium 版本 ${input.version} 不在已验证版本表（${tested}）内，可能出现未预期的渲染差异`
     )
