@@ -318,7 +318,7 @@ add 时机由消费者编排，否则云不可见：
 pnpm dev                 # 启动 demo
 pnpm test                # 全部 workspace 测试（含 GLSL 编译测试，依赖 glslangValidator：brew install glslang）
 pnpm build               # 构建产品包（dist + d.ts + build-stamp）
-pnpm run verify          # 全链门禁：tsc → vitest → build → assert-dist → 消费方类型 → 冒烟矩阵
+pnpm run verify          # 全链门禁：tsc → 根 vitest → 子包 vitest（core+clouds 含 GLSL 编译）→ build → assert-dist → 消费方类型 → 冒烟矩阵
 
 # 单包测试 / 单文件 / 按用例名过滤
 pnpm --filter @cesium-geospatial/core test

@@ -35,7 +35,7 @@
     "build": "vite build && node scripts/build-dts.mjs && node scripts/write-build-stamp.mjs",
     "prepare": "pnpm run build",
     "test": "vitest run && pnpm -r test",
-    "verify": "tsc --noEmit && vitest run && pnpm run build && node scripts/assert-dist.mjs && node scripts/assert-consumer-types.mjs && node scripts/smoke-consumers.mjs"
+    "verify": "tsc --noEmit && vitest run && pnpm -r test && pnpm run build && node scripts/assert-dist.mjs && node scripts/assert-consumer-types.mjs && node scripts/smoke-consumers.mjs"
   },
   "peerDependencies": {
     "cesium": ">=1.143.0 <2.0.0"

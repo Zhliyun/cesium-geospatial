@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 pnpm dev                      # 启动 demo（= pnpm --filter demo dev，Vite dev server）
 pnpm test                     # 跑全部 workspace 测试（pnpm -r test）
 pnpm build                    # 构建产品包（dist + d.ts + build-stamp）
-pnpm run verify               # 全链门禁：tsc → vitest → build → assert-dist → 消费方类型 → 冒烟矩阵
+pnpm run verify               # 全链门禁：tsc → 根 vitest → 子包 vitest（core+clouds 含 GLSL 编译）→ build → assert-dist → 消费方类型 → 冒烟矩阵
 node bin/cli.mjs check --root .   # 源码哈希 vs dist/build-stamp.json（改源码未重建 → 退出码 1）
 
 # 核心库测试（@cesium-geospatial/core）
