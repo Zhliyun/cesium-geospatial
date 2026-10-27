@@ -210,6 +210,10 @@ const pending = new Map<Scene, Promise<AtmosphereCloudsHandle>>()
 const installed = new Map<Scene, AtmosphereCloudsHandle>()
 /** 活跃安装的生命周期记录（取消进行中的安装；成功后在 handle.destroy 时摘除）。 */
 const lifecycleRecords = new Map<Scene, LifecycleRecord>()
+/** scene → 最近一次接管的安装代次；旧代次的回滚不得还原场景（spec §8.2 并发与幂等）。 */
+const sceneGenerations = new WeakMap<Scene, number>()
+/** 已被 disposeAllForHmr 取消、但尚未 settle 的安装 Promise（新安装必须等它回滚完）。 */
+const cancelledInstalls = new WeakSet<Promise<AtmosphereCloudsHandle>>()
 
 /**
  * 创建生命周期记录，并在**第一个 await 之前**包装宿主 `destroy`（spec §8.1 步骤 1）。
@@ -291,12 +295,16 @@ function createLifecycleRecord(
  * `handle.destroy()`、target 销毁或安装失败后返回 false。
  */
 export function isInstalled(target: AtmosphereCloudsTarget): boolean {
-  return installed.has(resolveScene(target))
+  const resolution = resolveSceneSafely(target)
+  return resolution.ok && installed.has(resolution.scene)
 }
 
 /**
  * HMR 清理钩子（spec §8.2）：销毁全部已安装 handle、取消进行中的安装、恢复所有
- * destroy 包装并清空两个注册表。宿主场景本身不被销毁。
+ * destroy 包装。宿主场景本身不被销毁。
+ *
+ * **不拆 pending 条目**：取消后条目保留到各自 settle，同 scene 的新安装据此等待旧回滚
+ * 完成，避免捕获到旧安装接管后的场景状态（spec §8.2 并发与幂等）。
  */
 export function disposeAllForHmr(): void {
   for (const handle of [...installed.values()]) {
@@ -307,18 +315,52 @@ export function disposeAllForHmr(): void {
     }
   }
   // 进行中的安装：置取消标记并立即恢复包装；其 Promise 在下一个检查点回滚并 reject。
+  for (const promise of pending.values()) {
+    cancelledInstalls.add(promise)
+  }
   for (const record of [...lifecycleRecords.values()]) {
     record.cancel()
     record.restoreWrapper()
   }
-  pending.clear()
   installed.clear()
 }
 
-/** Viewer/CesiumWidget 有 `.scene`；Scene 自身没有，直接返回。 */
-function resolveScene(target: AtmosphereCloudsTarget): Scene {
+/** 解析安装目标的结果：失败时携带可直接面向用户的明确原因（不泄漏 TypeError）。 */
+type SceneResolution =
+  | { readonly ok: true; readonly scene: Scene }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * 解析 target → scene，并识别「target 已销毁」。
+ *
+ * Cesium 的 `Viewer.destroy()` 末尾会把 `_cesiumWidget` 置空：此后 `viewer.scene` getter
+ * 可能返回 undefined，也可能解引用空对象直接抛 TypeError。两者都必须降级为明确错误，
+ * 不能让 TypeError 泄漏给调用方（spec §8.2 并发与幂等）。
+ */
+function resolveSceneSafely(target: AtmosphereCloudsTarget): SceneResolution {
   const wrapper = target as { scene?: Scene }
-  return wrapper.scene ?? (target as Scene)
+  let scene: Scene | undefined
+  try {
+    scene = wrapper.scene
+  } catch {
+    return {
+      ok: false,
+      reason: 'target 已销毁，scene 不可用（Viewer/CesiumWidget.destroy 之后请新建 target）'
+    }
+  }
+  const resolved = scene ?? (target as Scene)
+  let destroyed = false
+  try {
+    const isDestroyed = (resolved as { isDestroyed?: () => boolean }).isDestroyed
+    destroyed = typeof isDestroyed === 'function' && resolved.isDestroyed()
+  } catch {
+    // isDestroyed 理论上不抛；若被宿主包装破坏，按已销毁处理（宁可明确报错）。
+    destroyed = true
+  }
+  if (destroyed) {
+    return { ok: false, reason: 'Scene 已销毁，无法安装（destroy 之后请新建 target）' }
+  }
+  return { ok: true, scene: resolved }
 }
 
 /**
@@ -421,11 +463,22 @@ export function installWithDeps(
   options: InstallOptions | undefined,
   deps: InstallDeps
 ): Promise<AtmosphereCloudsHandle> {
-  const scene = resolveScene(target)
+  const resolution = resolveSceneSafely(target)
+  if (!resolution.ok) {
+    // 已销毁 target：返回明确错误而不是让 TypeError 泄漏（spec §8.2）。
+    return Promise.reject(new Error(`${WARN_PREFIX} 无法安装：${resolution.reason}`))
+  }
+  const scene = resolution.scene
 
   // ── 并发与幂等（spec §8.2）：按 scene 去重，第二次调用拿到同一 Promise/handle ──
   const inFlight = pending.get(scene)
   if (inFlight != null) {
+    if (cancelledInstalls.has(inFlight)) {
+      // 旧安装已取消但尚未回滚：等它 settle（吞掉 rejection）再开始。否则会捕获到
+      // 旧安装接管后的场景状态，旧回滚一执行就把新接管整体推翻（spec §8.2 并发与幂等）。
+      const retry = (): Promise<AtmosphereCloudsHandle> => installWithDeps(target, options, deps)
+      return inFlight.then(retry, retry)
+    }
     warn('该 Scene 正在安装中：本次调用的 options 未生效，返回进行中的安装 Promise')
     return inFlight
   }
@@ -444,6 +497,7 @@ export function installWithDeps(
     if (pending.get(scene) === promise) {
       pending.delete(scene)
     }
+    cancelledInstalls.delete(promise)
   }
   void promise.then(settle, settle)
   return promise
@@ -464,6 +518,12 @@ async function runInstall(
   // ── 步骤 1（spec §8.1）：生命周期记录 + destroy 包装，必须先于第一个 await ──
   const record = createLifecycleRecord(target, scene, opts.autoDestroy !== false)
   lifecycleRecords.set(scene, record)
+
+  // 安装代次（spec §8.2）：每次接管递增。旧代次的 rollback / handle.destroy 只销毁
+  // 自己的 stage 与纹理，**不还原场景**——否则会推翻更新代次的接管。
+  let generation = 0
+  const isCurrentGeneration = (): boolean =>
+    generation !== 0 && sceneGenerations.get(scene) === generation
 
   /** 每个 await 之后调用：取消由包装后的 destroy 同步置位（不是轮询）。 */
   const assertActive = (): void => {
@@ -518,7 +578,8 @@ async function runInstall(
       quietly('大气 stage', () => handle.destroy())
     }
     releaseTextures()
-    if (takeover != null) {
+    // 旧代次只销毁自己的资源，不还原场景（否则会推翻更新代次的接管）。
+    if (takeover != null && isCurrentGeneration()) {
       const sceneTakeover = takeover
       quietly('场景还原', () => sceneTakeover.restore())
     }
@@ -558,6 +619,8 @@ async function runInstall(
     // ── 场景快照 + 接管，随后读回校验对数深度（spec §8.1 步骤 3） ──
     const state = captureSceneState(scene)
     takeover = applySceneTakeover(scene, state, { enabled: opts.takeOverScene !== false })
+    generation = (sceneGenerations.get(scene) ?? 0) + 1
+    sceneGenerations.set(scene, generation)
     if (scene.logarithmicDepthBuffer !== true) {
       takeover.restore()
       throw new Error(
@@ -753,7 +816,8 @@ async function runInstall(
         quietly('大气 stage', () => atmosphereHandle.destroy())
         releaseTextures()
         // spec §7.6 / 反目标：destroy 后场景设置必须与安装前一致（无条件按快照还原）。
-        if (takeover != null) {
+        // 代次守卫：已有更新的接管时不还原，避免推翻新安装。
+        if (takeover != null && isCurrentGeneration()) {
           const sceneTakeover = takeover
           quietly('场景还原', () => sceneTakeover.restore())
         }

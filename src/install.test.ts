@@ -98,20 +98,40 @@ function makeScene(): FakeScene {
 const asScene = (fake: FakeScene): Scene => fake as unknown as Scene
 
 interface FakeViewer {
-  scene: Scene
+  readonly scene: Scene | undefined
+  isDestroyed: () => boolean
   destroy: () => void
 }
 
 /**
  * 假 Viewer：`destroy` 写进 order 并把 scene 标记为已销毁——与 Cesium 的
  * `viewer.destroy()` 真实后果一致（GL 资源随 scene 释放）。
+ *
+ * 真实 Cesium 在 `Viewer.destroy()` 末尾把 `_cesiumWidget` 置空，此后 `viewer.scene`
+ * getter 要么返回 undefined、要么解引用空对象抛 TypeError。`throwSceneGetterAfterDestroy`
+ * 用来覆盖后一种（更严苛）行为。
  */
-function makeViewer(fakeScene: FakeScene, order: string[]) {
+function makeViewer(
+  fakeScene: FakeScene,
+  order: string[],
+  opts: { throwSceneGetterAfterDestroy?: boolean } = {}
+) {
+  let destroyed = false
   const original = vi.fn(() => {
     order.push('viewer.destroy.original')
     fakeScene.destroyed = true
+    destroyed = true
   })
-  const viewer: FakeViewer = { scene: asScene(fakeScene), destroy: original }
+  const viewer: FakeViewer = {
+    get scene(): Scene | undefined {
+      if (destroyed && opts.throwSceneGetterAfterDestroy === true) {
+        throw new TypeError("Cannot read properties of undefined (reading 'scene')")
+      }
+      return destroyed ? undefined : asScene(fakeScene)
+    },
+    isDestroyed: () => destroyed,
+    destroy: original
+  }
   return { viewer, original }
 }
 
@@ -816,10 +836,8 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
     }
     expect(isInstalled(target)).toBe(false)
 
-    // 无残留：对已销毁 scene 再装会在第一个检查点立即取消，不产生任何资源
-    await expect(installWithDeps(target, {}, f.deps)).rejects.toBeInstanceOf(
-      InstallCancelledError
-    )
+    // 无残留：对已销毁 target 再装 → 明确报错（不是 TypeError，也不产生任何资源）
+    await expect(installWithDeps(target, {}, f.deps)).rejects.toThrow(/已销毁/)
     expect(f.deps.createAtmosphere).not.toHaveBeenCalled()
   })
 
@@ -1011,5 +1029,84 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
     }
     expect(f.scene.highDynamicRange).toBe(true)
     expect(f.deps.createAtmosphere).not.toHaveBeenCalled()
+  })
+
+  it('HMR 取消后立即重装：旧安装回滚不推翻新安装的接管（等旧 settle + 代次守卫）', async () => {
+    const f = setup()
+    const scene = f.scene
+    const { viewer, original } = makeViewer(scene, f.order)
+    const target = asTarget(viewer)
+
+    // #1 卡在 loadLuts
+    let resolveLuts1!: (luts: AtmosphereLUTs) => void
+    f.deps.loadLuts.mockImplementationOnce(
+      () =>
+        new Promise<AtmosphereLUTs>((resolve) => {
+          resolveLuts1 = resolve
+        })
+    )
+
+    const first = installWithDeps(target, {}, f.deps)
+    expect(scene.highDynamicRange).toBe(false) // #1 已接管（快照 S0）
+    expect(viewer.destroy).not.toBe(original)
+
+    disposeAllForHmr() // 取消 #1（pending 保留到 settle），恢复包装
+    expect(viewer.destroy).toBe(original)
+
+    // #2 开始：必须等 #1 回滚完，不能捕获「已接管的 S1」
+    const second = installWithDeps(target, {}, f.deps)
+    expect(scene.highDynamicRange).toBe(false) // #2 尚未接管
+
+    // #1 解除卡点 → 取消回滚（还原 S0）→ #2 才捕获 S0 并重新接管
+    resolveLuts1(lutsOf(f.textures))
+    await expect(first).rejects.toBeInstanceOf(InstallCancelledError)
+
+    const handle2 = await second
+    expect(scene.highDynamicRange).toBe(false)
+    expect(scene.logarithmicDepthBuffer).toBe(true)
+    expect(scene.skyAtmosphere.show).toBe(false)
+    expect(scene.globe.enableLighting).toBe(false)
+
+    // #2 destroy → 场景回到安装前的 S0（若旧回滚推翻了 #2，这里会停在接管态）
+    handle2.destroy()
+    expect(scene.highDynamicRange).toBe(true)
+    expect(scene.logarithmicDepthBuffer).toBe(false)
+    expect(scene.skyAtmosphere.show).toBe(true)
+    expect(scene.globe.enableLighting).toBe(true)
+    expect(f.deps.loadLuts).toHaveBeenCalledTimes(2)
+  })
+
+  it('target 已销毁（viewer.scene 返回 undefined）：isInstalled=false，install 抛明确错误而非 TypeError', async () => {
+    const f = setup()
+    const { viewer } = makeViewer(f.scene, f.order)
+    const target = asTarget(viewer)
+    const handle = await installWithDeps(target, {}, f.deps)
+    expect(isInstalled(target)).toBe(true)
+
+    viewer.destroy() // 已安装路径：联动 handle.destroy + 场景销毁
+
+    expect(isInstalled(target)).toBe(false)
+    const error: unknown = await installWithDeps(target, {}, f.deps).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).name).toBe('Error')
+    expect((error as Error).message).toMatch(/已销毁/)
+    expect((error as Error).message).not.toMatch(/Cannot read properties/)
+    // 已被 viewer.destroy 联动销毁的 handle 仍幂等
+    expect(() => handle.destroy()).not.toThrow()
+  })
+
+  it('target 已销毁（viewer.scene getter 抛 TypeError）：同样降级为 false / 明确错误', async () => {
+    const f = setup()
+    const { viewer } = makeViewer(f.scene, f.order, { throwSceneGetterAfterDestroy: true })
+    const target = asTarget(viewer)
+    await installWithDeps(target, {}, f.deps)
+
+    viewer.destroy()
+
+    expect(isInstalled(target)).toBe(false)
+    const error: unknown = await installWithDeps(target, {}, f.deps).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).name).toBe('Error')
+    expect((error as Error).message).toMatch(/已销毁/)
   })
 })
