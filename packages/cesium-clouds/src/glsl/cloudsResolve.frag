@@ -302,6 +302,19 @@ void temporalUpscale(
   // 近地平线竖偏 1px ≈ 沿视线数公里深度差）。远段只需要「更长的平均窗」，不需要「无界历史」。
   vec4 accumColor = clippedColor;
   float blendAlpha = mix(u_temporalBlend, u_temporalBlendFar, farT);
+  // 【2026-10-27 自适应 α（temporal-opt 首选）】重投影**可靠**的像素（屏幕速度小、历史与当前
+  // 亮度一致）用长窗 1/32 → 时间平均拉长 3 倍、颗粒 σ 降 30-40%；不可靠时退回 u_temporalBlend。
+  // 零额外采样（复用已算的 velPx 与两个颜色点积），拖影上界由「亮度不一致即切短窗」保证。
+  // 强度由 u_blendDepthFalloff 承担（此前在 upscale 分支未被消费），0 = 完全关闭。
+  if (u_blendDepthFalloff > 0.0) {
+    const vec3 LUMA_W = vec3(0.299, 0.587, 0.114);
+    float dLum = abs(dot(historyColor.rgb - currentColor.rgb, LUMA_W));
+    // 拖影的真正上界是「历史与当前亮度不一致」，不是速度本身——速度阈值放宽到 12–40px/帧，
+    // 常规旋转（~9px/帧）仍算可靠 → 吃长窗降颗粒；重投影一旦失准，dLum 立刻把窗口切短。
+    float unreliable = max(smoothstep(12.0, 40.0, velPx), smoothstep(0.004, 0.02, dLum));
+    float alphaAd = mix(0.03125, max(u_temporalBlend, 0.03125), clamp(unreliable, 0.0, 1.0));
+    blendAlpha = mix(blendAlpha, alphaAd, clamp(u_blendDepthFalloff, 0.0, 1.0));
+  }
   outputColor = mix(accumColor, currentColor, blendAlpha);
   // 【outputColorSanityGuard】NaN 兜底：任何上游残留 NaN（含 mix 的 IEEE 传播）直出 current。
   if (any(isnan(outputColor.rgb))) {

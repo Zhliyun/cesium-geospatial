@@ -1116,6 +1116,8 @@ function buildCloudsStageImpl(
           )
           // 运动时远处云用长窗平均（视差小、重投影精确）；静止不启用（保持现收敛档）
           resolvePass?.setBlendDepthFalloff(
+            // 缺省 0（关）：实测收益仅 rotate 13.0→12.6、追平 0.068→0.073（略差），
+            // 收益不足以承担拖影风险，改为按需开启：?cloudsMotionBlendDepthFalloff=1
             still ? 0 : (options.motionBlendDepthFalloff ?? 0)
           )
           // 远段长窗（仅运动时）：>50km smoothstep 到 α=0.05（20 帧）。远云视差小、重投影近乎
