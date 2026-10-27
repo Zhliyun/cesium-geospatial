@@ -187,6 +187,7 @@ cesium-geospatial/                 # 根 package.json = 产品包
 | `scene.globe.showGroundAtmosphere` | `false` | |
 | `scene.globe.enableLighting` | `false` | 同时丢 Cesium 地形阴影，文档明示 |
 | `scene.backgroundColor` | `Color.BLACK` | |
+| `scene.globe.baseColor` | `#3a3a3a`（`Color(58/255,58/255,58/255,1)`） | 无影像（`baseLayer:false` / 裸 globe）时的地球占位底色。依据 demo `apps/demo/src/main.ts:256-271`（`globe.baseColor = '#3a3a3a'`，低 LOD 占位色）。Cesium 缺省为 `Color(0,0,0.5,1)` 深蓝，不接管会让半透明云层透出的底色偏蓝、产品与 demo 画面不等价（2026-10-28 像素对照 maxΔ16/over3 56.7% → 对齐后 maxΔ1/over3 0，§10.1 裁定并入） |
 
 规则：
 

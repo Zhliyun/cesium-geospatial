@@ -42,7 +42,7 @@ function installAtmosphereClouds(
 
 1. 解析 `scene`；**在第一个 await 之前**包装 `viewer.destroy` / `widget.destroy`（`autoDestroy` 时），使安装中的销毁可取消；
 2. Cesium 版本 / 能力自检 + 安装前置检查（既有 postProcessStage、3D 模式）；
-3. 场景快照 + 接管（12 项，见 [integration.md §4](./integration.md#4-场景接管12-项与无条件还原)），读回校验对数深度；
+3. 场景快照 + 接管（13 项，见 [integration.md §4](./integration.md#4-场景接管13-项与无条件还原)），读回校验对数深度；
 4. 解析资产 URL 并加载 LUT（`clouds: false` 时跳过 8MB `higher_order_scattering.bin`）、加载月面纹理会合成；
 5. `createAtmosphereStage`（云桥闭包惰性求值）；
 6. `loadWeatherTextures` → `createCloudsStage`（`clouds: false` 跳过）；给了 `quality` 才 `setQuality`；

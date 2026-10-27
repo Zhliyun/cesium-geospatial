@@ -8,7 +8,7 @@
 // 1. **无条件还原**：接管（`enabled: true`）期间 restore 按快照逐项写回，不做
 //    「值是否仍等于安装值」的归属判定。宿主在安装期间改过的设置也会被还原——文档
 //    必须明示「安装期间不要改这些设置，或 destroy 后重新应用」。`takeOverScene: false`
-//    时本库从未改过这 11 项，restore **不得**写回（否则会静默覆盖宿主自己管的设置）。
+//    时本库从未改过这 12 项，restore **不得**写回（否则会静默覆盖宿主自己管的设置）。
 // 2. **按对象记录快照**：globe / skyAtmosphere / skyBox / sun / moon / fog 上的设置
 //    在捕获时记录对象引用；宿主替换对象后，旧值只写回捕获时的旧对象，不落到新对象上。
 // 3. **`takeOverScene: false` 仍快照并还原 `depthTestAgainstTerrain`**：底层
@@ -36,6 +36,20 @@ const BLACK: Color = Object.freeze({
 }) as unknown as Color
 
 /**
+ * 安装值 `scene.globe.baseColor = Color.fromCssColorString('#3a3a3a')` 的结构等价体。
+ * 与 demo 验收档逐值一致（`apps/demo/src/main.ts:271`）：无影像（`baseLayer:false` /
+ * 裸 globe）时地球的占位底色。Cesium 缺省是 `Color(0,0,0.5,1)` 深蓝——不接管会让
+ * 半透明云层透出的底色偏蓝，产品画面与 demo 不等价（Task 14 像素对照实测：
+ * maxΔ16/over3 56.7% → 对齐后 maxΔ1/over3 0）。冻结以防被就地改写。
+ */
+const DEMO_BASE_COLOR: Color = Object.freeze({
+  red: 58 / 255,
+  green: 58 / 255,
+  blue: 58 / 255,
+  alpha: 1
+}) as unknown as Color
+
+/**
  * 安装前的场景快照。
  *
  * 对象级设置同时记录「捕获时的对象引用」和「被设置的值」；还原只写回捕获对象，
@@ -55,10 +69,12 @@ export interface SceneState {
   readonly highDynamicRange: boolean
   readonly requestRenderMode: boolean
   readonly backgroundColor: Color
-  /** globe 级 3 项（挂在 {@link globe} 记录的对象上）。 */
+  /** globe 级 4 项（挂在 {@link globe} 记录的对象上）。 */
   readonly depthTestAgainstTerrain: boolean
   readonly showGroundAtmosphere: boolean
   readonly enableLighting: boolean
+  /** 无影像时的地球占位底色；globe 不存在时为 undefined（apply/restore 跳过）。 */
+  readonly baseColor: Color | undefined
   /** 天空/天空盒/太阳/月亮/雾的可见性（对象不存在时为 undefined）。 */
   readonly skyAtmosphereShow: boolean | undefined
   readonly skyBoxShow: boolean | undefined
@@ -79,7 +95,7 @@ export interface SceneTakeover {
   readonly applied: boolean
 }
 
-/** 捕获 scene 的 12 项设置与相关对象引用（不修改 scene）。 */
+/** 捕获 scene 的 13 项设置与相关对象引用（不修改 scene）。 */
 export function captureSceneState(scene: Scene): SceneState {
   const globe = scene.globe as Scene['globe'] | undefined
   return {
@@ -96,6 +112,7 @@ export function captureSceneState(scene: Scene): SceneState {
     depthTestAgainstTerrain: globe ? globe.depthTestAgainstTerrain : false,
     showGroundAtmosphere: globe ? globe.showGroundAtmosphere : false,
     enableLighting: globe ? globe.enableLighting : false,
+    baseColor: globe ? globe.baseColor : undefined,
     skyAtmosphereShow: scene.skyAtmosphere?.show,
     skyBoxShow: scene.skyBox?.show,
     sunShow: scene.sun?.show,
@@ -106,7 +123,7 @@ export function captureSceneState(scene: Scene): SceneState {
 
 /**
  * 接管 scene（spec §7.6 全表）。`enabled: false` 时只强制
- * `depthTestAgainstTerrain = true`（规则 3），其余 11 项不动。
+ * `depthTestAgainstTerrain = true`（规则 3），其余 12 项不动。
  *
  * 返回的 handle 提供幂等的 `restore()`；安装期间宿主替换的对象不会被写入旧值。
  */
@@ -124,7 +141,7 @@ export function applySceneTakeover(
   }
 
   if (opts.enabled) {
-    // —— spec §7.6 接管表（12 项）——
+    // —— spec §7.6 接管表（13 项）——
     // 1. 对数深度缓冲：多视锥合并的前提（读回校验由 install 层执行）。
     scene.logarithmicDepthBuffer = true
     // 2. depthTestAgainstTerrain 已在上方无条件设置。
@@ -155,6 +172,11 @@ export function applySceneTakeover(
     }
     // 12. 固定清屏色（天空由大气 stage 全屏覆盖）。
     scene.backgroundColor = BLACK
+    // 13. 无影像底色对齐 demo 验收档 #3a3a3a（Cesium 缺省 Color(0,0,0.5,1) 深蓝：
+    //     无影像部署时半透明云层透出的底色会偏蓝，产品画面与 demo 不等价）。
+    if (globe) {
+      globe.baseColor = DEMO_BASE_COLOR
+    }
   }
 
   let restored = false
@@ -174,7 +196,7 @@ export function applySceneTakeover(
         state.globe.depthTestAgainstTerrain = state.depthTestAgainstTerrain
       }
 
-      // takeOverScene:false = 本库从未改过其余 11 项：不得写回（否则会静默覆盖宿主
+      // takeOverScene:false = 本库从未改过其余 12 项：不得写回（否则会静默覆盖宿主
       // 在安装期间自己设置的值）；requestRenderMode 也没动过，无需补帧。
       if (!opts.enabled) return
 
@@ -202,12 +224,15 @@ export function applySceneTakeover(
         state.fog.enabled = state.fogEnabled
       }
 
-      // 10-11. globe 级：写捕获时的 globe 对象（规则 2）——宿主替换后的新 globe
-      // 保持自己的值，不会被写回旧值。（第 12 项 depthTestAgainstTerrain 在上方
+      // 10-11、13. globe 级：写捕获时的 globe 对象（规则 2）——宿主替换后的新 globe
+      // 保持自己的值，不会被写回旧值。（第 2 项 depthTestAgainstTerrain 在上方
       // enabled 门控之外已还原。）
       if (state.globe) {
         state.globe.showGroundAtmosphere = state.showGroundAtmosphere
         state.globe.enableLighting = state.enableLighting
+        if (state.baseColor !== undefined) {
+          state.globe.baseColor = state.baseColor
+        }
       }
 
       // 规则 4：requestRenderMode 恢复为 true 时补一帧（否则引擎不再自动渲染，

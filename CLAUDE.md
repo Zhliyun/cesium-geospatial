@@ -40,7 +40,7 @@ pnpm --filter @cesium-geospatial/clouds exec tsc --noEmit
 
 ### Monorepo 布局（pnpm workspace）
 
-- **根包（`cesium-geospatial`）：产品包本身**（deck.gl 模式，`private: true` 只挡 npm publish）。`src/` 是编排层（`install.ts` 并发/取消/回滚、`sceneTakeover.ts` 12 项接管与无条件还原、`assets.ts` URL+字节校验、`compat.ts` 版本自检、`moonTexture.ts` 月面合成）；`bin/cli.mjs` 提供 `copy-assets` / `check`；`assets/` 是唯一资产源；`dist/` 是消费方唯一可见产物（Vite lib mode 三入口 `index`/`core`/`clouds` + d.ts + build-stamp，GLSL 已内联，消费方不需要 `?raw`）。
+- **根包（`cesium-geospatial`）：产品包本身**（deck.gl 模式，`private: true` 只挡 npm publish）。`src/` 是编排层（`install.ts` 并发/取消/回滚、`sceneTakeover.ts` 13 项接管与无条件还原、`assets.ts` URL+字节校验、`compat.ts` 版本自检、`moonTexture.ts` 月面合成）；`bin/cli.mjs` 提供 `copy-assets` / `check`；`assets/` 是唯一资产源；`dist/` 是消费方唯一可见产物（Vite lib mode 三入口 `index`/`core`/`clouds` + d.ts + build-stamp，GLSL 已内联，消费方不需要 `?raw`）。
 - `packages/cesium-core`（`@cesium-geospatial/core`）：核心库。`cesium` 为 peerDependency（消费者自带）。导出 shader 组装器、LUT 加载、`createAtmosphereStage`。
 - `packages/cesium-clouds`（`@cesium-geospatial/clouds`）：体积云库。raymarch 主 march + 级联 BSM（世界锚定）+ god rays 光柱 + 时序重建 + 质量档位（low/medium/high/ultra）+ 天气图烘焙/演化/平流。导出 `createCloudsStage`（返回 `overlayStage`，**不自动 add**——消费者插到 atmosphere 与 lensFlare 之间，见 README）。
 - `apps/demo`：Vite + 原生 Cesium `Viewer` 的验收 demo，URL 参数化（见下）。依赖 `core`/`clouds` via `workspace:*`。

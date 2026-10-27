@@ -163,7 +163,7 @@ window.addEventListener('beforeunload', () => handle.destroy())
 
 ---
 
-## 4. 场景接管（12 项）与无条件还原
+## 4. 场景接管（13 项）与无条件还原
 
 安装时按下列表写值；`handle.destroy()` 时**按安装前的快照逐项写回**（不做「值是否仍等于安装值」
 的归属判断）。含义：**安装期间宿主自己改这些设置，destroy 后也会被还原**——需要保留的宿主
@@ -183,12 +183,13 @@ window.addEventListener('beforeunload', () => handle.destroy())
 | 10 | `scene.globe.showGroundAtmosphere` | `false` | |
 | 11 | `scene.globe.enableLighting` | `false` | **同时丢掉 Cesium 原生地形阴影** |
 | 12 | `scene.backgroundColor` | `Color.BLACK` | 清屏色由大气 stage 全屏覆盖 |
+| 13 | `scene.globe.baseColor` | `#3a3a3a`（`Color(58/255,58/255,58/255,1)`） | 无影像（`baseLayer:false` / 裸 globe）时的地球占位底色，对齐 demo 验收档。Cesium 缺省是深蓝 `Color(0,0,0.5,1)`：不接管时半透明云层透出的底色偏蓝，产品与 demo 画面不等价（2026-10-28 裁定） |
 
 还原规则补充：
 
 - **按对象记录快照**：`globe` / `skyAtmosphere` / `skyBox` / `sun` / `moon` / `fog` 上的设置记在
   捕获时的对象上。宿主在安装期间替换了 `scene.globe` 等对象，旧值不会写到新对象上。
-- `takeOverScene: false`：本库从未改过第 1、3–12 项，destroy **不写回**（避免静默覆盖宿主
+- `takeOverScene: false`：本库从未改过第 1、3–13 项，destroy **不写回**（避免静默覆盖宿主
   在安装期间自己设置的值）；只还原第 2 项。
 - 3D 守卫：`morphStart` 时立即停用本库全部 stage 与云（含 march / resolve primitive），
   `morphComplete` 回到 `SCENE3D` 按 morph 前的启用态恢复（宿主手动关过的云不会被复活）；
