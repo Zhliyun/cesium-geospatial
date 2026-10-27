@@ -46,6 +46,27 @@ interface FakePostProcessStages {
   bloom: { enabled: boolean }
   fxaa: { enabled: boolean }
 }
+/** Cesium Event 最小结构：addEventListener 返回移除函数，removeEventListener 按引用摘除。 */
+interface FakeEvent {
+  listeners: Set<() => void>
+  addEventListener: ReturnType<typeof vi.fn>
+  removeEventListener: ReturnType<typeof vi.fn>
+}
+
+function makeFakeEvent(): FakeEvent {
+  const listeners = new Set<() => void>()
+  return {
+    listeners,
+    addEventListener: vi.fn((listener: () => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    }),
+    removeEventListener: vi.fn((listener: () => void) => {
+      listeners.delete(listener)
+    })
+  }
+}
+
 interface FakeScene {
   globe: FakeGlobe
   skyAtmosphere: { show: boolean }
@@ -64,6 +85,9 @@ interface FakeScene {
   postProcessStages: FakePostProcessStages
   context: { webgl2: boolean }
   mode: number
+  /** 3D 模式守卫（spec §7.6 / Task 10A）：morph 事件的结构化假对象。 */
+  morphStart: FakeEvent
+  morphComplete: FakeEvent
 }
 
 const ORIGINAL_BACKGROUND: FakeColor = { red: 0.1, green: 0.2, blue: 0.3, alpha: 1 }
@@ -90,7 +114,9 @@ function makeScene(): FakeScene {
       fxaa: { enabled: false }
     },
     context: { webgl2: true },
-    mode: 3
+    mode: 3,
+    morphStart: makeFakeEvent(),
+    morphComplete: makeFakeEvent()
   }
   return scene
 }
@@ -170,8 +196,17 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
 
   function makeAtmosphere(order: string[]) {
     const inserted: PostProcessStage[] = []
+    // 3D 守卫（Task 10A）会按快照切换这四个 stage 的 enabled——假 stage 需要真实可写的
+    // enabled 字段（depthTemporal 透传模式恒 false 的快照恢复用例用它）。
+    const atmosphereStage = { enabled: true } as unknown as PostProcessStage
+    const tonemapStage = { enabled: true } as unknown as PostProcessStage
+    const lensFlareStage = { enabled: true } as unknown as PostProcessStageComposite
+    const depthTemporalStage = { enabled: true } as unknown as PostProcessStage
     const handle = {
-      atmosphereStage: {} as PostProcessStage,
+      atmosphereStage,
+      tonemapStage,
+      lensFlareStage,
+      depthTemporalStage,
       insertStageBeforeLensFlare: vi.fn(
         (stage: PostProcessStage | PostProcessStageComposite, _opts?: { protectedStage?: boolean }) => {
           inserted.push(stage as PostProcessStage)
@@ -201,6 +236,7 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
       cloudsPass,
       overlayStage,
       setQuality: vi.fn(),
+      setEnabled: vi.fn(),
       getGroundShadowBridgeData: vi.fn(() => groundShadowBridge),
       destroy: vi.fn(() => {
         order.push('clouds.destroy')
@@ -310,6 +346,11 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
 
   const callOrder = (mock: { mock: { invocationCallOrder: readonly number[] } }): number =>
     mock.mock.invocationCallOrder[0]
+
+  /** 触发 Cesium Event 假对象的全部监听（morph 事件用例用）。 */
+  const fire = (event: FakeEvent): void => {
+    for (const listener of [...event.listeners]) listener()
+  }
 
   // ── happy path ──
 
@@ -1108,5 +1149,118 @@ describe('install 编排（spec §8.1/§8.2/§8.5）', () => {
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).name).toBe('Error')
     expect((error as Error).message).toMatch(/已销毁/)
+  })
+
+  // ── 3D 模式守卫（spec §7.6 / Task 10A） ──
+
+  it('morphStart 停用全部自有 stage 与云；morphComplete 回 SCENE3D 按快照恢复', async () => {
+    const f = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // depthTemporal 透传模式（temporalEma=false）时 enabled 恒 false——恢复不得强制改 true，
+    // 否则改变 3D 渲染行为。
+    f.atmosphere.mock.depthTemporalStage.enabled = false
+    const handle = await install(f)
+
+    // 注册在安装末尾：两个 morph 事件各一个监听
+    expect(f.scene.morphStart.addEventListener).toHaveBeenCalledTimes(1)
+    expect(f.scene.morphComplete.addEventListener).toHaveBeenCalledTimes(1)
+
+    // 进入 morph：全部自有 stage 停用 + 云 setEnabled(false) + 警告一次
+    f.scene.mode = 1 // SceneMode.MORPHING
+    fire(f.scene.morphStart)
+    expect(f.atmosphere.mock.depthTemporalStage.enabled).toBe(false)
+    expect(f.atmosphere.mock.atmosphereStage.enabled).toBe(false)
+    expect(f.atmosphere.mock.lensFlareStage.enabled).toBe(false)
+    expect(f.atmosphere.mock.tonemapStage.enabled).toBe(false)
+    expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(false)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]![0]).toMatch(/非 3D/)
+
+    // 回到 3D：恢复快照（depthTemporal 维持 false）；云重新启用
+    f.scene.mode = 3 // SceneMode.SCENE3D
+    fire(f.scene.morphComplete)
+    expect(f.atmosphere.mock.atmosphereStage.enabled).toBe(true)
+    expect(f.atmosphere.mock.lensFlareStage.enabled).toBe(true)
+    expect(f.atmosphere.mock.tonemapStage.enabled).toBe(true)
+    expect(f.atmosphere.mock.depthTemporalStage.enabled).toBe(false)
+    expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(true)
+
+    // 第二个 morph 周期：无需再警告（per install 只一次）
+    f.scene.mode = 1
+    fire(f.scene.morphStart)
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    handle.destroy()
+    warn.mockRestore()
+  })
+
+  it('morphComplete 到 2D/Columbus 保持停用，之后回 3D 再恢复', async () => {
+    const f = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handle = await install(f)
+
+    f.scene.mode = 1
+    fire(f.scene.morphStart)
+    const disableCalls = f.clouds.mock.setEnabled.mock.calls.length
+
+    // 落到 2D：保持停用，不重新启用
+    f.scene.mode = 2 // SceneMode.SCENE2D
+    fire(f.scene.morphComplete)
+    expect(f.atmosphere.mock.atmosphereStage.enabled).toBe(false)
+    expect(f.atmosphere.mock.tonemapStage.enabled).toBe(false)
+    expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(false)
+    expect(f.clouds.mock.setEnabled.mock.calls.length).toBe(disableCalls) // 无新调用
+
+    // 再回 3D：恢复
+    f.scene.mode = 3
+    fire(f.scene.morphComplete)
+    expect(f.atmosphere.mock.atmosphereStage.enabled).toBe(true)
+    expect(f.clouds.mock.setEnabled).toHaveBeenLastCalledWith(true)
+
+    handle.destroy()
+    warn.mockRestore()
+  })
+
+  it('无云（clouds:false）时 morphStart 不抛错且不触云开关', async () => {
+    const f = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handle = await install(f, { clouds: false })
+    expect(f.clouds.mock.setEnabled).not.toHaveBeenCalled()
+
+    f.scene.mode = 1
+    expect(() => fire(f.scene.morphStart)).not.toThrow()
+    expect(f.atmosphere.mock.atmosphereStage.enabled).toBe(false)
+    expect(f.clouds.mock.setEnabled).not.toHaveBeenCalled()
+
+    f.scene.mode = 3
+    fire(f.scene.morphComplete)
+    expect(f.atmosphere.mock.atmosphereStage.enabled).toBe(true)
+
+    handle.destroy()
+    warn.mockRestore()
+  })
+
+  it('destroy 摘除 morph 监听（计数归零），之后事件不再改 stage', async () => {
+    const f = setup()
+    const handle = await install(f)
+    expect(f.scene.morphStart.listeners.size).toBe(1)
+    expect(f.scene.morphComplete.listeners.size).toBe(1)
+
+    handle.destroy()
+    expect(f.scene.morphStart.listeners.size).toBe(0)
+    expect(f.scene.morphComplete.listeners.size).toBe(0)
+    expect(f.scene.morphStart.removeEventListener).toHaveBeenCalledTimes(1)
+    expect(f.scene.morphComplete.removeEventListener).toHaveBeenCalledTimes(1)
+  })
+
+  it('scene 已销毁时 destroy 跳过监听摘除（不访问已释放事件）', async () => {
+    const f = setup()
+    const handle = await install(f)
+    // 模拟场景先于 handle.destroy 被外部销毁（Viewer.destroy 联动时 scene 仍存活，
+    // 走正常摘除路径；此用例覆盖「已销毁」分支）。
+    f.scene.destroyed = true
+    expect(() => handle.destroy()).not.toThrow()
+    expect(f.scene.morphStart.removeEventListener).not.toHaveBeenCalled()
+    expect(f.scene.morphComplete.removeEventListener).not.toHaveBeenCalled()
   })
 })

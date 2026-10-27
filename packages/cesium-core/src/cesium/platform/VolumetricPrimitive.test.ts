@@ -240,6 +240,54 @@ describe('M4 boundingVolume 排序护甲', () => {
   })
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 10A（产品化 spec §7.6）：setEnabled —— 3D morph 守卫的云停用入口。
+// 本 wrapper primitive 不是 Cesium 原生 Primitive（无 `show` 字段可读），等价语义 =
+// update() 不再把 march command 压入 commandList（命令不下发才真正停 march）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Task 10A setEnabled（云停用）', () => {
+  it('setEnabled(false) 后 update 不下发 command；setEnabled(true) 恢复', () => {
+    const ctx = createMockContext()
+    const prim = createVolumetricPrimitive({
+      context: ctx,
+      fragmentShaderSource: 'void main(){}',
+      uniformMap: {},
+      mrtColorTextures: createMockTextures(),
+    })
+    const frameState = { commandList: [] as any[] }
+
+    prim.setEnabled(false)
+    prim.update(frameState)
+    expect(frameState.commandList).toHaveLength(0) // 停用期间零 command
+
+    prim.setEnabled(true)
+    prim.update(frameState)
+    expect(frameState.commandList).toHaveLength(1) // 恢复后照常下发
+  })
+
+  it('setEnabled 幂等：重复同一状态不抛，且不复活已销毁 primitive', () => {
+    const ctx = createMockContext()
+    const prim = createVolumetricPrimitive({
+      context: ctx,
+      fragmentShaderSource: 'void main(){}',
+      uniformMap: {},
+      mrtColorTextures: createMockTextures(),
+    })
+    const frameState = { commandList: [] as any[] }
+
+    expect(() => prim.setEnabled(false)).not.toThrow()
+    expect(() => prim.setEnabled(false)).not.toThrow()
+    prim.update(frameState)
+    expect(frameState.commandList).toHaveLength(0)
+
+    prim.destroy()
+    // destroy 后 setEnabled(true) 不得让 update 重新下发（destroy 优先级更高）
+    prim.setEnabled(true)
+    prim.update(frameState)
+    expect(frameState.commandList).toHaveLength(0)
+  })
+})
+
 // M4 追加（云消失根因修复）：createPotentiallyVisibleSet 对有 boundingVolume 的 command 做
 // 段区间分配（insertIntoBin：far < 段.near 即丢）——固定地心球 plane distance 负 → 全灭。
 // 球心必须每帧跟随相机（[-1,+1] 恒交第一段，且 march/resolve 等距排序稳定）。

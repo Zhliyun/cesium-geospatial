@@ -261,7 +261,15 @@ describe('createCloudsPass', () => {
 
   it('M3 BSM：state.shadow 有值时 uniformMap 返回 state 值（真 BSM 接通）', () => {
     vi.clearAllMocks()
-    const bsm = { id: 'bsm', _texture: { id: 'bsm-tex' }, _target: 0x806f } // Texture3D mock
+    // Texture3D mock（Task 10A 一并补齐 isDestroyed/destroy：CloudsShadowFrameState.bsm 类型为
+    // Texture3D，缺这两个方法会让包级 tsc 报 TS2739——此前遗留的类型缺口，与运行时无关）
+    const bsm = {
+      id: 'bsm',
+      _texture: { id: 'bsm-tex' },
+      _target: 0x806f,
+      isDestroyed: () => false,
+      destroy: vi.fn()
+    }
     const matrices = [Matrix4.IDENTITY, Matrix4.clone(Matrix4.IDENTITY), Matrix4.clone(Matrix4.IDENTITY)]
     const intervals = [
       new Cartesian2(0, 0.3),

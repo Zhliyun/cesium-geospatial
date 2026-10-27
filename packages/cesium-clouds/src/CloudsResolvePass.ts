@@ -253,6 +253,12 @@ export function createCloudsResolvePass(
     isDestroyed(): boolean {
       return destroyed
     },
+    // 3D 守卫（Task 10A，spec §7.6）：外壳同时启停两个内部 primitive——swapBuffers 只切
+    // active 引用，若只转发当前 active，换帧后会漏掉另一个；两者同步设置覆盖轮换。
+    setEnabled(enabled: boolean): void {
+      resolvePrim.setEnabled(enabled)
+      primB.setEnabled(enabled)
+    },
     destroy(): void {
       if (destroyed) return
       destroyed = true

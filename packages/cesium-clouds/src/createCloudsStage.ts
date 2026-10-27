@@ -469,6 +469,15 @@ export interface CloudsStageHandle {
    */
   setQuality(next: CloudsQualityPreset): void
   /**
+   * 停用/启用云渲染（产品化 spec §7.6 3D 守卫，Task 10A）。幂等；destroy 后 no-op + warn。
+   *
+   * - `overlayStage.enabled` 只管合成；march / resolve 两个 VOXELS primitive 仍会每帧执行，
+   *   故同时 `setEnabled` 两个 primitive（真停 GPU march/BSM 消费）；
+   * - preRender listener 一并早退（2D/Columbus 相机世界系无意义，不驱动 BSM/矩阵更新）；
+   * - 状态跨 `setQuality` 重建保留（新 impl 的 primitive 继承当前停用状态）。
+   */
+  setEnabled(enabled: boolean): void
+  /**
    * T6 天气预设热切（spec §6.1）：写当前 impl 的 params.coverage / coverageFilterWidths
    * （闭包引用改值即生效，nightAmbient 同款）+ state.climateBandsFloor（spec §5.4 组合语义：
    * 预设激活 0.6，防「阴天」×副热带谷退化为近晴空）。**undefined = 清除预设**：恢复创建时
@@ -1593,6 +1602,17 @@ export function createCloudsStage(
     }
   }
 
+  // ── Task 10A（产品化 spec §7.6）：3D 守卫的云停用状态 ──
+  // overlayStage.enabled 只关合成；march/resolve 两个 VOXELS command 仍会每帧执行——必须
+  // 同时停两个 primitive（VolumetricPrimitive.setEnabled），否则停用只是「看不见但照跑」。
+  // 三处消费：handle.setEnabled / preRender 早退 / rebuildImpl（换档后新 impl 继承停用态）。
+  let enabled = true
+  const applyEnabled = (): void => {
+    overlayStage.enabled = enabled
+    impl.cloudsPass.primitive.setEnabled(enabled)
+    impl.resolvePass?.primitive.setEnabled(enabled)
+  }
+
   // ── 画布尺寸变化（resize）处理 ──────────────────────────────────────────────
   // 【2026-10-24 修复】低分 march / resolve RT 的尺寸在 buildCloudsStageImpl 里由
   // context.drawingBufferWidth/Height 一次性定死；Cesium 的画布会随窗口 resize 变化，
@@ -1617,6 +1637,9 @@ export function createCloudsStage(
   const removePreRender = scene.preRender.addEventListener(
     (_scene: Scene, time: JulianDate) => {
       if (destroyed) return
+      // Task 10A：非 3D 视图停用期间不驱动任何云逐帧工作（BSM/矩阵/时间轴全跳过）。
+      // 2D/Columbus 的相机世界系对云 march 无意义，且可避免污染重投影历史。
+      if (!enabled) return
       const size = readCanvasSize()
       if (size[0] > 0 && (size[0] !== builtSize[0] || size[1] !== builtSize[1])) {
         if (pendingSize != null && pendingSize[0] === size[0] && pendingSize[1] === size[1]) {
@@ -1652,6 +1675,9 @@ export function createCloudsStage(
       impl = buildCloudsStageImpl(scene, luts, weather, options, applyQualityPreset(nextQuality, options))
       currentQuality = nextQuality
       if (activePreset != null) impl.setWeatherPreset(activePreset)
+      // Task 10A：换档重建的新 primitive 缺省 enabled=true——停用状态跨 setQuality 保留。
+      // 仅在停用时补写（启用时不碰 overlayStage.enabled：消费者可能自行关过合成，换档不该复活）。
+      if (!enabled) applyEnabled()
     } catch (e) {
       destroyed = true
       removeOverlay()
@@ -1691,6 +1717,16 @@ export function createCloudsStage(
       }
       if (next === currentQuality) return
       rebuildImpl(next)
+    },
+    // Task 10A（spec §7.6）：3D 守卫停用/启用——overlay + march/resolve primitive 同步，
+    // preRender 早退（见 listener 首行）；幂等（重复写同一状态无副作用）。
+    setEnabled(next: boolean): void {
+      if (destroyed) {
+        console.warn('[clouds] setEnabled 于 destroy 后调用，no-op')
+        return
+      }
+      enabled = next
+      applyEnabled()
     },
     // T6 天气预设热切：委托当前 impl（写 params/state 闭包引用即生效）+ handle 侧记忆
     // activePreset（setQuality 重建后重放）。destroy 后 no-op + warn（对齐 setQuality 风格）。

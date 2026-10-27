@@ -72,6 +72,14 @@ export interface VolumetricPrimitive {
   update(frameState: unknown): void
   /** Cesium Destroyable 接口（spike 坑#1）：PrimitiveCollection.add → Scene.js:4134 调 isDestroyed 检查存活。 */
   isDestroyed(): boolean
+  /**
+   * 停用/启用命令下发（产品化 spec §7.6 3D 守卫，Task 10A）。幂等。
+   *
+   * 本 wrapper 不是 Cesium 原生 Primitive（PrimitiveCollection 只调 update，不读 `show`），
+   * 等价于原生 primitive 的 `show`：false 时 update 不压 command（march/resolve 真正停跑），
+   * true 恢复。destroy 后 setEnabled 不影响「已销毁不下发」的优先级。
+   */
+  setEnabled(enabled: boolean): void
   /** 释放 MRT FBO（GL framebuffer handle）。texture 由调用方管理，不在此 destroy。幂等。 */
   destroy(): void
 }
@@ -143,9 +151,12 @@ export function createVolumetricPrimitive(
   // ── Destroyable 三件套（spike 坑#1）。destroy 幂等（防 PrimitiveCollection.remove 内部 destroy
   //    + 本 primitive.destroy 双调）。
   let destroyed = false
+  // 命令下发开关（= 原生 Primitive `show` 的等价物：PrimitiveCollection 只调 update，不读 show）。
+  // true 缺省：3D 主路径零行为变化；3D 守卫 morph 期间置 false 停 march/resolve。
+  let enabled = true
   const primitive: VolumetricPrimitive = {
     update(frameState: unknown): void {
-      if (destroyed) return
+      if (destroyed || !enabled) return
       // 排序球心跟随相机（见 VOXELS_SORT_BOUNDING_VOLUME 注释——固定球心会被段区间分配剔除）
       const fs = frameState as {
         commandList: { push: (c: DrawCommand) => void }
@@ -158,6 +169,9 @@ export function createVolumetricPrimitive(
     },
     isDestroyed(): boolean {
       return destroyed
+    },
+    setEnabled(next: boolean): void {
+      enabled = next
     },
     destroy(): void {
       if (destroyed) return

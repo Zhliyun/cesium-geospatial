@@ -106,7 +106,7 @@ vi.mock('./WeatherAtlas', async (importOriginal) => {
 // 验证共享段展开进 shadow uniformMap；真实共享段由 CloudsPass.test.ts 直测覆盖）。
 vi.mock('./CloudsPass', () => ({
   createCloudsPass: vi.fn(() => ({
-    primitive: { destroy: vi.fn() },
+    primitive: { destroy: vi.fn(), setEnabled: vi.fn() },
     colorTexture: { _texture: { id: 'att0' }, _target: 0x0de1 },
     depthVelocityTexture: { _texture: { id: 'att1' }, _target: 0x0de1 },
     marchWidth: 480, // ceil(1920/4)——M4 temporal jitter 计算的 lowRes
@@ -140,7 +140,7 @@ vi.mock('./CloudsResolvePass', () => ({
   createCloudsResolvePass: vi.fn((opts: any) => {
     resolvePassProbe.calls.push(opts)
     const inst = {
-      primitive: { tag: 'resolve-prim', update: vi.fn(), isDestroyed: () => false, destroy: vi.fn() },
+      primitive: { tag: 'resolve-prim', update: vi.fn(), isDestroyed: () => false, setEnabled: vi.fn(), destroy: vi.fn() },
       resolvedTexture: { _texture: { id: 'resolve' }, _target: 0x0de1 },
       swapBuffers: vi.fn(),
       getResolvedBridge: vi.fn(() => ({ _texture: { id: 'resolve' }, _target: 0x0de1 })),
@@ -1910,5 +1910,84 @@ describe('M6 getGroundShadowBridgeData（spec §5）', () => {
     expect(d!.cascadeCount).toBe(2)
     expect(d!.matrices).toHaveLength(4) // padded 恒 4 槽（与 cascadeCount 解耦）
     handle.destroy()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 10A（产品化 spec §7.6）：setEnabled —— 3D morph 守卫的云停用。
+// overlayStage.enabled 只关合成，march/resolve 两个 VOXELS command 仍会每帧执行 →
+// setEnabled 必须同时停两个 primitive，并让 preRender 早退（2D 相机世界系无意义）。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Task 10A setEnabled（3D 守卫云停用）', () => {
+  it('setEnabled(false)：overlay.enabled=false + march/resolve primitive 同时停用；true 恢复', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })!
+    const passMock = (createCloudsPass as any).mock.results.at(-1).value
+    const resolveMock = resolvePassProbe.instances.at(-1)!
+
+    handle.setEnabled(false)
+    expect(handle.overlayStage.enabled).toBe(false)
+    expect(passMock.primitive.setEnabled).toHaveBeenLastCalledWith(false)
+    expect(resolveMock.primitive.setEnabled).toHaveBeenLastCalledWith(false)
+
+    // 幂等：重复调用不抛、状态不变
+    expect(() => handle.setEnabled(false)).not.toThrow()
+    expect(handle.overlayStage.enabled).toBe(false)
+
+    handle.setEnabled(true)
+    expect(handle.overlayStage.enabled).toBe(true)
+    expect(passMock.primitive.setEnabled).toHaveBeenLastCalledWith(true)
+    expect(resolveMock.primitive.setEnabled).toHaveBeenLastCalledWith(true)
+    handle.destroy()
+  })
+
+  it('setEnabled(false) 后 preRender 早退（不再驱动云 march/BSM）；true 恢复', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })!
+    const stateArg = (createCloudsPass as any).mock.calls[0][3]
+    const cb = scene._listeners.preRender[0]
+    const timeAt = (secondsOfDay: number) => ({ dayNumber: 2458849, secondsOfDay })
+
+    cb(scene, timeAt(50000))
+    const frozen = stateArg.atlasT
+    expect(frozen).toBeDefined()
+
+    handle.setEnabled(false)
+    cb(scene, timeAt(60000))
+    expect(stateArg.atlasT).toBe(frozen) // 早退：时间轴未推进
+
+    handle.setEnabled(true)
+    cb(scene, timeAt(70000))
+    expect(stateArg.atlasT).not.toBe(frozen) // 恢复：继续驱动
+    handle.destroy()
+  })
+
+  it('setQuality 换档后停用状态保留（新 impl 的 primitive 也被停用）', () => {
+    vi.clearAllMocks()
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })!
+    handle.setEnabled(false)
+
+    handle.setQuality('low')
+    const rebuiltPass = (createCloudsPass as any).mock.results.at(-1).value
+    const rebuiltResolve = resolvePassProbe.instances.at(-1)!
+    expect(rebuiltPass.primitive.setEnabled).toHaveBeenLastCalledWith(false)
+    expect(rebuiltResolve.primitive.setEnabled).toHaveBeenLastCalledWith(false)
+    expect(handle.overlayStage.enabled).toBe(false)
+    handle.destroy()
+  })
+
+  it('destroy 后 setEnabled no-op + warn（对齐 setQuality 宽容风格）', () => {
+    vi.clearAllMocks()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const scene = createMockScene()
+    const handle = createCloudsStage(scene, createMockLuts(), createMockWeather(), { clouds: true })!
+    handle.destroy()
+    expect(() => handle.setEnabled(false)).not.toThrow()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]![0]).toMatch(/destroy 后/)
+    warn.mockRestore()
   })
 })

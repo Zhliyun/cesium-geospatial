@@ -14,8 +14,9 @@
 //
 // 生命周期（spec §8.2）：模块级 pending/installed 注册表做并发去重；Viewer/CesiumWidget 的
 // `destroy` 在第一个 await 之前包装（autoDestroy !== false），安装中销毁 → 取消 + 回滚 +
-// reject(InstallCancelledError)；handle.destroy 幂等并恢复原方法。3D morph 守卫（Task 10A）
-// 尚未接入。
+// reject(InstallCancelledError)；handle.destroy 幂等并恢复原方法。
+// 3D 守卫（spec §7.6，Task 10A）：安装末尾注册 morphStart/morphComplete——进入非 3D 立即
+// 停用自有 stage 与云（含 march/resolve primitive），回到 SCENE3D 按快照恢复；destroy 摘监听。
 
 import * as CesiumRuntime from 'cesium'
 import {
@@ -406,6 +407,111 @@ function warnEnabledSceneEffects(scene: Scene): void {
   }
 }
 
+// ────────────────────────── 3D 模式守卫（spec §7.6） ──────────────────────────
+
+/** 3D 守卫句柄：只暴露幂等移除（监听本身在安装末尾注册）。 */
+interface MorphGuard {
+  /** 移除 morphStart/morphComplete 监听；Scene 已销毁时跳过（Cesium 已随场景释放事件）。幂等。 */
+  remove(): void
+}
+
+/**
+ * 注册 3D 模式守卫（产品化 spec §7.6 / Task 10A）。
+ *
+ * - `morphStart`（进入 MORPHING）：立即停用**全部自有 stage**（depthTemporal → atmosphere
+ *   → lensFlare → tonemap）与云（`CloudsStageHandle.setEnabled(false)`，含 march/resolve
+ *   primitive 与 preRender 驱动）；
+ * - `morphComplete` 回到 `SCENE3D`：按 morphStart 时的 enabled 快照恢复——**不得强行置 true**
+ *   （depthTemporal 在 temporalEma=false 透传模式下恒 false，强行恢复会改变 3D 渲染行为）；
+ * - `morphComplete` 落到 2D/Columbus：保持停用，等下一次回 3D；
+ * - 警告：每次安装最多一次（首次进入非 3D 视图时；morph 周期内不重复）。
+ */
+function installMorphGuard(
+  scene: Scene,
+  atmosphere: AtmosphereStageHandle,
+  clouds: CloudsStageHandle | undefined
+): MorphGuard {
+  // 自有 stage 顺序即停用顺序（云最后停）：depthTemporal 最先（链首），tonemap 最后。
+  const collectStages = (): Array<PostProcessStage | PostProcessStageComposite | undefined> => [
+    atmosphere.depthTemporalStage,
+    atmosphere.atmosphereStage,
+    atmosphere.lensFlareStage,
+    atmosphere.tonemapStage
+  ]
+
+  let suspended = false
+  let savedEnabled: boolean[] | undefined
+  let warned = false
+  let warnedInCycle = false
+  let removed = false
+
+  /** 每次安装只警告一次（无论 morph 往返多少次）。 */
+  const warnOnce = (message: string): void => {
+    if (warned) return
+    warned = true
+    warn(message)
+  }
+
+  const suspend = (): void => {
+    if (suspended) return
+    suspended = true
+    const stages = collectStages()
+    savedEnabled = stages.map((stage) => stage?.enabled ?? true)
+    for (const stage of stages) {
+      if (stage != null) stage.enabled = false
+    }
+    // 云最后停：setEnabled 同时关 overlay 合成与 march/resolve 两个 primitive 的每帧下发。
+    clouds?.setEnabled(false)
+  }
+
+  const resume = (): void => {
+    if (!suspended) return
+    suspended = false
+    const stages = collectStages()
+    stages.forEach((stage, index) => {
+      if (stage != null) stage.enabled = savedEnabled?.[index] ?? true
+    })
+    savedEnabled = undefined
+    clouds?.setEnabled(true)
+  }
+
+  const onMorphStart = (): void => {
+    if (removed || scene.isDestroyed()) return
+    suspend()
+    warnedInCycle = true
+    warnOnce('场景进入非 3D 视图（morph）：大气/云后处理已停用，回到 3D 后自动恢复')
+  }
+
+  const onMorphComplete = (): void => {
+    if (removed || scene.isDestroyed()) return
+    if (scene.mode === SceneMode.SCENE3D) {
+      resume()
+      warnedInCycle = false
+      return
+    }
+    // 落到 2D / Columbus：保持停用（防御：morphStart 未触发也不会漏停）。
+    suspend()
+    if (!warnedInCycle) {
+      warnedInCycle = true
+      warnOnce('当前场景不是 3D 视图：大气/云后处理保持停用（切回 3D 后自动恢复）')
+    }
+  }
+
+  scene.morphStart.addEventListener(onMorphStart)
+  scene.morphComplete.addEventListener(onMorphComplete)
+
+  return {
+    remove(): void {
+      if (removed) return
+      removed = true
+      // Scene 已销毁：Cesium destroy 已释放事件对象，跳过移除（也不访问其内部状态）。
+      if (scene.isDestroyed()) return
+      scene.morphStart.removeEventListener(onMorphStart)
+      scene.morphComplete.removeEventListener(onMorphComplete)
+    }
+  }
+}
+
 /** 生产实现（installAtmosphereClouds 使用）。 */
 const defaultDeps: InstallDeps = {
   runCompat(scene) {
@@ -565,8 +671,13 @@ async function runInstall(
   let takeover: SceneTakeover | undefined
   let atmosphere: AtmosphereStageHandle | undefined
   let cloudsHandle: CloudsStageHandle | undefined
-  /** 全量回滚（§8.2）：云 → 大气 → 纹理 → 场景。各步独立兜底，保证后续步骤执行。 */
+  let morphGuard: MorphGuard | undefined
+  /** 全量回滚（§8.2）：morph 监听 → 云 → 大气 → 纹理 → 场景。各步独立兜底，保证后续步骤执行。 */
   const rollback = (): void => {
+    // 先摘 3D 守卫监听：后续 stage/云销毁期间不得再被 morph 事件触碰。
+    const guard = morphGuard
+    morphGuard = undefined
+    if (guard != null) quietly('morph 监听', () => guard.remove())
     if (cloudsHandle != null) {
       const handle = cloudsHandle
       cloudsHandle = undefined
@@ -796,6 +907,10 @@ async function runInstall(
       destroy() {
         if (destroyed) return
         destroyed = true
+        // 3D 守卫（§7.6）：先摘 morph 监听，释放过程中不再响应场景模式变化。
+        const guard = morphGuard
+        morphGuard = undefined
+        if (guard != null) quietly('morph 监听', () => guard.remove())
         // 生命周期（§8.2）：先摘注册表并恢复 destroy 包装，再释放 GL 资源。
         // 由包装的 viewer.destroy 调用时 currentHandle 已被置空，restoreWrapper 幂等。
         if (installed.get(scene) === handle) {
@@ -823,6 +938,10 @@ async function runInstall(
         }
       }
     }
+
+    // 3D 模式守卫（spec §7.6）：监听在 stage 全部创建后注册（morphStart 才有可停用对象）；
+    // 移除挂在 handle.destroy 与回滚路径。此后无 await，注册失败即整体回滚。
+    morphGuard = installMorphGuard(scene, atmosphereHandle, cloudsHandle)
 
     installed.set(scene, handle)
     record.currentHandle = handle
