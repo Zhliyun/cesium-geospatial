@@ -51,6 +51,11 @@ import { DEMO_PROFILE } from './demoProfile'
 import { loadMoonTextures } from './moonTexture'
 import { applySceneTakeover, captureSceneState, type SceneTakeover } from './sceneTakeover'
 
+// 消费者需要命名嵌套选项类型（spec §8）：从内部包再导出，产品入口 index.ts 只面对
+// ./install 一个模块（与上方的 type-only import 并存，不引入本地绑定冲突）。
+export type { AtmosphereStageOptions } from '@cesium-geospatial/core'
+export type { CloudsStageOptions, CloudsQualityPreset } from '@cesium-geospatial/clouds'
+
 /** 安装目标：Viewer / CesiumWidget 取 `.scene`，Scene 直接使用。 */
 export type AtmosphereCloudsTarget = Viewer | CesiumWidget | Scene
 
