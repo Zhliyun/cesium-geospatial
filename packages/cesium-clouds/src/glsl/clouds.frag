@@ -696,7 +696,11 @@ vec4 marchClouds(
   // 粗 5-6 倍：云内 2-3 个样本就触发 minTransmittance 早退，而 `rayDistance = stepSize*startJitter*2`
   // 的 STBN dither 在 ±500m 物理尺度上摆动 → 逐帧方差 ∝ 步长 = 「一动就颗粒、停下靠时域磨平」。
   // 层内路径逐位不变（inLayerCam*hasDenseLayer=1 时与原式完全一致）。
-  stepSize = mix(stepSize, max(stepSize, stepBudgetLen / 32.0), inLayerCam * hasDenseLayer);
+  // 【2026-10-27 去等高线条纹·第二处】段长/32 与已删的 /12 同族：32 等分同样是「段长固定分数」，
+  // 采样点随段长在屏幕上滑出一圈圈等值线；且每步 122-269m 把细节平均掉。
+  // 按 inlayer-review 方案 C 改为**距离阶梯**（在云内推进处实现，步长只随 rayDistance 增长，
+  // 与段长解耦）→ 近场仍是 minStepSize（细节），远场渐进粗化（省帧时）。
+  // stepBudgetLen 仍被 L2 排除与 hasDenseLayer 判定使用，保留声明避免连带改动。
   // jitter 归零域收敛（2026-09-29 三轮）：归零若作用于全部层内段，长段俯视（3035 实测）
   // 的规则步长扫过顶面归零带（步长 150m vs 带厚 36-310m，1-2 采样点）→ 等相位点连成
   // 驻波环纹=「等高线状二维云层」（质量档判别实锤：low 粗环纹/ultra 完全消失=采样伪影
@@ -998,7 +1002,13 @@ vec4 marchClouds(
     // 【2026-10-27】云内步进 mip 加速同样只该给层内相机（参考库云内恒 += stepSize）；
     // 层外退回纯 stepSize，避免远段步长再被放大 ~20%（可达 1000m）。
     // 【getHitStepMipModulation】
-    rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel * u_hitStepMipBoost) * inLayerCam);
+    // 【2026-10-27 层内步长改距离阶梯】层外保持原式（逐位不变）；层内用
+    // saturate((rayDistance-300)/6000) —— 前 300m 用 minStepSize（细节），到 6km 渐粗到
+    // maxStepSize。步长与「段长」彻底解耦，不再产生等值线；帧时由 maxIterationCount 兜底。
+    float lodMixInLayer = inLayerCam > 0.5
+      ? saturate((rayDistance - 300.0) / 6000.0)
+      : min(1.0, mipLevel * u_hitStepMipBoost);
+    rayDistance += mix(stepSize, maxStepSize, lodMixInLayer);
   }
 
   // The final product of 5.9.1 and we'll evaluate this in aerial perspective.

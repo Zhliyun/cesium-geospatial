@@ -685,9 +685,8 @@ describe('甲内近水平 march LOD：云内步 mip 调制', () => {
   it('调制在场：云内步与空区步同款 mix 公式（注释锚防与空区步误配）', () => {
     const src = buildCloudsMainFragmentShader(M2_OPTIONS)
     // 空区步已有同款 `rayDistance += mix(...)` 行——单行断言会误绿，须锚+行连续
-    expect(src).toContain(
-      '// 【getHitStepMipModulation】\n    rayDistance += mix(stepSize, maxStepSize, min(1.0, mipLevel * u_hitStepMipBoost) * inLayerCam);'
-    )
+    expect(src).toContain('float lodMixInLayer = inLayerCam > 0.5')
+    expect(src).toContain('rayDistance += mix(stepSize, maxStepSize, lodMixInLayer);')
     // 调制倍率 uniform 在场（demo ?cloudsHitMipBoost= 缺省 1）
     expect(src).toContain('uniform float u_hitStepMipBoost;')
   })
