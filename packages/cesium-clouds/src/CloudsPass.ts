@@ -317,9 +317,9 @@ export function buildSharedCloudsUniforms(
     u_unfreezeMipThreshold: () => params.unfreezeMipThreshold ?? -1.0,
     // 【2026-10-25】shadow 端也调 sampleMedia（shadow.frag:94）→ 必须进共享段，
     // 否则生成端 uniformMap 缺绑 = Unknown uniform 崩帧（2026-09 先例）。
-    // 【2026-10-27】detail 改回参考库的隐式 LOD 后该 uniform 不再被 shader 使用——
-    // 继续绑定会因「uniform 被编译器消除」触发 Cesium 的 Unknown uniform 崩帧，故移除。
-    // （?cloudsDetailLod= 随之失效，保留 ID 仅为 A/B 兼容。）
+    // 【2026-10-27 恢复绑定】shape/detail 已回退到显式 LOD，shader 重新使用 u_detailLodFloor；
+    // 不绑定会触发 Cesium `Unknown uniform` 崩帧（刚刚实测）。?cloudsDetailLod= 重新生效。
+    u_detailLodFloor: () => params.detailLodFloor ?? 1.5,
     // 【2026-10-26 探针】天气 UV 映射切换（shadow 端同用 getGlobeUv → 必须入共享段）
     u_globeUvCube: () => params.globeUvCube ?? 0,
     // 【2026-10-09 颗粒带优化】weather 密度场低通偏置（缺省 0=关；?cloudsWeatherBias=）
