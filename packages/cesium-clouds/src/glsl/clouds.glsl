@@ -171,7 +171,7 @@ WeatherSample sampleWeather(const vec2 uv, const vec3 position, const float heig
   // （weather 十 km+ 包络 / shape 中频谷脊 / detail 高频侵蚀），平面切片被彻底打破。
   // 【2026-10-23 移植】隐式 LOD → 显式：本函数在 march 循环内被逐样本调用，相邻像素的
   // 循环进度不同 → 隐式导数无定义 → 每个像素的采样 LOD 各不相同 → 密度场逐像素跳变。
-  float puffMid = texture(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset).r;
+  float puffMid = textureLod(shapeTexture, position * shapeRepeat * 0.0625 + shapeOffset, 0.0).r;
   vec4 puffTop = mix(vec4(0.74), vec4(0.97),
     clamp(localWeather, 0.0, 1.0) * mix(0.6, 1.0, puffMid));
   vec4 puffPlateau = smoothstep(vec4(0.70), vec4(0.85), weather.heightFraction)
@@ -247,7 +247,12 @@ MediaSample sampleMedia(
   // 走样噪点，段界 = 一条「等距等高线」。相机高度一变，这些段和噪点就整体平移——正是
   // 用户看到的「俯视云面噪点呈等高线花纹变化」。参考库这三层一律用隐式 `texture()`（LOD
   // 由屏幕足迹的导数决定，永远与像素尺度匹配），故参考库没有该现象。
-  float shape = texture(shapeTexture, shapePosition).r;
+  // 【2026-10-27 回退隐式 LOD】`texture()` 的隐式导数在 march 循环（非一致控制流）里不可靠：
+  // 相邻像素采样点差 ≈ 起点抖动×步长，步长随距离增 → 导数随距离跳 → 纹理 mip 在**很多个
+  // 距离处**离散切换 → 云面出现大量以相机为圆心的同心环（用户在 3211m 实测）。
+  // 改回显式 LOD（由步长推，连续、与屏幕相位无关）。
+  float shapeLod = log2(max(1.0, stepLength * abs(shapeRepeat.x) * SHAPE_TEX_SIZE));
+  float shape = textureLod(shapeTexture, shapePosition, shapeLod).r;
   density = remapClamped(density, vec4(1.0 - shape) * shapeAmounts, vec4(1.0));
 
   #ifdef DEBUG_SHOW_SAMPLE_COUNT
@@ -272,7 +277,8 @@ MediaSample sampleMedia(
     // shape/turbulence 频率低 5-20 倍，保持隐式 LOD（与参考库一致）。
     // 同上：detail 也用隐式 LOD（参考库原样）。u_detailLodFloor 不再参与——
     // 它当初是为了压 N=1 全分 march 的走样，与 LOD 量化是同一类副作用。
-    float detail = texture(shapeDetailTexture, detailPosition).r;
+    float detailLod = log2(max(1.0, stepLength * abs(shapeDetailRepeat.x) * DETAIL_TEX_SIZE));
+    float detail = textureLod(shapeDetailTexture, detailPosition, max(detailLod, u_detailLodFloor)).r;
     // Fluffy at the top and whippy at the bottom.
     vec4 modifier = mix(
       vec4(pow(detail, 6.0)),
