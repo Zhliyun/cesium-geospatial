@@ -8,8 +8,10 @@
 // 1. 内部包各自 tsc --emitDeclarationOnly → packages/*/dist/index.d.ts
 // 2. 根入口 tsc -p tsconfig.dts.json（paths 指向内部包 dist）→ 临时目录
 // 3. api-extractor 逐入口把 @cesium-geospatial/* 的类型内联进 dist/<entry>.d.ts
+// 4. 复制 Cesium 私有类型 augment 到 dist/，并在三个入口顶部加 triple-slash 引用
+//    （否则消费方 skipLibCheck:false 时 Context/Texture3D 等报 TS2305）
 import { execFileSync } from 'node:child_process'
-import { existsSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -21,6 +23,13 @@ const tempTypesDir = join(rootDir, 'dist/.types')
 
 const INTERNAL_PACKAGES = ['cesium-core', 'cesium-clouds']
 const ENTRY_NAMES = ['index', 'core', 'clouds']
+
+const AUGMENT_SOURCE = join(
+  rootDir,
+  'packages/cesium-core/src/cesium/cesium-augment.d.ts'
+)
+const AUGMENT_FILENAME = 'cesium-augment.d.ts'
+const AUGMENT_REFERENCE = `/// <reference path="./${AUGMENT_FILENAME}" />\n`
 
 function runTsc(args) {
   execFileSync(process.execPath, [tscBin, ...args], { cwd: rootDir, stdio: 'inherit' })
@@ -90,8 +99,21 @@ function bundleEntry(name) {
 
 try {
   for (const name of ENTRY_NAMES) bundleEntry(name)
+
+  // Cesium 私有类型（Context/Texture3D/...）靠本地 module augment 补齐；
+  // 消费方需要它也在 dist 里，并由入口声明显式引用。
+  copyFileSync(AUGMENT_SOURCE, join(rootDir, 'dist', AUGMENT_FILENAME))
+  for (const name of ENTRY_NAMES) {
+    const dtsPath = join(rootDir, 'dist', `${name}.d.ts`)
+    const content = readFileSync(dtsPath, 'utf8')
+    if (!content.startsWith(AUGMENT_REFERENCE)) {
+      writeFileSync(dtsPath, AUGMENT_REFERENCE + content)
+    }
+  }
 } finally {
   rmSync(tempTypesDir, { recursive: true, force: true })
 }
 
-console.log('[build-dts] OK：dist/index.d.ts、dist/core.d.ts、dist/clouds.d.ts')
+console.log(
+  `[build-dts] OK：dist/index.d.ts、dist/core.d.ts、dist/clouds.d.ts、dist/${AUGMENT_FILENAME}`
+)
