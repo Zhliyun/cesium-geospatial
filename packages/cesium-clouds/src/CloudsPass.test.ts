@@ -151,6 +151,19 @@ describe('createCloudsPass', () => {
     pass.destroy()
   })
 
+  it('luts 缺 higherOrderScattering → 入口抛错（云 god rays 恒需高阶 LUT，不留到每帧 TypeError）', () => {
+    vi.clearAllMocks()
+    const luts = createMockLuts()
+    delete luts.higherOrderScattering
+    const scene = createMockScene()
+    expect(() => createCloudsPass(scene, luts, createMockWeather(), state)).toThrow(
+      /higherOrderScattering/
+    )
+    // fail-fast 先于任何 GL 资源/primitive 创建
+    expect(scene.primitives.add).not.toHaveBeenCalled()
+    expect(createVolumetricPrimitive).not.toHaveBeenCalled()
+  })
+
   it('uniformMap 注入 atmosphere LUT（transmittance/scattering/irradiance/single_mie=scatter/higher_order）', () => {
     vi.clearAllMocks()
     const luts = createMockLuts()

@@ -389,6 +389,17 @@ export function createCloudsPass(
   state: CloudsFrameState,
   options: CloudsPassOptions = {}
 ): CloudsPass {
+  // 【产品化终审 Important 1】云 god rays 恒需高阶散射 LUT：CloudsMaterial 无条件
+  // #define HAS_HIGHER_ORDER_SCATTERING_TEXTURE（见 BRUNETON_DEFINES），共享 uniform 段也
+  // 无条件绑定 higher_order_scattering_texture。调用方若用 loadAtmosphereLUTs(...,
+  // { higherOrderScattering: false }) 取得 luts，闭包返回 undefined → Cesium
+  // UniformSampler.set 读 _target 每帧 TypeError、渲染循环停。入口 fail-fast 替代每帧崩。
+  if (luts.higherOrderScattering == null) {
+    throw new Error(
+      'createCloudsPass: luts.higherOrderScattering 缺失。装云必须加载高阶散射 LUT——' +
+        'loadAtmosphereLUTs 不要传 { higherOrderScattering: false }（缺省即加载，仅纯大气场景可关）。'
+    )
+  }
   const context = (scene as unknown as { context: CesiumContext }).context
   const params = options.parameters ?? defaultCloudsParameters()
   const width = context.drawingBufferWidth || 256

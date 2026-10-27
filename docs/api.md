@@ -141,7 +141,7 @@ import {
 
 // 1. 自己加载资产：baseUrl 末尾带 /，例如 '/cesium-geospatial-assets/luts/'
 const luts = await loadAtmosphereLUTs(scene.context, lutsBaseUrl, {
-  higherOrderScattering: true   // 不装云传 false 可省 8MB
+  higherOrderScattering: true   // 不装云传 false 可省 8MB；此时 stage 也必须传 false（见 §2.2）
 })
 
 // 2. 先声明云句柄：三个桥是惰性闭包，创建云后自动指向真实 handle
@@ -182,7 +182,12 @@ await installAtmosphereClouds(viewer, { clouds: false })
 ```
 
 或自建：`loadAtmosphereLUTs(..., { higherOrderScattering: false })` +
-`createAtmosphereStage(scene, luts)`。
+`createAtmosphereStage(scene, luts, { higherOrderScattering: false })`。
+
+> **两处必须成对**：`higherOrderScattering: false` 只传给 loader、不传给 stage（stage 缺省
+> 为 `true`）时，shader 会声明并采样未绑定的 `sampler3D` → 每帧 `TypeError`、渲染循环停。
+> 现在 `createAtmosphereStage` 在入口直接抛错并给出修法；装云（`createCloudsStage`）则必须
+> 加载该 LUT（云 god rays 恒需），漏传同样在入口抛错。
 
 ### 2.3 自定义后处理
 

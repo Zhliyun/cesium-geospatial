@@ -599,6 +599,19 @@ export function createAtmosphereStage(
   luts: AtmosphereLUTs,
   options: AtmosphereStageOptions = {}
 ): AtmosphereStageHandle {
+  // 【产品化终审 Important 1】higherOrderScattering 选项与 LUT 必须成对：stage 缺省开（shader
+  // 输出 HAS_HIGHER_ORDER_SCATTERING_TEXTURE 并绑定 sampler3D），而 loadAtmosphereLUTs(...,
+  // { higherOrderScattering: false }) 不返回该 LUT。不拦则 uniform 闭包返回 undefined →
+  // Cesium UniformSampler.set 读 _target 每帧 TypeError、渲染循环停（比不 define 的降级更糟）。
+  // 不能改用 1×1 dummy（会被当真实高阶散射采样，改变大气亮度，spec §7.5）——只能在入口 fail-fast。
+  if (options.higherOrderScattering !== false && luts.higherOrderScattering == null) {
+    throw new Error(
+      'createAtmosphereStage: luts.higherOrderScattering 缺失（stage 缺省需要高阶散射 LUT）。' +
+        '若 loadAtmosphereLUTs 传了 { higherOrderScattering: false }，createAtmosphereStage 的 ' +
+        'options 也必须传 { higherOrderScattering: false }；或改为加载该 LUT（loadAtmosphereLUTs ' +
+        '缺省即加载）。'
+    )
+  }
   let resolved = validateAtmosphereOptions(options)
 
   // depthTestAgainstTerrain=true：PostProcessStage depthTexture 拿真实地形 depth（B 路径合成需真实

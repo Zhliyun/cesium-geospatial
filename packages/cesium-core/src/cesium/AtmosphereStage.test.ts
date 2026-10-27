@@ -89,7 +89,10 @@ vi.mock('./depthTemporal/historyBlit', () => {
 const stubLuts = {
   transmittance: { tag: 'transmittance' },
   scattering: { tag: 'scattering' },
-  irradiance: { tag: 'irradiance' }
+  irradiance: { tag: 'irradiance' },
+  // 产品化终审 Important 1 起 createAtmosphereStage 默认要求高阶散射 LUT（入口 fail-fast），
+  // 默认 options 的 create 用例必须带上（缺字段的路径由「高阶散射 LUT 守卫」用例覆盖）。
+  higherOrderScattering: { tag: 'higherOrderScattering' }
 } as unknown as AtmosphereLUTs
 
 function makeState(): AtmosphereFrameState {
@@ -542,6 +545,44 @@ describe('createAtmosphereStage（phase2b 三 stage 集成）', () => {
     const handle2 = createAtmosphereStage(scene, stubLuts, { ditherScale: 3.0 })
     const tonoUniforms2 = (handle2.tonemapStage as unknown as { uniforms: Record<string, unknown> }).uniforms
     expect(tonoUniforms2.u_ditherScale).toBe(3.0)
+  })
+})
+
+// —— 高阶散射 LUT 守卫（产品化终审 Important 1）：选项与 LUT 必须成对，缺 LUT 入口即抛 ——
+describe('createAtmosphereStage — 高阶散射 LUT 守卫', () => {
+  const lutsWithoutHigherOrder = {
+    transmittance: { tag: 'transmittance' },
+    scattering: { tag: 'scattering' },
+    irradiance: { tag: 'irradiance' }
+  } as unknown as AtmosphereLUTs
+
+  it('默认选项（higherOrderScattering 缺省 true）+ luts 缺该 LUT → 入口抛清晰错误', () => {
+    const { scene } = mockSceneWithAddSpy()
+    expect(() => createAtmosphereStage(scene, lutsWithoutHigherOrder, {})).toThrow(/higherOrderScattering/)
+    // 显式 true 同罪（不能漏到每帧 UniformSampler.set 读 undefined._target）
+    expect(() =>
+      createAtmosphereStage(mockSceneWithAddSpy().scene, lutsWithoutHigherOrder, {
+        higherOrderScattering: true
+      })
+    ).toThrow(/higherOrderScattering/)
+  })
+
+  it('错误消息给出修法：stage 也必须传 higherOrderScattering: false', () => {
+    const { scene } = mockSceneWithAddSpy()
+    expect(() => createAtmosphereStage(scene, lutsWithoutHigherOrder, {})).toThrow(
+      /createAtmosphereStage 的 options 也必须传 \{ higherOrderScattering: false \}/
+    )
+  })
+
+  it('显式 higherOrderScattering: false + luts 缺该 LUT → 正常创建且不绑定 sampler3D', () => {
+    const { scene } = mockSceneWithAddSpy()
+    const handle = createAtmosphereStage(scene, lutsWithoutHigherOrder, {
+      higherOrderScattering: false
+    })
+    expect(handle.atmosphereStage).toBeDefined()
+    const uniforms = (handle.atmosphereStage as unknown as { uniforms: Record<string, unknown> })
+      .uniforms
+    expect('higher_order_scattering_texture' in uniforms).toBe(false)
   })
 })
 

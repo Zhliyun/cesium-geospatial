@@ -67,7 +67,13 @@ export interface InstallOptions {
    */
   atmosphere?: Omit<
     AtmosphereStageOptions,
-    'cloudsShadowLengthBridge' | 'cloudsOcclusionBridge' | 'cloudsShadowBridge' | 'moonSurfaceTexture'
+    | 'cloudsShadowLengthBridge'
+    | 'cloudsOcclusionBridge'
+    | 'cloudsShadowBridge'
+    | 'moonSurfaceTexture'
+    // 【产品化终审 Important 1】install 内部按 clouds 开关统一决定（§7.5），调用方传了也会被覆盖，
+    // 从类型上排除以免误以为可单独控制（两条路径必须成对，见 createAtmosphereStage 入口守卫）。
+    | 'higherOrderScattering'
   >
   /**
    * 体积云选项；`false` 关闭云（不加载天气/不请求 higher_order/不传三个云桥，与
