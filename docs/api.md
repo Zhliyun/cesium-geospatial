@@ -129,31 +129,45 @@ interface InstallOptions {
 ### 2.1 自建资产管线（走 `./core`）
 
 产品主入口只接受资产 **URL**（`assetsBaseUrl` / `assets`）。要注入**已预加载的纹理**、
-自定义 LUT 来源（比如从 IndexedDB 读）或复用月面纹理的 `albedoMean`，走 `./core`：
+自定义 LUT 来源（比如从 IndexedDB 读）或自己控制 stage 链，走 `./core`：
 
 ```ts
 import { loadAtmosphereLUTs, createAtmosphereStage } from 'cesium-geospatial/core'
-import { loadWeatherTextures, createCloudsStage } from 'cesium-geospatial/clouds'
+import {
+  loadWeatherTextures,
+  createCloudsStage,
+  type CloudsStageHandle
+} from 'cesium-geospatial/clouds'
 
 // 1. 自己加载资产：baseUrl 末尾带 /，例如 '/cesium-geospatial-assets/luts/'
 const luts = await loadAtmosphereLUTs(scene.context, lutsBaseUrl, {
   higherOrderScattering: true   // 不装云传 false 可省 8MB
 })
 
-// 2. 大气 stage（不接管场景：对数深度 / depthTestAgainstTerrain 需自己保证）
+// 2. 先声明云句柄：三个桥是惰性闭包，创建云后自动指向真实 handle
+let cloudsHandle: CloudsStageHandle | undefined
 scene.logarithmicDepthBuffer = true
-const atmosphere = createAtmosphereStage(scene, luts, { /* AtmosphereStageOptions */ })
+const atmosphere = createAtmosphereStage(scene, luts, {
+  // 三个云桥（install 内部同样必传）：
+  // 不传 = 大气不知道云的存在——云不遮挡大气、不产生光柱联动、地面云影 define 不编译
+  cloudsOcclusionBridge: () => cloudsHandle?.cloudsPass.getColorBridge(),
+  cloudsShadowLengthBridge: () => cloudsHandle?.cloudsPass.getShadowLengthBridge(),
+  cloudsShadowBridge: () => cloudsHandle?.getGroundShadowBridgeData()
+})
 
 // 3. 云（可选）：weather 纹理自己加载
 const weather = await loadWeatherTextures(scene.context, weatherBaseUrl)
-const clouds = createCloudsStage(scene, luts, weather, { clouds: true }) // 不传 clouds:true 会返回 undefined
+cloudsHandle = createCloudsStage(scene, luts, weather, { clouds: true }) // 不传 clouds:true 会返回 undefined
 
 // 4. 链顺序自己排：云 overlay 插到 atmosphere 与 lensflare 之间（线性 HDR 域）
-if (clouds) atmosphere.insertStageBeforeLensFlare(clouds.overlayStage)
+if (cloudsHandle) atmosphere.insertStageBeforeLensFlare(cloudsHandle.overlayStage)
 ```
 
 自建管线时**调用方负责**：
 
+- **三个云桥**（`cloudsOcclusionBridge` / `cloudsShadowLengthBridge` / `cloudsShadowBridge`）：
+  不传桥 = 云不遮挡大气（无云遮挡联动、无 god rays 天空路径）、地面云影 `HAS_GROUND_SHADOW`
+  不编译（无云影）——画面「能跑但和 demo 不一样」；
 - 资产字节校验（`./core` 的加载器已内置，但自定义来源要自己保证长度/可解码）；
 - 纹理生命周期：`loadAtmosphereLUTs` / `loadWeatherTextures` 返回的 `Texture` / `Texture3D`
   由调用方在 destroy 时释放（`AtmosphereStage.destroy()` 只销毁自己的 history 与 stage）；
