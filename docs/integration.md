@@ -472,3 +472,30 @@ install 会加载月面纹理（`moonSurfaceTexture`），但不按纹理均值�
 | `场景进入非 3D 视图（morph）…` warn | 3D→2D morph | 正常行为；回 3D 自动恢复 |
 | 云不可见，但大气正常 | 相机高度 > 300km（§9.6），或 `clouds: false` | 降到 300km 以下；检查 `handle.clouds` 是否存在 |
 | 月面是均匀白盘 | 月面 webp 加载/解码失败（跨域缺 CORS） | 服务器加 `Access-Control-Allow-Origin`；看 `[moon-surface]` warn |
+
+---
+
+## 11. IIFE / UMD（无 ESM 注入机制的宿主）
+
+给只能注入全局脚本的宿主（如 Playwright 页面里已有 `window.Cesium` UMD、不能 import ESM）：
+
+- 产物：`dist-iife/cesium-geospatial.iife.js`（约 465KB，gzip ≈151KB；随 `pnpm run build` 一起产出，也可单跑 `pnpm run build:iife`）。
+- `cesium` 是 external → 全局 `Cesium`；**同一页面不要再加载 ESM 版 Cesium**，否则会出现两份类身份不匹配。
+- 加载后挂到 `window.CesiumGeospatial`，包含主入口的运行时导出：
+
+```html
+<script src="/cesium/Cesium.js"></script>
+<script src="/vendor/cesium-geospatial.iife.js"></script>
+<script>
+  const handle = await window.CesiumGeospatial.installAtmosphereClouds(viewer, {
+    clouds: false,                    // 按需；IIFE 与 ESM 选项完全一致
+    assetsBaseUrl: 'http://127.0.0.1:9000/cesium-geospatial-assets/'
+  })
+</script>
+```
+
+约束：
+
+- IIFE 只打包主入口（`installAtmosphereClouds` / `isInstalled` / `InstallCancelledError` / `VERSION`）；`./core`、`./clouds` 逃生门不在 IIFE 里（需要它们就用 ESM 构建）。
+- 资产必须显式给 `assetsBaseUrl`（页面 `document.baseURI` 未必指向你的静态服务器），目录结构仍是 `luts/ clouds/ moon/`。
+- 冒烟：`node scripts/smoke-iife.mjs`（Playwright：页面只加载 `window.Cesium` UMD + IIFE，创建 Viewer 并以 `clouds:false` 安装，断言 0 console/pageerror）。

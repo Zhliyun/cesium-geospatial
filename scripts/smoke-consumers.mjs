@@ -303,12 +303,13 @@ function assertFileCopy(ctx) {
   )
 
   const entries = readdirSync(pkgDir).sort()
-  const allowed = new Set(['README.md', 'assets', 'bin', 'dist', 'docs', 'node_modules', 'package.json'])
+  const allowed = new Set(['README.md', 'assets', 'bin', 'dist', 'dist-iife', 'docs', 'node_modules', 'package.json'])
   const unexpected = entries.filter((name) => !allowed.has(name))
   assert.deepEqual(unexpected, [], `副本含 files 之外的内容：${unexpected.join(', ')}`)
   assert.ok(!entries.includes('src'), '副本里出现了 src（files 白名单失效）')
   assert.ok(!entries.includes('.git'), '副本里出现了 .git（files 白名单失效）')
   assert.ok(entries.includes('dist'), '副本里没有 dist（消费方拿不到产物）')
+  assert.ok(entries.includes('dist-iife'), '副本里没有 dist-iife（UMD 宿主拿不到 IIFE 产物）')
 
   // pnpm 会给带 bin 的包写一个 node_modules/.bin 转发脚本；除此之外不允许有依赖目录
   const nested = entries.includes('node_modules')

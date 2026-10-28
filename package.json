@@ -24,6 +24,7 @@
   },
   "files": [
     "dist",
+    "dist-iife",
     "assets",
     "docs",
     "bin",
@@ -32,10 +33,11 @@
   "sideEffects": false,
   "scripts": {
     "dev": "pnpm --filter demo dev",
-    "build": "vite build && node scripts/build-dts.mjs && node scripts/write-build-stamp.mjs",
+    "build": "vite build && node scripts/build-dts.mjs && node scripts/write-build-stamp.mjs && pnpm run build:iife",
+    "build:iife": "vite build --config vite.config.iife.ts",
     "prepare": "pnpm run build",
     "test": "vitest run && pnpm -r test",
-    "verify": "tsc --noEmit && vitest run && pnpm -r test && pnpm run build && node scripts/assert-dist.mjs && node scripts/assert-consumer-types.mjs && node scripts/smoke-consumers.mjs"
+    "verify": "tsc --noEmit && vitest run && pnpm -r test && pnpm run build && node scripts/assert-dist.mjs && node scripts/assert-consumer-types.mjs && node scripts/smoke-consumers.mjs && node scripts/smoke-iife.mjs"
   },
   "peerDependencies": {
     "cesium": ">=1.143.0 <2.0.0"
