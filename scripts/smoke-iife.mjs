@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { extname, join, normalize, resolve } from 'node:path'
+import { extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 
@@ -82,39 +82,60 @@ const PAGE = `<!doctype html>
 </script></body></html>`
 
 function safeJoin(rootDir, urlPath) {
-  const decoded = decodeURIComponent(urlPath.split('?')[0])
+  let decoded
+  try {
+    decoded = decodeURIComponent(urlPath.split('?')[0])
+  } catch {
+    return undefined // 非法百分号编码 → 404，而不是未捕获异常崩掉整个冒烟
+  }
   const p = normalize(join(rootDir, decoded))
-  return p.startsWith(rootDir) ? p : undefined
+  const rel = relative(rootDir, p)
+  // 用路径关系而不是字符串前缀判包含：`/a/bc` 不会被误判为在 `/a/b` 内
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return undefined
+  }
+  return p
 }
 
 const server = createServer((req, res) => {
-  const url = req.url || '/'
-  if (url === '/' || url.startsWith('/?')) {
-    res.writeHead(200, { 'content-type': MIME['.html'] })
-    res.end(PAGE)
-    return
-  }
-  let file
-  if (url.startsWith('/cesium/')) file = safeJoin(CESIUM_DIR, url.slice('/cesium/'.length))
-  else if (url.startsWith('/cesium-geospatial-assets/')) file = safeJoin(ASSETS_DIR, url.slice('/cesium-geospatial-assets/'.length))
-  else if (url === '/cesium-geospatial.iife.js') file = IIFE
-  if (!file) {
-    res.writeHead(404)
-    res.end('not found')
-    return
-  }
   try {
-    const body = readFileSync(file)
-    res.writeHead(200, {
-      'content-type': MIME[extname(file).toLowerCase()] || 'application/octet-stream',
-      'access-control-allow-origin': '*'
-    })
-    res.end(body)
+    const url = req.url || '/'
+    if (url === '/' || url.startsWith('/?')) {
+      res.writeHead(200, { 'content-type': MIME['.html'] })
+      res.end(PAGE)
+      return
+    }
+    let file
+    if (url.startsWith('/cesium/')) file = safeJoin(CESIUM_DIR, url.slice('/cesium/'.length))
+    else if (url.startsWith('/cesium-geospatial-assets/')) file = safeJoin(ASSETS_DIR, url.slice('/cesium-geospatial-assets/'.length))
+    else if (url === '/cesium-geospatial.iife.js') file = IIFE
+    if (!file) {
+      res.writeHead(404)
+      res.end('not found')
+      return
+    }
+    try {
+      const body = readFileSync(file)
+      // 同源测试页不需要 CORS：不回 ACAO，避免把 loopback 文件服务器暴露给任意站点
+      res.writeHead(200, {
+        'content-type': MIME[extname(file).toLowerCase()] || 'application/octet-stream'
+      })
+      res.end(body)
+    } catch {
+      res.writeHead(404)
+      res.end('not found')
+    }
   } catch {
-    res.writeHead(404)
-    res.end('not found')
+    if (!res.headersSent) {
+      res.writeHead(500)
+      res.end('internal error')
+    } else {
+      res.destroy()
+    }
   }
 })
+
+server.on('clientError', (_err, socket) => socket.destroy())
 
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const port = server.address().port
